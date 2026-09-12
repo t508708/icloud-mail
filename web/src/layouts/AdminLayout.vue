@@ -1,5 +1,6 @@
 <template>
   <div class="admin-shell">
+    <a class="skip-link" href="#main-content">跳转到内容</a>
     <aside class="admin-sidebar" aria-label="后台导航">
       <AppBrand />
       <AdminNavigation />
@@ -33,9 +34,13 @@
           @click="drawerOpen = true"
         />
         <div class="admin-topbar__copy">
+          <span class="admin-topbar__eyebrow">工作空间</span>
           <h1>{{ page.title }}</h1>
         </div>
-        <div class="admin-topbar__account"><span class="admin-avatar" aria-hidden="true">{{ auth.state.username.slice(0, 1).toUpperCase() }}</span><span>{{ auth.state.username }}</span></div>
+        <div class="admin-topbar__tools">
+          <ThemeControl />
+          <div class="admin-topbar__account"><span class="admin-avatar" aria-hidden="true">{{ auth.state.username.slice(0, 1).toUpperCase() }}</span><span class="admin-topbar__username">{{ auth.state.username }}</span></div>
+        </div>
       </header>
       <main class="admin-content" id="main-content">
         <router-view />
@@ -59,6 +64,7 @@ import { computed, defineComponent, h, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import AppBrand from "../components/AppBrand.vue";
+import ThemeControl from "../components/ThemeControl.vue";
 import { useAuth } from "../stores/auth.js";
 import { usePageHeader } from "../stores/page.js";
 import { getActiveAdminSection } from "../utils/adminNavigation.js";

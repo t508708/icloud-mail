@@ -150,18 +150,23 @@
           </template>
         </SectionHeader>
 
-        <dl class="detail-grid">
+        <div class="section-status-row">
+          <div>
+            <span class="section-status-row__label">状态</span>
+            <SyncStatus :item="account" />
+          </div>
+          <div>
+            <span class="section-status-row__label">最近同步</span>
+            <strong>{{ formatTime(account.lastSyncedAt, { seconds: true }) }}</strong>
+          </div>
+        </div>
+
+        <details class="settings-disclosure">
+          <summary>连接详情</summary>
+          <dl class="detail-grid">
           <div>
             <dt>收件规则</dt>
             <dd>{{ receiveRuleLabel }}</dd>
-          </div>
-          <div>
-            <dt>状态</dt>
-            <dd><SyncStatus :item="account" /></dd>
-          </div>
-          <div>
-            <dt>最近同步</dt>
-            <dd>{{ formatTime(account.lastSyncedAt, { seconds: true }) }}</dd>
           </div>
           <div v-if="!isCustomMailbox">
             <dt>主号邮箱</dt>
@@ -179,7 +184,8 @@
             <dt>备注</dt>
             <dd>{{ account.name || "-" }}</dd>
           </div>
-        </dl>
+          </dl>
+        </details>
 
         <div v-if="account.lastSyncError" class="inline-error" role="status">
           <strong>最近错误</strong>
@@ -277,9 +283,12 @@
                   {{ autoCreationStatusLabel(autoCreation) }}
                 </el-tag>
               </div>
-              <p>
-                自动双通道 · 每主号每小时 40 次计划 · 最短 60 秒、平均约 90 秒。最多 3 个主号并行，同一主号串行确认；一次几十个请使用上方批量任务。
-              </p>
+              <div class="auto-creation-panel__status-line">
+                <span>最近尝试 {{ formatTime(autoCreation.lastAttemptedAt, { seconds: true }) }}</span>
+                <span v-if="autoCreation.recentCreatedCount !== null">
+                  最近成功 {{ autoCreation.recentCreatedCount }} 个
+                </span>
+              </div>
             </div>
             <div class="auto-creation-panel__actions">
               <el-switch
@@ -294,7 +303,12 @@
             </div>
           </div>
 
-          <dl class="auto-creation-metrics">
+          <details class="settings-disclosure">
+            <summary>计划详情</summary>
+            <p>
+              自动双通道 · 每主号每小时 40 次计划 · 最短 60 秒、平均约 90 秒。最多 3 个主号并行，同一主号串行确认；一次几十个请使用上方批量任务。
+            </p>
+            <dl class="auto-creation-metrics">
             <div>
               <dt>当前隐私邮箱</dt>
               <dd aria-live="polite" aria-atomic="true">
@@ -325,7 +339,8 @@
               <dt>近 1 小时创建</dt>
               <dd>{{ autoCreation.recentCreatedCount === null ? '—' : `${autoCreation.recentCreatedCount} 个` }}</dd>
             </div>
-          </dl>
+            </dl>
+          </details>
 
           <div v-if="autoCreation.lastError && !isAutoCreationRateLimited(autoCreation)" class="auto-creation-error" role="status">
             <strong>最近错误</strong>
@@ -2505,6 +2520,41 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.section-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 28px;
+  align-items: center;
+  margin: 4px 0 12px;
+  color: var(--text);
+}
+
+.section-status-row > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.section-status-row__label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.auto-creation-panel__status-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .section-status-row {
+    gap: 8px 16px;
+  }
+}
+
 .account-alias-search {
   display: flex;
   flex-wrap: wrap;

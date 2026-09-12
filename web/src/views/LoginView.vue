@@ -1,5 +1,6 @@
 <template>
   <main class="login-page">
+    <div class="login-appearance"><ThemeControl /></div>
     <div class="login-shell">
       <AppBrand title="iCloud 隐私邮箱" subtitle="后台管理" />
 
@@ -90,6 +91,7 @@ import { computed, nextTick, onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import AppBrand from "../components/AppBrand.vue";
+import ThemeControl from "../components/ThemeControl.vue";
 import RequestAlert from "../components/RequestAlert.vue";
 import { useAuth } from "../stores/auth.js";
 import { createActionLock } from "../utils/asyncState.js";

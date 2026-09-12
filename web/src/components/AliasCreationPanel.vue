@@ -147,7 +147,7 @@ onBeforeUnmount(() => { alive = false; generation++; clearTimeout(timer); appleP
 .creation-job-panel { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; min-width: 0; }
 .creation-job-panel p { margin: 0; }
 .creation-job-panel__controls, .creation-job-panel__apple { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.creation-job-panel__title { margin: 0; color: var(--text-primary); font-size: 18px; line-height: 1.3; white-space: nowrap; }
+.creation-job-panel__title { margin: 0; color: var(--text); font-size: 18px; line-height: 1.3; white-space: nowrap; }
 .creation-job-panel__title { order: 1; }
 .creation-job-panel__controls { order: 2; margin-left: auto; }
 .creation-job-panel__apple { order: 3; }

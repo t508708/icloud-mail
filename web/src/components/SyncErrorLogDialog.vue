@@ -142,14 +142,14 @@ onBeforeUnmount(() => {
   margin: 0;
   padding: 14px;
   overflow: auto;
-  color: var(--text-primary, #20262d);
+  color: var(--text);
   font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
-  background: var(--surface-muted, #f6f7f8);
+  background: var(--surface-subtle);
   border: 1px solid var(--border, #dfe3e6);
   border-radius: 4px;
 }

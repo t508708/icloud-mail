@@ -1781,8 +1781,8 @@ onBeforeUnmount(() => {
   gap: 8px;
   padding: 8px 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface);
+  border-radius: 14px;
+  background: var(--glass-bg);
 }
 .selection-count, .alias-selection-toolbar__hint { color: var(--text-secondary); font-size: 12px; }
 .alias-selection-toolbar__hint { margin-left: auto; }
@@ -1840,9 +1840,9 @@ onBeforeUnmount(() => {
   align-items: end;
   gap: 14px;
   padding: 16px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
 }
 
 .alias-group-bulk-select {

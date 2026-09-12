@@ -176,18 +176,18 @@ function handleResize({ width }) {
   gap: 8px;
   color: var(--text-secondary);
   font-size: 12px;
-  background: rgb(255 255 255 / 72%);
+  background: var(--loading-mask);
 }
 
 :deep(.el-table-v2) {
-  --el-table-header-bg-color: #f7f8f9;
-  --el-table-row-hover-bg-color: #f7faff;
-  --el-table-border-color: #e5e8eb;
+  --el-table-header-bg-color: var(--table-header);
+  --el-table-row-hover-bg-color: var(--row-hover);
+  --el-table-border-color: var(--border);
   font-size: 13px;
 }
 
 :deep(.el-table-v2__header-cell) {
-  color: #5d6670;
+  color: var(--text-secondary);
   font-size: 12px;
   font-weight: 650;
 }

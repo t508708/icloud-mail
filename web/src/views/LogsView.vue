@@ -737,9 +737,9 @@ onBeforeUnmount(() => {
   align-items: end;
   gap: 14px;
   padding: 16px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
 }
 
 .runtime-log-filter {
