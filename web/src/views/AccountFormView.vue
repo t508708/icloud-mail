@@ -1,5 +1,5 @@
 <template>
-  <section class="content-narrow page-stack">
+  <section class="content-narrow page-stack account-form-page">
     <div v-if="loading" class="form-panel loading-panel">
       <el-skeleton :rows="7" animated />
     </div>
@@ -499,3 +499,58 @@ onBeforeUnmount(() => {
   form.imapPassword = "";
 });
 </script>
+
+<style scoped>
+.account-form-page {
+  width: 100%;
+  max-width: 960px;
+  margin-inline: auto;
+}
+
+.account-form-page :deep(.form-grid) {
+  align-items: start;
+  row-gap: 20px;
+}
+
+.account-form-page :deep(.form-grid > .el-form-item) {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.account-form-page :deep(.el-input__wrapper),
+.account-form-page :deep(.el-select .el-select__wrapper),
+.account-form-page :deep(.el-button) {
+  min-height: 38px;
+}
+
+.account-form-page :deep(.imap-service-fields) {
+  grid-template-columns: minmax(0, 1fr) 112px;
+}
+
+.account-form-page .form-actions {
+  margin-top: 20px;
+}
+
+.account-form-page :deep(.imap-service-fields .el-form-item) {
+  margin-bottom: 0;
+}
+
+.account-form-page :deep(.imap-service-fields .el-form-item__error) {
+  position: static;
+  flex: 0 0 100%;
+  width: 100%;
+}
+
+.account-form-page :deep(.mailbox-route-summary) {
+  padding: 12px 14px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+@media (max-width: 720px) {
+  .account-form-page :deep(.imap-service-fields) {
+    grid-template-columns: minmax(0, 1fr) 88px;
+  }
+}
+</style>
