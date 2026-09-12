@@ -1,4 +1,5 @@
 const sectionBasePaths = [
+  ["pool", "/pool"],
   ["aliases", "/aliases"],
   ["audit", "/audit"],
   ["logs", "/logs"],

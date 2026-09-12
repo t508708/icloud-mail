@@ -370,6 +370,18 @@ func (m *Manager) processDue(ctx context.Context, schedule domain.AliasCreationS
 	if !claimed {
 		return
 	}
+	if gate, ok := m.repo.(interface {
+		PoolCreationAllowed(context.Context, int64) (bool, error)
+	}); ok {
+		allowed, err := gate.PoolCreationAllowed(ctx, schedule.AccountID)
+		if err != nil {
+			m.logAutomaticScheduleError(ctx, schedule.AccountID, "check_pool_inventory", domain.AliasCreationPhasePreparing, expected, err)
+			return
+		}
+		if !allowed {
+			return
+		}
+	}
 	// Claim time is persisted before the remote side effect. Re-read the clock
 	// after the CAS so database latency cannot leave the next deadline inside
 	// five minutes of the post-claim start boundary.

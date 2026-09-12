@@ -63,6 +63,12 @@ const routes = [
         },
       },
       {
+        path: "pool",
+        name: "pool",
+        component: () => import("../views/PoolView.vue"),
+        meta: { title: "邮箱池", subtitle: "管理空闲库存、项目 API 和自动创建" },
+      },
+      {
         path: "audit",
         name: "audit",
         component: () => import("../views/AuditView.vue"),

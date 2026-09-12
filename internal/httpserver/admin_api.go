@@ -57,6 +57,7 @@ func (s *Server) registerAdminAPIRoutes(api *gin.RouterGroup) {
 		s.adminAPICredentialRotationReadGuard(),
 	)
 	protected.GET("/auth/session", s.adminAPISession)
+	s.registerAdminPoolRoutes(protected.Group("/pool"))
 	protected.POST("/auth/logout", s.adminAPILogout(basePath))
 	protected.PUT("/auth/password", s.adminAPIChangePassword(basePath))
 

@@ -205,7 +205,11 @@ func run() error {
 	}
 
 	var background sync.WaitGroup
-	background.Add(4)
+	background.Add(5)
+	go func() {
+		defer background.Done()
+		web.RunPoolMaintenance(workerContext)
+	}()
 	go func() {
 		defer background.Done()
 		web.RunAliasDeletionJobs()

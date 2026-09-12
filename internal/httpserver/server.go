@@ -44,6 +44,7 @@ type Server struct {
 	mailSyncWakeMu       sync.Mutex
 	mailSyncWake         map[int64]time.Time
 	credentialRotationMu sync.RWMutex
+	poolMu               sync.Mutex
 	aliasDeletionJobs    aliasDeletionJobRuntime
 	// beforeCredentialRotationLock is a deterministic test seam. Production
 	// leaves it nil.
@@ -259,6 +260,7 @@ func (s *Server) Router() (*gin.Engine, error) {
 
 	publicCredentialGuard := s.credentialRotationReadGuard()
 	router.GET("/api/v1/otp", publicCredentialGuard, s.otpHistory)
+	s.registerPoolRoutes(router.Group("/api/v1/pool", publicCredentialGuard))
 	legacyAPI := router.Group("/api/v1")
 	legacyAPI.GET("/mail/latest", publicCredentialGuard, s.apiKeyAuth(), s.latestMail)
 	recentAuth := s.apiKeyQueryAuth()
