@@ -102,13 +102,16 @@ func persistAdminPath(filename, path string) (bool, error) {
 func normalizeAdminPath(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	value = strings.TrimSuffix(value, "/")
+	if value == adminPathSuffix {
+		return value, nil
+	}
 	if len(value) != 1+32+len(adminPathSuffix) || value[0] != '/' ||
 		value[33:] != adminPathSuffix {
-		return "", errors.New("管理路径必须为 /<32位小写十六进制>/admin/")
+		return "", errors.New("管理路径必须为 /admin/ 或 /<32位小写十六进制>/admin/")
 	}
 	for _, char := range value[1:33] {
 		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
-			return "", errors.New("管理路径必须为 /<32位小写十六进制>/admin/")
+			return "", errors.New("管理路径必须为 /admin/ 或 /<32位小写十六进制>/admin/")
 		}
 	}
 	return value, nil

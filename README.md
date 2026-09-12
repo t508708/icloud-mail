@@ -20,7 +20,7 @@
 - 通过派生取码 URL 或 Bearer API Key 重复读取最近 100 条验证码。
 - 通过密码或 XOAUTH2 登录只读 IMAPS，读取完整 MIME、稳定本地 UID 和归档占位邮件。
 - 原始 MIME 按 SHA-256 去重保存到独立卷，容量超限时只淘汰最早正文，永久保留邮件元数据。
-- 管理界面和首选管理 API 使用首次启动生成的随机路径；固定 `/admin/api/v1` 仅作为旧客户端兼容 API 入口。
+- 管理界面支持配置为 `/admin/`；未配置时使用首次启动生成的随机路径。管理 API 保留固定 `/admin/api/v1` 兼容入口。
 
 ```text
 iCloud 主号 INBOX
@@ -40,7 +40,7 @@ docker compose ps
 curl -fsS http://127.0.0.1:8080/healthz
 ```
 
-HTTP 默认只发布在 `127.0.0.1:8080`，IMAPS 默认只发布在 `127.0.0.1:1993`。首次启动会在 keys 卷中生成管理员密码、随机管理路径、外部登记接口的 OAuth token、主密钥，以及本地持久化 IMAPS 自签证书。
+HTTP 默认只发布在 `127.0.0.1:8080`，IMAPS 默认只发布在 `127.0.0.1:1993`。首次启动会在 keys 卷中保存管理路径，并生成管理员密码、外部登记接口的 OAuth token、主密钥，以及本地持久化 IMAPS 自签证书。
 
 ```bash
 docker compose exec -T icloud-api cat /app/keys/admin-password
@@ -49,7 +49,7 @@ docker compose exec -T icloud-api cat /app/keys/oauth-token
 docker compose exec -T icloud-api cat /app/keys/public-imap-cert.pem
 ```
 
-`admin-path` 的值形如 `/<32位小写十六进制>/admin/`。管理界面、静态资源和前端路由跟随这个随机前缀，管理 API 的首选入口是去掉该值结尾 `/` 后再拼接 `/api/v1`。OpenAPI 的 `{admin_path}` 变量则使用去掉首尾 `/` 的值。为兼容升级前客户端，同一套 JSON 管理 API 也保留在固定 `/admin/api/v1`；固定 `/admin` 不提供管理界面。登录成功会为两个 API 路径签发同一会话的受限 Cookie，两个入口都执行相同的登录限流、会话认证和 CSRF 校验。管理响应默认使用 `Cache-Control: no-store, private`，返回明文凭证的处理器会覆盖为 `no-store`。随机路径只能降低未授权扫描噪声，不应被当作访问控制边界。
+`admin-path` 支持 `/admin/` 或 `/<32位小写十六进制>/admin/`。本部署使用短路径 `https://icloud-us.gooelv.com/admin/`，新安装可通过 `ICLOUD_API_ADMIN_PATH=/admin` 指定；未设置时生成随机路径。现有安装切换路径需先备份并停止应用，同时更新环境设置和 keys 卷中的 `admin-path` 文件，保留文件权限与属主，再启动。管理界面、静态资源和前端路由跟随配置路径，管理 API 的入口是去掉该值结尾 `/` 后再拼接 `/api/v1`。OpenAPI 的 `{admin_path}` 变量使用去掉首尾 `/` 的值。随机路径模式仍保留 `/admin/api/v1` 兼容 API；短路径模式使用同一个管理入口。两种模式均执行登录限流、会话认证和 CSRF 校验，Cookie 受管理路径限制。管理响应默认使用 `Cache-Control: no-store, private`，返回明文凭证的处理器会覆盖为 `no-store`。
 
 使用 `admin` 和首次生成的密码登录随机管理路径，添加 iCloud 主号后同步或手动登记隐私邮箱。管理端支持创建邮箱分组，并在“全部隐私邮箱”或主号详情中把单个、勾选的隐私邮箱移动到所选分组；删除分组不会删除邮箱，只会将其恢复为未分组。对已完成 Apple 登录且主号没有同步错误的 iCloud 隐私邮箱，可以在“全部隐私邮箱”中勾选后执行“从 Apple 删除”：服务会先调用 Apple 的停用/永久删除流程，只有 Apple 确认删除成功后才清理本地记录；明确失败的项目会保留对应本地记录并返回逐项错误。批量操作支持后台任务及状态轮询；任务中断后尚无结果的项目，其远端结果待核查，不承诺本地记录仍在，详见下方“批量 Apple 删除后台任务”。自定义邮箱不走此 Apple 删除流程。公开接口说明位于 <http://127.0.0.1:8080/docs/>，机器可读契约见 [`docs/openapi.yaml`](docs/openapi.yaml)。
 

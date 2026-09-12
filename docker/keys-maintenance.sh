@@ -68,6 +68,9 @@ validate_admin_path_file() {
 	name="${file##*/}"
 	[ "$(wc -l < "$file" | tr -d ' ')" = "1" ] || die "$name 格式错误"
 	path_value="$(sed -n '1p' "$file")"
+	if [ "$path_value" = /admin/ ]; then
+		return 0
+	fi
 	[ "${#path_value}" -eq 40 ] || die "$name 格式错误"
 	case "$path_value" in
 		/????????????????????????????????/admin/) ;;

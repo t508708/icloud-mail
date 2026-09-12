@@ -17,7 +17,7 @@
 外部邮箱池接口统一使用 `Authorization: Bearer PROJECT_KEY`，PROJECT_KEY 以 `pool_` 开头。
 
 ```sh
-curl 'https://icloud.us.gooelv.com/api/v1/pool/claim' \
+curl 'https://icloud-us.gooelv.com/api/v1/pool/claim' \
   -H 'Authorization: Bearer PROJECT_KEY' \
   -H 'Content-Type: application/json' \
   -d '{"request_id":"job-20260912-0001","count":1,"ttl_seconds":1800}'
@@ -53,7 +53,7 @@ curl 'https://icloud.us.gooelv.com/api/v1/pool/claim' \
         "otp_path": "/api/v1/otp?token=DERIVED_TOKEN",
         "code_path": "/api/v1/pool/leases/LEASE_ID/code",
         "oauth_token_path": "/oauth2/v2.0/token",
-        "imap_host": "icloud.us.gooelv.com",
+        "imap_host": "imap-icloud.us.gooelv.com",
         "imap_port": 1993,
         "imap_tls": true
       }
@@ -94,7 +94,7 @@ docker compose ps
 curl -fsS http://127.0.0.1:8788/healthz
 ```
 
-公网域名为 `icloud.us.gooelv.com`，部署和 DNS 操作见 [公网部署](PUBLIC.md)。Nginx 将 HTTPS 转发到 `127.0.0.1:8788`，公网 TCP 1993 转发到 `127.0.0.1:1993`。应用已启用 HTTPS Cookie。
+Web/API 域名为 `icloud-us.gooelv.com`，使用 Cloudflare 橙云；IMAPS 域名为 `imap-icloud.us.gooelv.com`，使用灰云直连。部署和 DNS 操作见 [公网部署](PUBLIC.md)。Nginx 将 HTTPS 转发到 `127.0.0.1:8788`，公网 TCP 1993 转发到 `127.0.0.1:1993`。应用已启用 HTTPS Cookie。
 
 获取管理入口和管理员密码：
 
@@ -103,7 +103,7 @@ docker compose exec -T icloud-api cat /app/keys/admin-path
 docker compose exec -T icloud-api cat /app/keys/admin-password
 ```
 
-浏览器打开 `https://icloud.us.gooelv.com` 加上述管理路径，用户名 `admin`。本机 HTTP 地址用于健康检查；浏览器管理登录使用 HTTPS。
+浏览器打开 `https://icloud-us.gooelv.com/admin/`，用户名 `admin`。本机使用 `ICLOUD_API_ADMIN_PATH=/admin`，现有持久化 `keys/admin-path` 也已迁移为 `/admin/`；密码保持现有配置。本机 HTTP 地址用于健康检查；浏览器管理登录使用 HTTPS。
 
 数据库、keys 和 mail archive 共同组成恢复点，备份沿用主 README 的成组流程。新增 `pool_*` 表随 PostgreSQL 备份完整保存。开发分支为 `feature/mailbox-pool`，更新上游时保留此分支的本地修改并重新构建。
 

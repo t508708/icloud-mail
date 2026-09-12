@@ -10,6 +10,10 @@ fi
 
 openssl x509 -in "$lineage/fullchain.pem" -noout -checkend 0 \
     -checkhost icloud.us.gooelv.com
+openssl x509 -in "$lineage/fullchain.pem" -noout \
+    -checkhost imap-icloud.us.gooelv.com
+openssl x509 -in "$lineage/fullchain.pem" -noout \
+    -checkhost icloud-us.gooelv.com
 /www/server/nginx/sbin/nginx -t
 
 # Stage both files before replacing the pair visible through the directory mount.
