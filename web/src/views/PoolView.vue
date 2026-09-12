@@ -380,8 +380,7 @@ grant_type=refresh_token&amp;client_id=CLIENT_ID&amp;refresh_token=REFRESH_TOKEN
         destroy-on-close
       >
         <p>
-          选择确认可分配的邮箱加入池中。列表显示最近 200
-          条，可通过搜索定位其他地址。
+          选择确认可分配的邮箱加入池中。列表支持分页浏览全部邮箱，也可以搜索地址定位。
         </p>
         <div class="pool-toolbar">
           <el-input
@@ -390,10 +389,10 @@ grant_type=refresh_token&amp;client_id=CLIENT_ID&amp;refresh_token=REFRESH_TOKEN
             @keyup.enter="loadEnroll"
           /><el-button @click="loadEnroll">搜索</el-button>
         </div>
-        <el-table
-          :data="enrollItems"
-          max-height="380"
-          @selection-change="selected = $event.map((row) => row.id)"
+          <el-table
+            :data="enrollItems"
+            max-height="380"
+            @selection-change="selected = $event.map((row) => row.id)"
         >
           <el-table-column
             type="selection"
@@ -404,7 +403,19 @@ grant_type=refresh_token&amp;client_id=CLIENT_ID&amp;refresh_token=REFRESH_TOKEN
             prop="account_email"
             label="主号"
           />
-        </el-table>
+          </el-table>
+        <div v-if="enrollTotal > enrollPageSize" class="enroll-pagination">
+          <span>共 {{ enrollTotal }} 条</span>
+          <el-pagination
+            background
+            layout="prev, pager, next"
+            :current-page="enrollPage"
+            :page-size="enrollPageSize"
+            :total="enrollTotal"
+            :disabled="busy"
+            @current-change="changeEnrollPage"
+          />
+        </div>
         <template #footer
           ><el-button @click="enrollOpen = false">取消</el-button
           ><el-button
@@ -461,6 +472,9 @@ const memberPage = ref(1),
   leasePage = ref(1);
 const enrollOpen = ref(false),
   enrollSearch = ref(""),
+  enrollPage = ref(1),
+  enrollPageSize = 50,
+  enrollTotal = ref(0),
   enrollItems = ref([]),
   selected = ref([]);
 const secretOpen = ref(false),
@@ -629,14 +643,25 @@ async function toggleAutoCreate(row, enabled) {
 async function loadEnroll() {
   await attempt(async () => {
     const result = await request(
-      "/aliases?" + query({ query: enrollSearch.value, limit: 200, offset: 0 }),
+      "/aliases?" +
+        query({
+          query: enrollSearch.value.trim(),
+          limit: enrollPageSize,
+          offset: (enrollPage.value - 1) * enrollPageSize,
+        }),
     );
     enrollItems.value = result.aliases || result.items || [];
+    enrollTotal.value = Number(result.pagination?.total ?? result.total ?? enrollItems.value.length) || 0;
     selected.value = [];
   });
 }
 async function openEnroll() {
   enrollOpen.value = true;
+  enrollPage.value = 1;
+  await loadEnroll();
+}
+async function changeEnrollPage(page) {
+  enrollPage.value = Math.max(1, Number(page) || 1);
   await loadEnroll();
 }
 async function enroll() {
@@ -694,6 +719,23 @@ onMounted(refresh);
   line-height: 1.8;
   color: var(--el-text-color-secondary);
   margin: 14px 0 20px;
+}
+
+.enroll-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+@media (max-width: 560px) {
+  .enroll-pagination {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 .pool-error {
   color: var(--el-color-danger);
