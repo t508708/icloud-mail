@@ -293,6 +293,13 @@ func (s *Server) runAliasCreationJob(waitCtx context.Context, creator channelAli
 		s.credentialRotationMu.RUnlock()
 		if err != nil {
 			apiErr := classifyManualAliasError(err)
+			// Keep stage/status diagnostics, never response bodies or cookies.
+			attributes := []any{"job_id", j.ID, "account_id", j.AccountID, "channel", j.Channel, "code", apiErr.Code}
+			var upstream *apple.Error
+			if errors.As(err, &upstream) {
+				attributes = append(attributes, "apple_operation", upstream.Op, "apple_http_status", upstream.StatusCode)
+			}
+			s.logger.Warn("批量创建请求未完成", attributes...)
 			j.LastError = apiErr.Message
 			var pending interface{ PendingConfirmation() bool }
 			var uncertain interface{ RemoteSideEffectPossible() bool }

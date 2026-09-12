@@ -162,6 +162,17 @@ func WithOverdueGrace(grace time.Duration) Option {
 	}
 }
 
+// WithConcurrency limits accounts processed by one polling cycle.
+func WithConcurrency(n int) Option {
+	return func(m *Manager) error {
+		if n < 1 || n > 16 {
+			return errors.New("concurrency must be between 1 and 16")
+		}
+		m.concurrency = n
+		return nil
+	}
+}
+
 // Manager owns the in-process polling loop. Durability and cross-process
 // coordination are provided by Repository's compare-and-swap methods.
 type Manager struct {
@@ -174,6 +185,7 @@ type Manager struct {
 	wait         WaitFunc
 	pollInterval time.Duration
 	overdueGrace time.Duration
+	concurrency  int
 	randomMu     sync.Mutex
 	runSeq       atomic.Uint64
 }
@@ -212,6 +224,7 @@ func New(repo Repository, creator Creator, logger *slog.Logger, options ...Optio
 		wait:         waitForInterval,
 		pollInterval: defaultPollInterval,
 		overdueGrace: defaultOverdueGrace,
+		concurrency:  3,
 	}
 	for _, option := range options {
 		if option == nil {
@@ -300,12 +313,52 @@ func (m *Manager) runDue(ctx context.Context) {
 		}
 		return
 	}
+	seen := make(map[int64]struct{}, len(schedules))
+	jobs := make(chan domain.AliasCreationSchedule)
+	workers := m.concurrency
+	if workers < 1 {
+		workers = 3
+	}
+	if workers > len(schedules) {
+		workers = len(schedules)
+	}
+	if workers == 0 {
+		return
+	}
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case s, ok := <-jobs:
+					if !ok {
+						return
+					}
+					m.processDue(ctx, s)
+				}
+			}
+		}()
+	}
 	for _, schedule := range schedules {
 		if ctx.Err() != nil {
-			return
+			break
 		}
-		m.processDue(ctx, schedule)
+		if _, ok := seen[schedule.AccountID]; ok {
+			continue
+		}
+		seen[schedule.AccountID] = struct{}{}
+		select {
+		case jobs <- schedule:
+		case <-ctx.Done():
+			break
+		}
 	}
+	close(jobs)
+	wg.Wait()
 }
 
 func (m *Manager) processDue(ctx context.Context, schedule domain.AliasCreationSchedule) {

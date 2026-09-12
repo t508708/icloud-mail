@@ -202,7 +202,12 @@ func accountResponseError(r responseData, kind error) *Error {
 }
 
 func (c *Client) accountManagementCall(ctx context.Context, s *AccountSession, method, path string, body any) (responseData, error) {
-	return c.accountCall(ctx, s, method, accountManage+path, body, accountHeaders(*s, false), false)
+	r, err := c.accountCall(ctx, s, method, accountManage+path, body, accountHeaders(*s, false), false)
+	var upstream *Error
+	if errors.As(err, &upstream) {
+		upstream.Op = "account " + method + " " + path
+	}
+	return r, err
 }
 
 func (c *Client) warmAccountPortal(ctx context.Context, s *AccountSession) error {
@@ -440,7 +445,7 @@ func (c *Client) CreateAccountAlias(ctx context.Context, s AccountSession, label
 		EmailAddress string `json:"emailAddress"`
 	}
 	if json.Unmarshal(r.body, &candidate) != nil || !validAccountAliasAddress(candidate.EmailAddress) {
-		return Alias{}, s, ErrInvalidResponse
+		return Alias{}, s, r.operationError("account generate response", ErrInvalidResponse, nil)
 	}
 	candidate.EmailAddress = strings.TrimSpace(candidate.EmailAddress)
 	alias := Alias{HME: strings.ToLower(candidate.EmailAddress), Label: label, Note: note, Origin: "APPLE_ACCOUNT"}
@@ -459,7 +464,7 @@ func (c *Client) CreateAccountAlias(ctx context.Context, s AccountSession, label
 		Active       bool   `json:"active"`
 	}
 	if json.Unmarshal(r.body, &completed) != nil || completed.ID == "" || completed.EmailAddress != "" && !strings.EqualFold(completed.EmailAddress, candidate.EmailAddress) {
-		return alias, s, ErrInvalidResponse
+		return alias, s, r.operationError("account complete response", ErrInvalidResponse, nil)
 	}
 	alias.AnonymousID = completed.ID
 	alias.IsActive = completed.Active
