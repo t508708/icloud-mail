@@ -166,6 +166,12 @@
             <template v-else-if="column.key === 'message'">
               <p class="runtime-log-message">{{ row.message || "-" }}</p>
             </template>
+            <template v-else-if="column.key === 'httpMeta'">
+              <div v-if="row.attributes?.method" class="primary-stack">
+                <span>{{ row.attributes.status }} / {{ row.attributes.duration_ms || 0 }} ms</span>
+                <small v-if="row.attributes.suppressed_count">已合并 {{ row.attributes.suppressed_count }} 次重复读取</small>
+              </div><span v-else>-</span>
+            </template>
             <template v-else-if="column.key === 'accountId'">
               {{ accountLabel(row.accountId) }}
             </template>
@@ -291,10 +297,9 @@ const ACCOUNT_OPTION_LIMIT = 50;
 const runtimeLogColumns = [
   { key: "time", title: "时间", width: 178, flexGrow: 1 },
   { key: "level", title: "级别", width: 92 },
-  { key: "source", title: "来源", width: 150, flexGrow: 1 },
-  { key: "message", title: "消息", width: 360, flexGrow: 3 },
+  { key: "message", title: "动作 / 运行消息", width: 340, flexGrow: 3 },
+  { key: "httpMeta", title: "状态 / 耗时", width: 155 },
   { key: "accountId", title: "主号", width: 170, flexGrow: 1 },
-  { key: "requestId", title: "请求编号", width: 180, flexGrow: 1 },
   { key: "actions", title: "详情", width: 70, align: "right", fixed: "right" },
 ];
 const selectableLevels = new Set(["debug", "info", "warn", "error"]);

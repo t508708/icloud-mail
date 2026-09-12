@@ -9,6 +9,7 @@ import {
   loginNoticeRequiresExplicitLogin,
 } from "../utils/authFlow.js";
 import { ADMIN_BASE_PATH } from "../utils/runtimePath.js";
+import { preloadRoute } from "../utils/routePreload.js";
 
 const routes = [
   {
@@ -110,6 +111,7 @@ const router = createRouter({
 const auth = useAuth();
 
 router.beforeEach(async (to) => {
+  preloadRoute(to);
   setPageHeader(to.meta.title || "", to.meta.subtitle || "");
   if (!to.matched.some((record) => record.meta.requiresAuth)) {
     if (

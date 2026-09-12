@@ -34,10 +34,10 @@
         />
         <div class="admin-topbar__copy">
           <h1>{{ page.title }}</h1>
-          <p v-if="page.subtitle">{{ page.subtitle }}</p>
         </div>
+        <div class="admin-topbar__account"><span class="admin-avatar" aria-hidden="true">{{ auth.state.username.slice(0, 1).toUpperCase() }}</span><span>{{ auth.state.username }}</span></div>
       </header>
-      <main class="admin-content">
+      <main class="admin-content" id="main-content">
         <router-view />
       </main>
     </div>
@@ -63,6 +63,7 @@ import { useAuth } from "../stores/auth.js";
 import { usePageHeader } from "../stores/page.js";
 import { getActiveAdminSection } from "../utils/adminNavigation.js";
 import { showRequestError } from "../utils/feedback.js";
+import { preloadRoute } from "../utils/routePreload.js";
 
 const route = useRoute();
 const router = useRouter();
@@ -89,7 +90,8 @@ const AdminNavigation = defineComponent({
       h(
         "nav",
         { class: "admin-nav", "aria-label": "主要导航" },
-        menuItems.map((item) =>
+        menuItems.flatMap((item, index) => [
+          ...(index === 0 || index === 3 ? [h("span", { class: "admin-nav__group" }, index === 0 ? "邮箱工作区" : "管理")] : []),
           h(
             RouterLink,
             {
@@ -97,12 +99,14 @@ const AdminNavigation = defineComponent({
               class: ["admin-nav__item", { "is-active": activeSection.value === item.section }],
               "aria-current": activeSection.value === item.section ? "page" : undefined,
               onClick: () => emit("navigate"),
+              onMouseenter: () => preloadRoute(router.resolve(item.to)),
+              onFocus: () => preloadRoute(router.resolve(item.to)),
             },
             {
-              default: () => [h(item.icon, { "aria-hidden": "true" }), h("span", item.label)],
+              default: () => [h("span", { class: ["admin-nav__icon", `admin-nav__icon--${item.section}`], "aria-hidden": "true" }, [h(item.icon)]), h("span", item.label)],
             },
           ),
-        ),
+        ]),
       );
   },
 });

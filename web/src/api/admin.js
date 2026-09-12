@@ -331,6 +331,16 @@ export function normalizeAutoCreation(raw = {}) {
     firstDefined(value, "planned_at", "plannedAt", "PlannedAt") ||
     plannedTimes[0] ||
     null;
+  const recentCreatedCountRaw = firstDefined(
+    value,
+    "recent_created_count",
+    "recentCreatedCount",
+    "RecentCreatedCount",
+  );
+  const recentCreatedCount =
+    Number.isSafeInteger(recentCreatedCountRaw) && recentCreatedCountRaw >= 0
+      ? recentCreatedCountRaw
+      : null;
   return {
     enabled: Boolean(firstDefined(value, "enabled", "Enabled")),
     status: firstDefined(value, "status", "Status") || "",
@@ -338,6 +348,9 @@ export function normalizeAutoCreation(raw = {}) {
       firstDefined(value, "next_run_at", "nextRunAt", "NextRunAt") || null,
     plannedAt,
     plannedTimes,
+    recentCreatedCount,
+    recentCreatedSince:
+      firstDefined(value, "recent_created_since", "recentCreatedSince", "RecentCreatedSince") || null,
     lastAttemptedAt:
       firstDefined(
         value,

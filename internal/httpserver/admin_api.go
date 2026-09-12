@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 
+	"icloud-api/internal/autocreate"
 	"icloud-api/internal/domain"
 	"icloud-api/internal/hmesync"
 	"icloud-api/internal/secure"
@@ -200,17 +201,19 @@ type adminAPIAccountDetailDTO struct {
 }
 
 type adminAPIAutoCreationDTO struct {
-	Enabled          bool     `json:"enabled"`
-	Status           string   `json:"status"`
-	PlannedAt        *string  `json:"planned_at"`
-	PlannedTimes     []string `json:"planned_times"`
-	NextRunAt        *string  `json:"next_run_at"`
-	LastAttemptedAt  *string  `json:"last_attempted_at"`
-	LastCreatedAt    *string  `json:"last_created_at"`
-	LastAliasAddress string   `json:"last_alias_address"`
-	LastError        string   `json:"last_error"`
-	PendingKeyCount  int      `json:"pending_key_count"`
-	PendingKeyTotal  int      `json:"pending_auto_created_key_count"`
+	Enabled            bool     `json:"enabled"`
+	Status             string   `json:"status"`
+	PlannedAt          *string  `json:"planned_at"`
+	PlannedTimes       []string `json:"planned_times"`
+	NextRunAt          *string  `json:"next_run_at"`
+	LastAttemptedAt    *string  `json:"last_attempted_at"`
+	LastCreatedAt      *string  `json:"last_created_at"`
+	LastAliasAddress   string   `json:"last_alias_address"`
+	RecentCreatedCount int      `json:"recent_created_count"`
+	RecentCreatedSince string   `json:"recent_created_since"`
+	LastError          string   `json:"last_error"`
+	PendingKeyCount    int      `json:"pending_key_count"`
+	PendingKeyTotal    int      `json:"pending_auto_created_key_count"`
 }
 
 type adminAPIAutoCreationRequest struct {
@@ -553,6 +556,8 @@ func adminAPIAutoCreationFromSchedule(schedule domain.AliasCreationSchedule, app
 	status := "disabled"
 	if schedule.Enabled {
 		switch {
+		case autocreate.IsRateLimitStatus(schedule.LastError):
+			status = "cooldown"
 		case schedule.LastError != "":
 			status = "error"
 		case appleStatus == hmesync.StatusLoginRequired || appleStatus == hmesync.StatusExpired:
@@ -1313,7 +1318,16 @@ func (s *Server) adminAPIAutoCreation(ctx context.Context, accountID int64, appl
 	if err != nil {
 		return nil, err
 	}
-	return adminAPIAutoCreationFromSchedule(schedule, appleStatus, pending), nil
+	now := s.now().UTC()
+	since := now.Add(-time.Hour)
+	recent, err := s.store.CountRecentAliasCreations(ctx, accountID, since, now)
+	if err != nil {
+		return nil, err
+	}
+	result := adminAPIAutoCreationFromSchedule(schedule, appleStatus, pending)
+	result.RecentCreatedCount = recent
+	result.RecentCreatedSince = adminAPITime(since)
+	return result, nil
 }
 
 func (s *Server) adminAPICreateAlias(basePath string) gin.HandlerFunc {
@@ -1471,6 +1485,13 @@ func (s *Server) adminAPISetAliasAutoCreation(c *gin.Context) {
 		return
 	}
 	dto := adminAPIAutoCreationFromSchedule(schedule, appleStatus, pending)
+	now := time.Now().UTC()
+	dto.RecentCreatedSince = adminAPITime(now.Add(-time.Hour))
+	dto.RecentCreatedCount, err = s.store.CountRecentAliasCreations(c.Request.Context(), accountID, now.Add(-time.Hour), now)
+	if err != nil {
+		s.writeAdminAPIInternalError(c, err)
+		return
+	}
 	session := mustSession(c)
 	s.audit(c, &session.AdminID, session.Username, "alias_auto_create_set", "account", strconv.FormatInt(accountID, 10), "success", strconv.FormatBool(*input.Enabled))
 	writeAdminAPIData(c, http.StatusOK, dto)

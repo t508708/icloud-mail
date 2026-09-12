@@ -186,6 +186,11 @@ func (s *Store) createAutoAliasCandidate(
 	if err != nil {
 		return domain.Alias{}, domain.AppleWebSession{}, fmt.Errorf("read automatic alias after insert: %w", err)
 	}
+	if createdAlias.Enabled {
+		if err := s.recordAliasCreationEventTx(ctx, tx, createdAlias); err != nil {
+			return domain.Alias{}, domain.AppleWebSession{}, err
+		}
+	}
 	savedSession, err := scanAppleWebSession(s.txQueryRowContext(ctx, tx,
 		`SELECT `+appleWebSessionColumns+` FROM apple_web_sessions WHERE account_id = ?`, alias.AccountID,
 	))
@@ -303,6 +308,9 @@ func (s *Store) ConfirmPendingAutoAlias(
 	))
 	if err != nil {
 		return domain.Alias{}, domain.AppleWebSession{}, fmt.Errorf("read confirmed automatic alias: %w", err)
+	}
+	if err := s.recordAliasCreationEventTx(ctx, tx, confirmedAlias); err != nil {
+		return domain.Alias{}, domain.AppleWebSession{}, err
 	}
 	savedSession, err := scanAppleWebSession(s.txQueryRowContext(ctx, tx,
 		`SELECT `+appleWebSessionColumns+` FROM apple_web_sessions WHERE account_id = ?`, session.AccountID,

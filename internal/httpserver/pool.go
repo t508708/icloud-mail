@@ -291,6 +291,7 @@ func (s *Server) adminPoolAccounts(c *gin.Context) {
 			row["auto_create"] = schedule.Enabled
 			row["next_run_at"] = schedule.NextRunAt
 			row["last_error"] = schedule.LastError
+			row["creation_status"] = adminAPIAutoCreationFromSchedule(schedule, "").Status
 		}
 		result = append(result, row)
 	}

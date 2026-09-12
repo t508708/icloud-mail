@@ -43,6 +43,7 @@ const AUTO_CREATE_STAGE_LABELS = Object.freeze({
   completed: "自动创建完成",
   failed: "自动创建失败",
   cancelled: "自动创建已取消",
+  cooldown: "进入 Apple 限流冷却",
 });
 
 const SYNC_TRIGGER_LABELS = Object.freeze({

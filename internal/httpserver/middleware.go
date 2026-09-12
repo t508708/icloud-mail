@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +37,82 @@ type windowLimiter struct {
 	maxItems    int
 	nextCleanup time.Time
 	items       map[string]limiterEntry
+}
+
+type requestSample struct {
+	at         time.Time
+	suppressed int
+}
+type requestSampler struct {
+	mu          sync.Mutex
+	items       map[string]requestSample
+	max         int
+	nextCleanup time.Time
+}
+
+func newRequestSampler() *requestSampler {
+	return &requestSampler{items: make(map[string]requestSample), max: 2048}
+}
+func (s *requestSampler) allow(key string, now time.Time) (bool, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !now.Before(s.nextCleanup) {
+		for k, v := range s.items {
+			if now.Sub(v.at) >= 5*time.Minute && k != key {
+				delete(s.items, k)
+			}
+		}
+		s.nextCleanup = now.Add(time.Minute)
+	}
+	v, ok := s.items[key]
+	if ok && now.Sub(v.at) < time.Minute {
+		v.suppressed++
+		s.items[key] = v
+		return false, 0
+	}
+	if !ok && len(s.items) >= s.max {
+		return false, 0
+	}
+	n := v.suppressed
+	s.items[key] = requestSample{at: now}
+	return true, n
+}
+
+var routeAccountID = regexp.MustCompile(`/accounts/([0-9]+)`)
+
+var httpOperations = map[string]string{
+	"GET /auth/csrf": "准备后台登录", "POST /auth/login": "登录后台", "GET /auth/session": "确认后台登录状态", "POST /auth/logout": "退出后台", "PUT /auth/password": "修改管理员密码",
+	"POST /accounts/:id/sync":       "请求同步主号邮件",
+	"POST /accounts/:id/apple-auth": "登录 iCloud Web 通道", "POST /accounts/:id/apple-auth/verify": "验证 iCloud Web 登录", "DELETE /accounts/:id/apple-auth": "退出 iCloud Web 通道",
+	"GET /accounts/:id/apple-account-auth": "读取 Apple Account 登录状态", "POST /accounts/:id/apple-account-auth": "登录 Apple Account 通道", "POST /accounts/:id/apple-account-auth/verify": "验证 Apple Account 登录", "DELETE /accounts/:id/apple-account-auth": "退出 Apple Account 通道",
+	"PUT /accounts/:id/aliases/auto-create": "设置自动创建计划", "POST /accounts/:id/aliases/create-now": "手动创建隐私邮箱", "POST /accounts/:id/aliases/creation-job/stop": "停止批量创建",
+	"GET /accounts/:id/aliases/auto-create/keys": "读取新邮箱凭据", "DELETE /accounts/:id/aliases/auto-create/keys": "确认领取新邮箱凭据",
+	"POST /accounts/:id/aliases": "登记已有邮箱", "POST /accounts/:id/aliases/random": "生成自定义邮箱", "POST /accounts/:id/aliases/batch": "批量生成自定义邮箱", "POST /accounts/:id/aliases/generate": "生成自定义邮箱", "POST /accounts/:id/aliases/sync": "同步 Apple 隐私邮箱目录",
+	"GET /groups": "读取邮箱分组", "POST /groups": "创建邮箱分组", "PATCH /groups/:id": "重命名邮箱分组", "DELETE /groups/:id": "删除邮箱分组",
+	"PATCH /aliases/group": "批量移动邮箱分组", "PATCH /aliases/:id/group": "移动邮箱分组", "DELETE /aliases/batch": "提交 Apple 批量永久删除", "GET /aliases/batch/jobs/latest": "恢复最近批量删除任务", "GET /aliases/batch/jobs/:jobID": "读取批量删除进度",
+	"POST /aliases/rotate-all-credentials": "轮换全部邮箱凭据", "POST /aliases/:id/rotate-key": "轮换单邮箱 API Key", "POST /aliases/:id/rotate-credentials": "轮换单邮箱完整凭据", "GET /audit": "读取管理操作记录",
+	"GET /pool/leases/:leaseID/code": "查询领取邮箱验证码", "POST /pool/leases/:leaseID/commit": "确认使用领取邮箱", "POST /pool/leases/:leaseID/release": "释放领取邮箱并轮换凭据", "POST /pool/leases/:leaseID/renew": "续期领取邮箱",
+	"POST /oauth2/v2.0/token": "换取 IMAP OAuth 访问凭据", "GET /docs": "查看 API 文档",
+	"GET /accounts": "读取主号列表", "POST /accounts": "创建主号", "GET /accounts/:id": "读取主号详情", "PUT /accounts/:id": "更新主号", "DELETE /accounts/:id": "删除主号",
+	"GET /aliases": "读取隐私邮箱列表", "POST /aliases": "创建隐私邮箱", "GET /aliases/:id": "读取隐私邮箱", "PATCH /aliases/:id": "更新隐私邮箱", "DELETE /aliases/:id": "删除隐私邮箱",
+	"GET /accounts/:id/aliases/creation-job": "读取批量创建进度", "POST /accounts/:id/aliases/creation-job": "提交批量创建",
+	"GET /otp": "查询验证码", "GET /mail/latest": "获取最新邮件", "GET /mail/recent": "获取最近邮件", "POST /pool/claim": "领取邮箱",
+	"GET /logs": "读取日志", "GET /health": "健康检查", "GET /healthz": "健康检查",
+	"GET /pool/accounts": "读取邮箱池主号", "PUT /pool/accounts/:id": "更新邮箱池主号", "GET /pool/members": "读取邮箱池成员", "POST /pool/members": "添加邮箱池成员", "PATCH /pool/members/:id": "更新邮箱池成员", "GET /pool/leases": "读取邮箱池租约", "GET /pool/leases/:leaseID": "读取邮箱池租约详情", "GET /pool/clients": "读取邮箱池客户端", "POST /pool/clients": "创建邮箱池客户端", "PATCH /pool/clients/:clientID": "更新邮箱池客户端",
+}
+
+func httpOperation(path, method string) string {
+	p := strings.TrimSuffix(path, "/")
+	for _, prefix := range []string{"/api/v1", "/admin/api/v1"} {
+		if i := strings.Index(p, prefix); i >= 0 {
+			p = p[i+len(prefix):]
+			break
+		}
+	}
+	if op, ok := httpOperations[method+" "+p]; ok {
+		return op
+	}
+	return "其他请求"
 }
 
 func newWindowLimiter(limit int, window time.Duration) *windowLimiter {
@@ -70,6 +148,7 @@ func (l *windowLimiter) Allow(key string) bool {
 }
 
 func (s *Server) requestContext() gin.HandlerFunc {
+	sampler := newRequestSampler()
 	return func(c *gin.Context) {
 		requestID, err := secure.RandomToken(12)
 		if err != nil {
@@ -79,13 +158,47 @@ func (s *Server) requestContext() gin.HandlerFunc {
 		c.Header("X-Request-ID", requestID)
 		started := time.Now()
 		c.Next()
-		if c.Request.Method == http.MethodGet &&
-			(c.Request.URL.Path == s.cfg.AdminPath+"/api/v1/logs" ||
-				c.Request.URL.Path == legacyAdminAPIBasePath+"/logs") &&
-			c.Writer.Status() >= http.StatusOK && c.Writer.Status() < http.StatusMultipleChoices {
+		status := c.Writer.Status()
+		duration := time.Since(started)
+		operation := httpOperation(c.FullPath(), c.Request.Method)
+		if c.FullPath() == "" {
+			operation = "访问未匹配路由"
+		} else if c.FullPath() == s.cfg.AdminPath+"/assets/*filepath" {
+			operation = "读取后台静态资源"
+		} else if c.FullPath() == s.cfg.AdminPath || c.FullPath() == s.cfg.AdminPath+"/" || c.FullPath() == "/" {
+			operation = "打开后台页面"
+		}
+		if status >= 200 && status < 400 && duration < time.Second && (operation == "健康检查" || operation == "读取日志" || strings.HasPrefix(c.Request.URL.Path, s.cfg.AdminPath+"/assets/")) {
 			return
 		}
-		s.logger.Info("HTTP 请求", "method", c.Request.Method, "path", s.redactedRequestPath(c.Request.URL.Path), "status", c.Writer.Status(), "duration_ms", time.Since(started).Milliseconds(), "request_id", requestID)
+		attrs := []any{"method", c.Request.Method, "path", s.redactedRequestPath(c.Request.URL.Path), "status", status, "duration_ms", duration.Milliseconds(), "request_id", requestID, "operation", operation}
+		// GET collection/status endpoints are sampled per route and main account.
+		key := c.FullPath() + " " + c.Request.Method
+		if m := routeAccountID.FindStringSubmatch(c.Request.URL.Path); len(m) > 1 {
+			key += " " + m[1]
+			if id, err := strconv.ParseInt(m[1], 10, 64); err == nil && id > 0 {
+				attrs = append(attrs, "account_id", id)
+			}
+		} else if binding, ok := c.Get(bindingKey); ok {
+			if mailbox, ok := binding.(domain.MailboxBinding); ok {
+				attrs = append(attrs, "account_id", mailbox.Account.ID, "alias_id", mailbox.Alias.ID)
+				key += " " + strconv.FormatInt(mailbox.Account.ID, 10)
+			}
+		}
+		if c.Request.Method == http.MethodGet && status < http.StatusBadRequest && duration < time.Second {
+			if ok, suppressed := sampler.allow(key, time.Now()); !ok {
+				return
+			} else if suppressed > 0 {
+				attrs = append(attrs, "suppressed_count", suppressed)
+			}
+		}
+		if status >= 500 {
+			s.logger.Error(operation, attrs...)
+		} else if status >= 400 {
+			s.logger.Warn(operation, attrs...)
+		} else {
+			s.logger.Info(operation, attrs...)
+		}
 	}
 }
 

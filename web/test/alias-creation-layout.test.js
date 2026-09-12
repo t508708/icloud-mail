@@ -10,6 +10,9 @@ test("batch creation stays compact without progress or created-address summary",
   assert.doesNotMatch(source, /el-progress|<details|已创建\s*\{\{/);
   assert.match(source, /creation-job-panel__title/);
   assert.match(source, /creation-job-panel__apple/);
+  assert.match(source, /creation-job-panel__controls \{ order: 2; margin-left: auto; \}/);
+  assert.match(source, /creation-job-panel__status \{ display: flex; flex-basis: 100%;/);
+  assert.match(source, /@media \(max-width: 720px\) \{ \.creation-job-panel__controls \{ margin-left: 0; \}/);
 });
 
 test("batch creation is a sibling section of the Apple directory section", async () => {

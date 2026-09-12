@@ -282,7 +282,10 @@ func TestExplicitRateLimitRejectionLogsNoRemoteSideEffectAndCooldown(t *testing.
 	clock.Set(attemptedAt)
 	manager.runDue(context.Background())
 
-	failed := requireAutoCreateEvent(t, logs, "run_failed")
+	failed := requireAutoCreateEvent(t, logs, "run_rate_limited")
+	if failed.Level != slog.LevelInfo || failed.Fields["auto_create_stage"] != "cooldown" {
+		t.Fatal("normal rate limit should be an informational cooldown")
+	}
 	wantNext := attemptedAt.Add(appleRateLimitCooldown)
 	if failed.Fields["error_code"] != "APPLE_RATE_LIMITED" ||
 		failed.Fields["http_status"] != "200" || failed.Fields["retryable"] != "false" ||

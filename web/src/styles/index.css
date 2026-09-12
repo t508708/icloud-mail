@@ -1,49 +1,49 @@
 :root {
   color-scheme: light;
   font-family:
-    Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    -apple-system, BlinkMacSystemFont, "Segoe UI", ui-sans-serif,
     "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   font-synthesis: none;
   letter-spacing: 0;
-  color: #20252b;
-  background: #f4f6f8;
-  --app-bg: #f4f6f8;
+  color: #1d1d1f;
+  background: #f5f5f7;
+  --app-bg: #f5f5f7;
   --surface: #ffffff;
-  --surface-subtle: #f8f9fa;
-  --border: #dfe3e7;
-  --border-strong: #cbd1d7;
-  --text: #20252b;
-  --text-secondary: #5d6670;
-  --text-muted: #7b858f;
-  --sidebar: #20262c;
-  --sidebar-hover: #2b333b;
-  --primary: #1769e0;
-  --primary-dark: #1057bd;
-  --success: #176b45;
+  --surface-subtle: #fafafa;
+  --border: #dcdce0;
+  --border-strong: #c6c6cb;
+  --text: #1d1d1f;
+  --text-secondary: #636368;
+  --text-muted: #737378;
+  --sidebar: #efeff2;
+  --sidebar-hover: #e4e4e9;
+  --primary: #007aff;
+  --primary-dark: #0064d2;
+  --success: #248a3d;
   --warning: #8a5a08;
   --danger: #b42318;
   --focus: #0b63ce;
-  --sidebar-width: 240px;
-  --topbar-height: 72px;
+  --sidebar-width: 220px;
+  --topbar-height: 60px;
   --content-max: 1440px;
-  --el-color-primary: #1769e0;
+  --el-color-primary: #007aff;
   --el-color-primary-light-3: #5b92e5;
   --el-color-primary-light-5: #8bb2ec;
   --el-color-primary-light-7: #bad1f4;
   --el-color-primary-light-8: #d2e1f8;
   --el-color-primary-light-9: #e9f0fc;
-  --el-color-primary-dark-2: #1057bd;
-  --el-color-success: #176b45;
+  --el-color-primary-dark-2: #0064d2;
+  --el-color-success: #248a3d;
   --el-color-warning: #8a5a08;
   --el-color-danger: #b42318;
-  --el-border-radius-base: 5px;
-  --el-border-radius-small: 4px;
-  --el-border-color: #dfe3e7;
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 6px;
+  --el-border-color: #dcdce0;
   --el-border-color-light: #e8ebee;
   --el-fill-color-light: #f5f7f9;
   --el-fill-color-lighter: #f8f9fa;
-  --el-bg-color-page: #f4f6f8;
-  --el-text-color-primary: #20252b;
+  --el-bg-color-page: #f5f5f7;
+  --el-text-color-primary: #1d1d1f;
   --el-text-color-regular: #4e5862;
   --el-text-color-secondary: #6d7781;
   --el-box-shadow-light: 0 3px 12px rgb(32 37 43 / 8%);
@@ -132,9 +132,10 @@ code {
   width: var(--sidebar-width);
   min-height: 100vh;
   min-height: 100dvh;
-  color: #f5f7f8;
-  background: var(--sidebar);
-  border-right: 1px solid #171c21;
+  color: var(--text);
+  background: rgb(239 239 242 / 94%);
+  border-right: 1px solid rgb(60 60 67 / 12%);
+  backdrop-filter: blur(20px);
 }
 
 .app-brand {
@@ -147,8 +148,7 @@ code {
 .admin-sidebar > .app-brand,
 .mobile-drawer__inner > .app-brand {
   min-height: var(--topbar-height);
-  padding: 14px 18px;
-  border-bottom: 1px solid rgb(255 255 255 / 10%);
+  padding: 22px 20px 18px;
 }
 
 .app-brand__mark {
@@ -162,7 +162,8 @@ code {
   font-weight: 750;
   line-height: 1;
   background: var(--primary);
-  border-radius: 6px;
+  border-radius: 11px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 24%), 0 2px 5px rgb(0 95 205 / 12%);
 }
 
 .app-brand__copy {
@@ -185,7 +186,7 @@ code {
 }
 
 .app-brand__copy small {
-  color: rgb(255 255 255 / 62%);
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
@@ -193,21 +194,21 @@ code {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 4px;
-  padding: 16px 10px;
+  gap: 5px;
+  padding: 12px;
 }
 
 .admin-nav__item {
   display: flex;
   align-items: center;
-  min-height: 42px;
+  min-height: 40px;
   gap: 11px;
   padding: 0 12px;
-  color: rgb(255 255 255 / 72%);
-  font-size: 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
   font-weight: 560;
-  border-left: 3px solid transparent;
-  border-radius: 4px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   transition:
     color 150ms ease,
     background-color 150ms ease,
@@ -220,15 +221,57 @@ code {
   flex: 0 0 18px;
 }
 
+.admin-nav__group {
+  padding: 13px 12px 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.admin-nav__icon {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 25px;
+  place-items: center;
+  border-radius: 7px;
+  background: #e0e0e5;
+  color: #636368;
+}
+.admin-nav__icon svg { width: 16px; height: 16px; }
+.admin-nav__icon--accounts { background: #e0eafe; color: #3673d4; }
+.admin-nav__icon--aliases { background: #dcecff; color: #0875d8; }
+.admin-nav__icon--pool { background: #e7e2fa; color: #7450c1; }
+.admin-nav__icon--security { background: #e0eee4; color: #398453; }
+
+.admin-topbar__account {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.admin-avatar {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 50%;
+  background: #e5e5ea;
+  color: #636368;
+  font-weight: 600;
+}
+
 .admin-nav__item:hover {
-  color: #ffffff;
+  color: var(--text);
   background: var(--sidebar-hover);
 }
 
 .admin-nav__item.is-active {
-  color: #ffffff;
-  background: #303b46;
-  border-left-color: #5da0ff;
+  color: #0064d2;
+  background: #dce9fa;
+  border-color: rgb(0 122 255 / 6%);
 }
 
 .admin-sidebar__footer {
@@ -238,13 +281,13 @@ code {
   min-height: 60px;
   gap: 10px;
   padding: 10px 14px 10px 18px;
-  border-top: 1px solid rgb(255 255 255 / 10%);
+  border-top: 1px solid var(--border);
 }
 
 .admin-sidebar__username {
   min-width: 0;
   overflow: hidden;
-  color: rgb(255 255 255 / 72%);
+  color: var(--text-secondary);
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -257,7 +300,7 @@ code {
   gap: 6px;
   min-height: 32px;
   padding: 0 7px;
-  color: rgb(255 255 255 / 72%);
+  color: var(--text-secondary);
   cursor: pointer;
   background: transparent;
   border: 0;
@@ -265,8 +308,8 @@ code {
 }
 
 .quiet-action:hover:not(:disabled) {
-  color: #ffffff;
-  background: rgb(255 255 255 / 8%);
+  color: var(--text);
+  background: var(--sidebar-hover);
 }
 
 .quiet-action:disabled {
@@ -298,7 +341,7 @@ code {
   min-height: var(--topbar-height);
   gap: 14px;
   padding: 10px clamp(20px, 3vw, 40px);
-  background: rgb(255 255 255 / 96%);
+  background: rgb(245 245 247 / 88%);
   border-bottom: 1px solid var(--border);
   backdrop-filter: blur(8px);
 }
@@ -309,15 +352,15 @@ code {
 
 .admin-topbar h1 {
   overflow-wrap: anywhere;
-  font-size: 20px;
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 600;
   line-height: 1.25;
 }
 
 .admin-topbar p {
   margin-top: 3px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.4;
 }
 
@@ -334,7 +377,7 @@ code {
   min-height: calc(100dvh - var(--topbar-height));
   flex: 1 0 auto;
   flex-direction: column;
-  padding: 28px clamp(20px, 3vw, 40px) 48px;
+  padding: 26px clamp(20px, 2.4vw, 36px) 32px;
   margin: 0 auto;
 }
 
@@ -349,7 +392,7 @@ code {
 .page-stack {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 18px;
 }
 
 .virtual-list-page {
@@ -359,7 +402,7 @@ code {
 
 .section-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 20px;
 }
@@ -370,7 +413,7 @@ code {
 
 .section-header__title {
   overflow-wrap: anywhere;
-  font-size: 16px;
+  font-size: 24px;
   font-weight: 700;
   line-height: 1.35;
 }
@@ -400,7 +443,7 @@ code {
 }
 
 .section-header__actions {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   justify-content: flex-end;
 }
 
@@ -417,7 +460,7 @@ code {
   position: relative;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 12px;
 }
 
 .data-panel {
@@ -602,10 +645,10 @@ code {
 
 .detail-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 1px;
   overflow: hidden;
-  background: var(--border);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;
 }
@@ -833,11 +876,11 @@ code {
 
 .auto-creation-metrics {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 1px;
   margin-top: 14px;
   overflow: hidden;
-  background: var(--border);
+  background: var(--surface-subtle);
   border: 1px solid var(--border);
   border-radius: 5px;
 }
@@ -1182,7 +1225,7 @@ code {
   min-height: 100dvh;
   place-items: center;
   padding: 28px 18px;
-  background: #eef1f4;
+  background: #f5f5f7;
 }
 
 .login-shell,
@@ -1210,19 +1253,19 @@ code {
 .not-found-panel {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 7px;
-  box-shadow: 0 8px 28px rgb(32 37 43 / 10%);
+  border-radius: 20px;
+  box-shadow: 0 12px 44px rgb(29 29 31 / 6%);
 }
 
 .login-panel {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 28px;
+  gap: 24px;
+  padding: 36px;
 }
 
 .login-panel__heading h1 {
-  font-size: 22px;
+  font-size: 26px;
 }
 
 .login-panel__heading p {
@@ -1284,7 +1327,7 @@ code {
   display: flex;
   flex-direction: column;
   min-height: 100%;
-  color: #ffffff;
+  color: var(--text);
   background: var(--sidebar);
 }
 
@@ -1295,7 +1338,29 @@ code {
 
 .el-button {
   font-weight: 560;
+  min-height: 32px;
+  transition: background-color 120ms, border-color 120ms, box-shadow 120ms;
 }
+
+.el-button:not(.is-text, .is-link, .el-button--primary, .is-disabled) {
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+}
+.el-button--primary:not(.is-plain, .is-text, .is-link) {
+  box-shadow: 0 1px 2px rgb(0 95 205 / 16%), inset 0 1px 0 rgb(255 255 255 / 14%);
+}
+.el-tag { border-radius: 6px; }
+.el-dialog, .el-message-box {
+  --el-dialog-border-radius: 16px;
+  border-radius: 16px;
+  box-shadow: 0 16px 64px rgb(0 0 0 / 16%);
+}
+.el-dialog__header { padding-bottom: 20px; }
+.el-dialog__title { font-size: 18px; font-weight: 650; }
+.el-dialog__footer { padding-top: 20px; }
+.el-popper.is-light { border-radius: 10px; }
+.el-dropdown-menu { padding: 6px; }
+.el-dropdown-menu__item { border-radius: 5px; }
+.el-switch { --el-switch-on-color: #34c759; }
 
 .el-button + .el-button {
   margin-left: 0;
@@ -1329,9 +1394,8 @@ code {
 .el-button,
 .el-alert,
 .el-notification,
-.el-message-box,
 .el-drawer {
-  border-radius: 5px;
+  border-radius: 8px;
 }
 
 .el-input__wrapper {
@@ -1343,7 +1407,7 @@ code {
 }
 
 .el-overlay {
-  background-color: rgb(20 25 30 / 42%);
+  background-color: rgb(29 29 31 / 24%);
 }
 
 @media (max-width: 1100px) {

@@ -119,6 +119,12 @@ func explicitRateLimitRejection(err error) bool {
 	return visit(err)
 }
 
+// IsRateLimitStatus recognizes only the canonical persisted status.
+func IsRateLimitStatus(message string) bool {
+	value := strings.TrimSpace(message)
+	return value == "APPLE_RATE_LIMITED" || value == aliasCreationErrorReason("APPLE_RATE_LIMITED")
+}
+
 func (flow aliasCreationFlow) markStarted() {
 	if flow.state == nil {
 		return
@@ -193,7 +199,8 @@ func (m *Manager) logAliasCreationProgress(
 	switch update.Phase {
 	case domain.AliasCreationPhaseCompleted,
 		domain.AliasCreationPhaseFailed,
-		domain.AliasCreationPhaseCancelled:
+		domain.AliasCreationPhaseCancelled,
+		domain.AliasCreationPhaseCooldown:
 		return
 	}
 	if flow.state == nil {
@@ -324,6 +331,12 @@ func (m *Manager) logAliasCreationFailureWithOperation(
 	flow.state.mu.Lock()
 	defer flow.state.mu.Unlock()
 	if flow.state.terminal {
+		return
+	}
+	if info.code == "APPLE_RATE_LIMITED" && failureRecorded {
+		flow.state.stage = domain.AliasCreationPhaseCooldown
+		flow.state.terminal = true
+		m.logAliasCreationFlowLocked(ctx, slog.LevelInfo, "自动创建隐私邮箱进入限流冷却", accountID, flow, flow.state.stage, flow.state.percent, "run_rate_limited", attributes...)
 		return
 	}
 	flow.state.stage = domain.AliasCreationPhaseFailed
@@ -558,7 +571,8 @@ func isKnownAliasCreationPhase(value domain.AliasCreationPhase) bool {
 		domain.AliasCreationPhaseSavingResult,
 		domain.AliasCreationPhaseCompleted,
 		domain.AliasCreationPhaseFailed,
-		domain.AliasCreationPhaseCancelled:
+		domain.AliasCreationPhaseCancelled,
+		domain.AliasCreationPhaseCooldown:
 		return true
 	default:
 		return false

@@ -56,6 +56,7 @@
         :class="{
           'desktop-data-table--force': pageSize > 100 || pageSize === ALL_PAGE_SIZE,
         }"
+        :style="accounts.length <= 10 ? { flex: '0 0 auto', height: `${accounts.length * 56 + 50}px`, minHeight: '0' } : undefined"
         :aria-busy="loading"
       >
         <VirtualDataTable

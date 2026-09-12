@@ -307,7 +307,8 @@
                       : "已关闭"
                   }}</small>
                 </div>
-                <small v-if="row.last_error" class="pool-error">{{
+                <small v-if="row.creation_status === 'cooldown'" class="pool-cooldown">限流冷却中，到时自动继续</small>
+                <small v-else-if="row.last_error" class="pool-error">{{
                   row.last_error
                 }}</small></template
               ></el-table-column
@@ -395,10 +396,12 @@ grant_type=refresh_token&amp;client_id=CLIENT_ID&amp;refresh_token=REFRESH_TOKEN
             @keyup.enter="applyEnrollSearch"
           /><el-button :disabled="enrollLocked" @click="applyEnrollSearch">搜索</el-button>
           <el-button :disabled="enrollLocked || !enrollItems.length" @click="selectCurrentPage">全选本页</el-button>
+          <el-button :disabled="enrollLocked || !enrollItems.length" @click="invertEnrollPage">反选本页</el-button>
           <el-button :disabled="enrollLocked || !enrollTotal" :loading="enrollSelectingAll" @click="selectAllResults">全选搜索结果</el-button>
           <el-button :disabled="enrollLocked || !selected.length" @click="clearSelection">清空选择</el-button>
           <span class="pool-enrollment-count" aria-live="polite">已选 {{ selected.length }}</span>
         </div>
+        <div ref="enrollSelectionContainer" @pointerdown.capture="enrollDrag.pointerDown">
           <el-table
             ref="enrollTable"
             row-key="id"
@@ -411,12 +414,24 @@ grant_type=refresh_token&amp;client_id=CLIENT_ID&amp;refresh_token=REFRESH_TOKEN
             type="selection"
             width="45"
             :selectable="(row) => !enrollLocked && isSelectable(row)"
-          />
+          >
+            <template #default="{ row }">
+              <el-checkbox
+                :model-value="selected.includes(row.id)"
+                :disabled="enrollLocked || !isSelectable(row)"
+                :data-selection-id="row.id"
+                :data-selection-disabled="enrollLocked || !isSelectable(row)"
+                :aria-label="`勾选 ${row.address}`"
+                @change="setEnrollRow(row, $event)"
+              />
+            </template>
+          </el-table-column>
           <el-table-column prop="address" label="邮箱" /><el-table-column
             prop="accountEmail"
             label="主号"
           />
           </el-table>
+        </div>
         <div v-if="enrollTotal > 0" class="enroll-pagination">
           <span>共 {{ enrollTotal }} 条</span>
           <el-pagination
@@ -470,6 +485,7 @@ import { useAuth } from "../stores/auth.js";
 import SectionHeader from "../components/SectionHeader.vue";
 import RequestAlert from "../components/RequestAlert.vue";
 import { copyText } from "../utils/clipboard.js";
+import { createCheckboxDragSelection } from "../utils/checkboxDragSelection.js";
 
 const auth = useAuth();
 const tab = ref("members"),
@@ -503,6 +519,41 @@ const enrollLocked = computed(() => busy.value || enrollLoading.value || enrollS
 let enrollTicket = 0;
 let restoringEnrollSelection = false;
 let enrollAbortController;
+const enrollSelectionContainer = ref(null);
+let enrollRestoreQueued = false;
+const enrollDrag = createCheckboxDragSelection({
+  getContainer: () => enrollSelectionContainer.value,
+  getSelected: () => selected.value,
+  isDisabled: () => enrollLocked.value || !enrollOpen.value,
+  onChange: (ids) => {
+    const disabled = new Set(enrollItems.value.filter((row) => !isSelectable(row)).map((row) => row.id));
+    selected.value = ids.filter((id) => !disabled.has(id));
+    queueEnrollRestore();
+  },
+});
+function queueEnrollRestore() {
+  if (enrollRestoreQueued) return;
+  enrollRestoreQueued = true;
+  void nextTick(async () => {
+    try { await restoreEnrollSelection(); } finally { enrollRestoreQueued = false; }
+  });
+}
+function setEnrollRow(row, checked) {
+  if (enrollLocked.value || !isSelectable(row)) return;
+  const ids = new Set(selected.value);
+  if (checked) ids.add(row.id); else ids.delete(row.id);
+  selected.value = [...ids];
+  queueEnrollRestore();
+}
+async function invertEnrollPage() {
+  if (enrollLocked.value) return;
+  const ids = new Set(selected.value);
+  for (const row of enrollItems.value.filter(isSelectable)) {
+    if (ids.has(row.id)) ids.delete(row.id); else ids.add(row.id);
+  }
+  selected.value = [...ids];
+  await restoreEnrollSelection();
+}
 const secretOpen = ref(false),
   secretTitle = ref(""),
   secret = ref("");
@@ -530,58 +581,81 @@ const query = (params) =>
   new URLSearchParams(
     Object.entries(params).filter(([, v]) => v !== "" && v != null),
   ).toString();
-const request = (path, method = "GET", body) =>
-  apiRequest(path, { method, body, csrfToken: auth.state.csrfToken });
+const request = (path, method = "GET", body, signal) =>
+  apiRequest(path, { method, body, signal, csrfToken: auth.state.csrfToken });
+let poolRefreshTicket = 0;
+let poolRefreshController;
+let memberReadTicket = 0;
+let leaseReadTicket = 0;
 async function attempt(fn) {
   try {
     return await fn();
   } catch (e) {
-    error.value = e;
+    if (e.name !== "AbortError") error.value = e;
     return undefined;
   }
 }
-async function loadMembers() {
+async function loadMembers(signal) {
+  const ticket = ++memberReadTicket;
   await attempt(async () => {
-    members.value = await request(
+    const result = await request(
       "/pool/members?" +
         query({
           state: memberState.value,
           q: search.value,
           limit: 50,
           offset: (memberPage.value - 1) * 50,
-        }),
+        }), "GET", undefined, signal instanceof AbortSignal ? signal : undefined,
     );
+    if (ticket === memberReadTicket) members.value = result;
   });
 }
-async function loadLeases() {
+async function loadLeases(signal) {
+  const ticket = ++leaseReadTicket;
   await attempt(async () => {
-    leases.value = await request(
+    const result = await request(
       "/pool/leases?" +
         query({
           state: leaseState.value,
           client_id: clientFilter.value,
           limit: 50,
           offset: (leasePage.value - 1) * 50,
-        }),
+        }), "GET", undefined, signal instanceof AbortSignal ? signal : undefined,
     );
+    if (ticket === leaseReadTicket) leases.value = result;
   });
 }
 async function refresh() {
-  if (loading.value) return;
+  const ticket = ++poolRefreshTicket;
+  poolRefreshController?.abort();
+  const controller = new AbortController();
+  poolRefreshController = controller;
+  const activeTab = tab.value;
   loading.value = true;
   error.value = null;
   try {
-    clients.value = await request("/pool/clients");
-    if (tab.value === "members") await loadMembers();
-    if (tab.value === "leases") await loadLeases();
-    if (tab.value === "accounts")
-      accounts.value = await request("/pool/accounts");
+    await Promise.all([
+      request("/pool/clients", "GET", undefined, controller.signal).then((result) => {
+        if (ticket === poolRefreshTicket) clients.value = result;
+      }),
+      activeTab === "members" ? loadMembers(controller.signal) :
+        activeTab === "leases" ? loadLeases(controller.signal) :
+          activeTab === "accounts" ? request("/pool/accounts", "GET", undefined, controller.signal).then((result) => {
+            if (ticket === poolRefreshTicket) accounts.value = result;
+          }) : Promise.resolve(),
+    ]);
   } catch (e) {
-    error.value = e;
+    if (ticket === poolRefreshTicket && e.name !== "AbortError") error.value = e;
   } finally {
-    loading.value = false;
+    if (ticket === poolRefreshTicket) loading.value = false;
   }
 }
+onBeforeUnmount(() => {
+  ++poolRefreshTicket;
+  ++memberReadTicket;
+  ++leaseReadTicket;
+  poolRefreshController?.abort();
+});
 async function mutate(fn) {
   if (busy.value) return;
   busy.value = true;
@@ -667,6 +741,7 @@ async function toggleAutoCreate(row, enabled) {
   });
 }
 function beginEnrollRead() {
+  enrollDrag.stop();
   enrollAbortController?.abort();
   const ticket = ++enrollTicket;
   enrollAbortController = new AbortController();
@@ -726,6 +801,7 @@ function closeEnroll() {
 }
 
 function resetEnroll() {
+  enrollDrag.stop();
   ++enrollTicket;
   enrollAbortController?.abort();
   selected.value = [];
@@ -752,6 +828,7 @@ async function selectCurrentPage() {
 
 async function clearSelection() {
   if (enrollLocked.value) return;
+  enrollDrag.stop();
   selected.value = [];
   await restoreEnrollSelection();
 }
@@ -789,6 +866,7 @@ async function changeEnrollPage(page) {
 
 async function enroll() {
   if (enrollLocked.value || !selected.value.length) return;
+  enrollDrag.stop();
   const ticket = enrollTicket;
   const current = () => enrollOpen.value && ticket === enrollTicket;
   enrollSubmitting.value = true;
@@ -881,6 +959,7 @@ onMounted(refresh);
 .pool-error {
   color: var(--el-color-danger);
 }
+.pool-cooldown { color: var(--el-color-success); }
 .el-pagination {
   margin-top: 20px;
   overflow-x: auto;

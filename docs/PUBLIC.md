@@ -66,6 +66,16 @@ docker compose ps
 
 ## 验证与恢复
 
+缓存边界：仅 `/admin/assets/` 保留应用返回的静态资源缓存头，并允许代理缓存响应；其余 HTML、API 和 `/admin/` 路由继续由统一代理规则覆盖为 `Cache-Control: no-store`。Nginx 不启用全站缓存。
+
+```sh
+curl -sSI 'https://icloud-us.gooelv.com/admin/assets/<asset>.js'
+curl -sSI https://icloud-us.gooelv.com/admin/
+curl -sS -D - -o /dev/null https://icloud-us.gooelv.com/admin/api/v1/auth/session
+```
+
+将 `<asset>` 替换为当前 HTML 引用的文件名。`/admin/` 和 API 响应应继续为 `Cache-Control: no-store`，且 `CF-Cache-Status` 不是 `HIT`；已有静态文件应返回 `public, max-age=31536000, immutable`，缺失文件仍返回 404 且不采用长期缓存。
+
 ```sh
 dig +short icloud-us.gooelv.com A
 dig +short imap-icloud.us.gooelv.com A

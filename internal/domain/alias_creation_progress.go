@@ -23,6 +23,7 @@ const (
 	AliasCreationPhaseCompleted              AliasCreationPhase = "completed"
 	AliasCreationPhaseFailed                 AliasCreationPhase = "failed"
 	AliasCreationPhaseCancelled              AliasCreationPhase = "cancelled"
+	AliasCreationPhaseCooldown               AliasCreationPhase = "cooldown"
 )
 
 // AliasCreationProgressUpdate contains only process diagnostics. Alias

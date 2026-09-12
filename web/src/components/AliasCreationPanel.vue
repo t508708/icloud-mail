@@ -149,12 +149,12 @@ onBeforeUnmount(() => { alive = false; generation++; clearTimeout(timer); appleP
 .creation-job-panel__controls, .creation-job-panel__apple { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .creation-job-panel__title { margin: 0; color: var(--text-primary); font-size: 18px; line-height: 1.3; white-space: nowrap; }
 .creation-job-panel__title { order: 1; }
-.creation-job-panel__controls { order: 2; }
+.creation-job-panel__controls { order: 2; margin-left: auto; }
 .creation-job-panel__apple { order: 3; }
 .creation-job-panel__status { order: 4; }
 .creation-job-panel > .el-alert { order: 5; }
 .creation-job-panel__controls .el-select { width: 220px; }
 .creation-job-panel__controls :deep(.el-input-number) { width: 104px; }
-.creation-job-panel__status { display: flex; flex-wrap: wrap; gap: 8px; overflow-wrap: anywhere; color: var(--text-secondary); }
-@media (max-width: 720px) { .creation-job-panel__controls .el-select { width: 100%; } }
+.creation-job-panel__status { display: flex; flex-basis: 100%; flex-wrap: wrap; gap: 8px; overflow-wrap: anywhere; color: var(--text-secondary); }
+@media (max-width: 720px) { .creation-job-panel__controls { margin-left: 0; } .creation-job-panel__controls .el-select { width: 100%; } }
 </style>
