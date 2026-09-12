@@ -83,18 +83,20 @@ function createHarness(refresh, overrides = {}) {
     hidden: false,
   });
   const windowTarget = new FakeEventTarget();
+  const navigatorTarget = Object.assign({ onLine: true }, overrides.navigatorTarget);
   const live = createLiveRefresh(refresh, {
     documentTarget,
     windowTarget,
     setTimeoutFn: timers.setTimeoutFn,
     clearTimeoutFn: timers.clearTimeoutFn,
+    navigatorTarget,
     ...overrides,
   });
-  return { documentTarget, live, timers, windowTarget };
+  return { documentTarget, live, timers, windowTarget, navigatorTarget };
 }
 
-test("live refresh defaults to five seconds and schedules after completion", async () => {
-  assert.equal(LIVE_REFRESH_INTERVAL_MS, 5_000);
+test("live refresh defaults to thirty seconds and schedules after completion", async () => {
+  assert.equal(LIVE_REFRESH_INTERVAL_MS, 30_000);
 
   const pending = deferred();
   let calls = 0;
@@ -110,7 +112,7 @@ test("live refresh defaults to five seconds and schedules after completion", asy
 
   pending.resolve();
   assert.equal(await first, true);
-  assert.deepEqual(timers.entries().map(({ delay }) => delay), [5_000]);
+  assert.deepEqual(timers.entries().map(({ delay }) => delay), [30_000]);
 
   live.stop();
 });
@@ -239,4 +241,61 @@ test("stop removes listeners and pending work cannot restart the scheduler", asy
   windowTarget.dispatch("focus");
   await Promise.resolve();
   assert.equal(timers.size, 0);
+});
+
+test("dynamic interval accepts active and idle periods and rejects invalid values", async () => {
+  let value = 5_000;
+  const { live, timers } = createHarness(() => {}, { getIntervalMs: () => value });
+  await live.start({ immediate: false });
+  assert.equal(timers.entries()[0].delay, 5_000);
+  value = null;
+  timers.fireNext(); await flushPromises();
+  assert.equal(timers.entries()[0].delay, 30_000);
+  live.stop();
+  const bad = createHarness(() => {}, { getIntervalMs: () => { throw new Error("bad"); } });
+  await bad.live.start({ immediate: false });
+  assert.equal(bad.timers.entries()[0].delay, 30_000);
+});
+
+test("offline pauses and online resumes, and stop removes network listeners", async () => {
+  let calls = 0;
+  const { live, timers, navigatorTarget, windowTarget } = createHarness(() => { calls += 1; });
+  await live.start({ immediate: false });
+  navigatorTarget.onLine = false; windowTarget.dispatch("offline");
+  assert.equal(timers.size, 0); assert.equal(await live.refreshNow(), false); assert.equal(calls, 0);
+  navigatorTarget.onLine = true; windowTarget.dispatch("online"); await flushPromises();
+  assert.equal(calls, 1); live.stop();
+  assert.equal(windowTarget.listenerCount("online"), 0); assert.equal(windowTarget.listenerCount("offline"), 0);
+});
+
+test("failures back off to 30, 60, 120 seconds and success resets", async () => {
+  let calls = 0;
+  const { live, timers } = createHarness(() => { calls += 1; if (calls <= 3) throw new Error("x"); });
+  await live.start();
+  assert.equal(timers.entries()[0].delay, 60_000);
+  timers.fireNext(); await flushPromises(); assert.equal(timers.entries()[0].delay, 120_000);
+  timers.fireNext(); await flushPromises(); assert.equal(timers.entries()[0].delay, 120_000);
+  timers.fireNext(); await flushPromises(); assert.equal(timers.entries()[0].delay, 30_000);
+  live.stop();
+});
+
+test("silent loaders returning false back off without rejecting the refresh promise", async () => {
+  let succeed = false;
+  const { live, timers } = createHarness(() => succeed ? undefined : false);
+  assert.equal(await live.start(), false);
+  assert.equal(timers.entries()[0].delay, 60_000);
+  timers.fireNext();
+  await flushPromises();
+  assert.equal(timers.entries()[0].delay, 120_000);
+  succeed = true;
+  assert.equal(await live.refreshNow(), true);
+  assert.equal(timers.entries()[0].delay, 30_000);
+  live.stop();
+});
+
+test("failure backoff does not shorten an explicitly longer interval", async () => {
+  const { live, timers } = createHarness(() => false, { intervalMs: 300_000 });
+  await live.start();
+  assert.equal(timers.entries()[0].delay, 300_000);
+  live.stop();
 });

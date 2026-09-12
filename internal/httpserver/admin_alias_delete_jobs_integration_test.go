@@ -156,7 +156,9 @@ func TestAliasDeletionJobTwentyAndThousandContinuePastFourteenAfterDisconnect(t 
 				t.Fatalf("progress after original connection closed = %d %#v", progress.Code, partial)
 			}
 			close(continueBatch)
-			deadline := time.Now().Add(time.Minute)
+			// The 1000-item fixture repeatedly serializes durable job state; race
+			// instrumentation needs a larger budget than a small-batch run.
+			deadline := time.Now().Add(3 * time.Minute)
 			var result adminAPIAliasDeletionJobDTO
 			for {
 				job, err := env.store.GetAliasDeletionJob(context.Background(), testAliasDeletionJobID, admin.ID)
@@ -170,7 +172,7 @@ func TestAliasDeletionJobTwentyAndThousandContinuePastFourteenAfterDisconnect(t 
 				if time.Now().After(deadline) {
 					t.Fatalf("fixture exceeded deadline at %d/%d", result.Processed, count)
 				}
-				time.Sleep(10 * time.Millisecond)
+				time.Sleep(50 * time.Millisecond)
 			}
 			stop()
 			waitTestAliasDeletionSignal(t, stopped)

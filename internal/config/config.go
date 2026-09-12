@@ -38,6 +38,8 @@ type Config struct {
 	CookieSecure              bool
 	SessionTTL                time.Duration
 	PollInterval              time.Duration
+	IMAPIdleEnabled           bool
+	IMAPFallbackInterval      time.Duration
 	IMAPTimeout               time.Duration
 	SyncTimeout               time.Duration
 	SyncConcurrency           int
@@ -105,6 +107,15 @@ func Load() (Config, error) {
 	}
 	if cfg.PollInterval, err = envDuration("ICLOUD_API_POLL_INTERVAL", 10*time.Second); err != nil {
 		return Config{}, err
+	}
+	if cfg.IMAPIdleEnabled, err = envBool("ICLOUD_API_IMAP_IDLE_ENABLED", true); err != nil {
+		return Config{}, err
+	}
+	if cfg.IMAPFallbackInterval, err = envDuration("ICLOUD_API_IMAP_FALLBACK_INTERVAL", 15*time.Minute); err != nil {
+		return Config{}, err
+	}
+	if cfg.IMAPFallbackInterval < time.Minute || cfg.IMAPFallbackInterval > 24*time.Hour {
+		return Config{}, fmt.Errorf("ICLOUD_API_IMAP_FALLBACK_INTERVAL 应在 1m 到 24h 之间")
 	}
 	if cfg.IMAPTimeout, err = envDuration("ICLOUD_API_IMAP_TIMEOUT", 8*time.Second); err != nil {
 		return Config{}, err

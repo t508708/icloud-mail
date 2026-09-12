@@ -19,7 +19,7 @@ const deleteFunctions = source.slice(
   source.indexOf("function batchDeleteAccountState("),
   source.indexOf("async function copyAliases("),
 );
-const progressTemplate = source.match(/<section\s+v-if="deletionJob \|\| deletionState\.recovering[\s\S]*?<\/section>/)[0];
+const progressTemplate = source.match(/<section\s+v-if="deletionProgressVisible"[\s\S]*?<\/section>/)[0];
 const progressComputeds = source.slice(
   source.indexOf("const deletionJob = computed("),
   source.indexOf("function makeDeletionController("),
@@ -36,8 +36,9 @@ async function renderProgress(rawJob, statePatch = {}) {
     template: progressTemplate,
     setup: () => ({
       ...values, deletionState, deletionResultsExpanded: ref(true), deletingAliases: false,
+      deletionProgressVisible: true, deletionVisibility: { dismiss() {} },
       ALIAS_DELETION_OPERATION_LABELS, formatAliasDeletionResultMessage,
-      isAliasDeletionJobActive, formatTime, Refresh: null,
+      isAliasDeletionJobActive, isAliasDeletionJobTerminal, formatTime, Refresh: null,
       refreshDeletionJob() {}, acknowledgeDeletionState() {},
     }),
   });

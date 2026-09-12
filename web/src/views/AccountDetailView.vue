@@ -224,18 +224,6 @@
           </template>
         </SectionHeader>
 
-        <div v-if="!isCustomMailbox" class="alias-creation-row">
-          <AliasCreationPanel
-            :account-id="account.id"
-            :apple-id-hint="appleSession?.appleId || account.email"
-            :account-enabled="account.enabled"
-            :web-authenticated="appleSessionAuthenticated"
-            :csrf-token="auth.state.csrfToken"
-            @busy="(busy) => (manualAliasLoading = busy)"
-            @change="onAliasCreationChange"
-          />
-        </div>
-
         <div v-if="!isCustomMailbox" class="apple-session-strip">
           <div class="apple-session-strip__identity">
             <el-tag :type="appleSessionAuthenticated ? 'success' : 'info'" effect="plain">
@@ -255,6 +243,22 @@
             {{ aliasSyncSummary.conflictCount }}
           </div>
         </div>
+
+      </section>
+
+      <section v-if="!isCustomMailbox" class="section-block alias-creation-row" aria-labelledby="batch-creation-title">
+        <AliasCreationPanel
+          :account-id="account.id"
+          :apple-id-hint="appleSession?.appleId || account.email"
+          :account-enabled="account.enabled"
+          :web-authenticated="appleSessionAuthenticated"
+          :csrf-token="auth.state.csrfToken"
+          @busy="(busy) => (manualAliasLoading = busy)"
+          @change="onAliasCreationChange"
+        />
+      </section>
+
+      <section class="section-block">
 
         <div
           v-if="autoCreation && !isCustomMailbox"
@@ -1616,7 +1620,9 @@ function clearAliasSearch() {
   resetAliasSearchResults();
 }
 
-const liveRefresh = createLiveRefresh(() => loadDetail({ silent: true }));
+const liveRefresh = createLiveRefresh(() => loadDetail({ silent: true }), {
+  getIntervalMs: () => syncActive.value || Boolean(deletionState.value?.job && ["queued", "running"].includes(deletionState.value.job.status)) ? 5_000 : undefined,
+});
 
 async function syncNow() {
   if (syncLoading.value || syncActive.value || randomAliasLoading.value) return;
@@ -2461,35 +2467,6 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-/* Keep the high-frequency batch controls alongside their title on wide screens. */
-.alias-creation-row :deep(.creation-job-panel) {
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  padding: 12px 16px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-
-.alias-creation-row :deep(.creation-job-panel > strong) {
-  grid-column: 1;
-  grid-row: 1;
-  white-space: nowrap;
-}
-
-.alias-creation-row :deep(.creation-job-panel__controls) {
-  grid-column: 2;
-  grid-row: 1;
-  justify-content: flex-end;
-}
-
-.alias-creation-row :deep(.creation-job-panel__apple),
-.alias-creation-row :deep(.creation-job-panel > .field-help),
-.alias-creation-row :deep(.creation-job-panel__status),
-.alias-creation-row :deep(.creation-job-panel > details),
-.alias-creation-row :deep(.creation-job-panel > .el-alert) {
-  grid-column: 1 / -1;
-}
-
 .account-alias-search__field {
   display: flex;
   align-items: center;
@@ -2555,16 +2532,6 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 720px) {
-  .alias-creation-row :deep(.creation-job-panel) {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .alias-creation-row :deep(.creation-job-panel > strong),
-  .alias-creation-row :deep(.creation-job-panel__controls) {
-    grid-column: 1;
-    grid-row: auto;
-  }
-
   .alias-creation-row :deep(.creation-job-panel__controls) {
     justify-content: flex-start;
   }

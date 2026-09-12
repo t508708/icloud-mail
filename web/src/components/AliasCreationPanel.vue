@@ -1,14 +1,11 @@
 <template>
   <div class="creation-job-panel">
-    <strong>批量创建隐私邮箱</strong>
-    <p class="field-help">一次安排 1-100 个，关闭网页后继续执行。新通道优先，限流后尝试旧通道；两者都限流时保留进度并等待。</p>
+    <h2 id="batch-creation-title" class="creation-job-panel__title">批量创建隐私邮箱</h2>
     <div class="creation-job-panel__apple">
-      <el-tag :type="appleAuthenticated ? 'success' : 'info'">新通道：{{ appleAuthenticated ? '已登录' : '未登录' }}</el-tag>
+      <el-tag :type="appleAuthenticated ? 'success' : 'info'" title="新通道登录状态">新通道：{{ appleAuthenticated ? '已登录' : '未登录' }}</el-tag>
       <el-button v-if="!appleAuthenticated" :disabled="active || !webAuthenticated || appleLoading" @click="openLogin">登录 Apple Account</el-button>
       <el-button v-else :disabled="active || appleLoading" @click="clearApple">退出新通道</el-button>
     </div>
-    <p v-if="!webAuthenticated" class="field-help">请先通过上方「同步隐私邮箱」登录 iCloud，再连接新通道。</p>
-    <p v-else-if="!appleAuthenticated" class="field-help">当前只有旧通道；连接 Apple Account 后，自动模式会使用双通道。</p>
     <div class="creation-job-panel__controls">
       <el-input-number v-model="count" :min="1" :max="100" :controls="false" aria-label="创建数量" :disabled="active || starting" />
       <el-select v-model="channel" aria-label="创建通道" :disabled="active || starting">
@@ -21,18 +18,13 @@
       <el-button v-if="!ready" :loading="loading" @click="load">重新读取状态</el-button>
     </div>
     <RequestAlert v-if="error && !appleVisible" :error="error" closable @close="error = null" />
-    <div v-if="job" class="creation-job-panel__status" aria-live="polite">
-      <strong>{{ statusLabel }}：{{ job.completed }}/{{ job.target }}</strong>
-      <el-progress :percentage="Math.floor(100 * job.completed / Math.max(1, job.target))" />
-      <p v-if="stopping">正在保存当前请求结果，随后停止。</p>
-      <p v-if="job.next_run_at">预计继续：{{ formatTime(job.next_run_at, { seconds: true }) }}</p>
-      <p v-if="job.last_error">{{ job.last_error }}</p>
-      <p v-if="job.status === 'interrupted'">已保留完成的地址。确认目录后，可按剩余数量新建任务。</p>
+    <div v-if="job && active" class="creation-job-panel__status" aria-live="polite">
+      <span>{{ statusLabel }}：{{ job.completed }}/{{ job.target }}<template v-if="job.status === 'waiting' && job.next_run_at">，预计 {{ formatTime(job.next_run_at, { seconds: true }) }}</template></span>
+      <span v-if="job.last_error">{{ job.last_error }}</span>
     </div>
-    <details v-if="job?.entries?.length">
-      <summary>已创建 {{ job.entries.length }} 个地址（凭据在邮箱列表中复制）</summary>
-      <ul class="creation-job-panel__entries"><li v-for="entry in job.entries" :key="entry.alias_id">{{ entry.address }}</li></ul>
-    </details>
+    <div v-if="job && !active && job.status !== 'completed'" class="creation-job-panel__status" aria-live="polite">
+      <span>{{ statusLabel }}</span><span v-if="job.last_error">{{ job.last_error }}</span>
+    </div>
     <el-dialog v-model="appleVisible" title="登录 Apple Account 新通道" width="min(480px, calc(100vw - 28px))" :close-on-click-modal="false" :before-close="closeLogin">
       <RequestAlert v-if="error" :error="error" />
       <el-form v-if="appleStep === 'login'" label-position="top" :disabled="appleLoading" @submit.prevent="loginApple">
@@ -152,11 +144,17 @@ onBeforeUnmount(() => { alive = false; generation++; clearTimeout(timer); appleP
 </script>
 
 <style scoped>
-.creation-job-panel { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border); }
+.creation-job-panel { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; min-width: 0; }
 .creation-job-panel p { margin: 0; }
 .creation-job-panel__controls, .creation-job-panel__apple { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.creation-job-panel__title { margin: 0; color: var(--text-primary); font-size: 18px; line-height: 1.3; white-space: nowrap; }
+.creation-job-panel__title { order: 1; }
+.creation-job-panel__controls { order: 2; }
+.creation-job-panel__apple { order: 3; }
+.creation-job-panel__status { order: 4; }
+.creation-job-panel > .el-alert { order: 5; }
 .creation-job-panel__controls .el-select { width: 220px; }
-.creation-job-panel__status { display: grid; gap: 8px; overflow-wrap: anywhere; }
-.creation-job-panel__entries { max-height: 240px; overflow: auto; padding-left: 20px; overflow-wrap: anywhere; }
+.creation-job-panel__controls :deep(.el-input-number) { width: 104px; }
+.creation-job-panel__status { display: flex; flex-wrap: wrap; gap: 8px; overflow-wrap: anywhere; color: var(--text-secondary); }
 @media (max-width: 720px) { .creation-job-panel__controls .el-select { width: 100%; } }
 </style>

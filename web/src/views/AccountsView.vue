@@ -226,6 +226,7 @@ async function loadAccounts({ silent = false } = {}) {
     ) {
       loadError.value = error;
     }
+    if (silent) return false;
   } finally {
     if (
       listAbortController === abortController &&
@@ -259,7 +260,9 @@ function handlePageSizeChange(value) {
   void loadAccounts();
 }
 
-const liveRefresh = createLiveRefresh(() => loadAccounts({ silent: true }));
+const liveRefresh = createLiveRefresh(() => loadAccounts({ silent: true }), {
+  getIntervalMs: () => accounts.value.some((account) => account.syncProgress?.active) ? 5_000 : undefined,
+});
 
 function openNewAccount() {
   router.push({ name: "account-new" });

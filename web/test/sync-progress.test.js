@@ -33,6 +33,7 @@ test("inactive or absent sync progress is not presented", () => {
 test("manual and automatic progress use distinct source labels", () => {
   assert.equal(syncProgressSourceLabel("manual"), "手动同步");
   assert.equal(syncProgressSourceLabel("automatic"), "自动同步");
+  assert.equal(syncProgressSourceLabel("notification"), "来信通知同步");
   assert.equal(syncProgressSourceLabel("auto"), "自动同步");
   assert.equal(syncProgressSourceLabel("unknown"), "邮件同步");
 

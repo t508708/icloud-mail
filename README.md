@@ -283,6 +283,8 @@ location / {
 
 ## 归档与留存
 
+- 默认使用 IMAP IDLE 通知驱动收信：每个启用的主号保留一个通知连接（不是每个隐私邮箱一个），仅在启动/重连、新邮件通知或低频补偿时执行增量读取。通知连接不下载邮件、不占用读取任务的并发名额。
+- IDLE 正常且首次追齐后，OTP/邮箱池取码直接读取本地归档；通知断开时才按需触发合并后的后台补查。另保留每 15 分钟补偿，断线采用 1-5 分钟退避重连。详见 [收信与资源设计](docs/MAIL-RECEPTION.md)。
 - 升级完成后只处理同步游标之后的新 UID；已读和未读邮件都会归档。
 - 增量同步默认每批处理最多 32 个候选 UID；每批原子保存邮件和游标后自动续跑，减少大量正文逐封读取导致的整批超时重做。
 - 升级不会回填远端历史。v1 的最新快照只迁移标题和时间元数据，并分配稳定的本地 UID 1。
@@ -307,7 +309,9 @@ location / {
 | `ICLOUD_API_PUBLIC_IMAP_SERVER_NAME` | `localhost` | IMAPS TLS 名称 |
 | `ICLOUD_API_PUBLIC_IMAP_TLS_CERT_FILE` | 空（自动生成） | 生产证书在容器中的路径；证书和私钥需同时配置 |
 | `ICLOUD_API_PUBLIC_IMAP_TLS_KEY_FILE` | 空（自动生成） | 生产私钥在容器中的路径 |
-| `ICLOUD_API_POLL_INTERVAL` | `10s` | 自动同步周期 |
+| `ICLOUD_API_IMAP_IDLE_ENABLED` | `true` | 启用 IMAP IDLE 通知驱动收信 |
+| `ICLOUD_API_IMAP_FALLBACK_INTERVAL` | `15m` | IDLE 模式下的补偿同步周期，范围 1m-24h |
+| `ICLOUD_API_POLL_INTERVAL` | `10s` | 关闭 IDLE 时的同步周期；同时保留旧版接口的断线新鲜度计算 |
 | `ICLOUD_API_IMAP_TIMEOUT` | `8s` | 单次上游 IMAP 操作时限 |
 | `ICLOUD_API_SYNC_TIMEOUT` | `70s` | 单个账号同步时限 |
 | `ICLOUD_API_SYNC_CONCURRENCY` | `3` | 同步并发数，范围 1–16 |

@@ -118,8 +118,20 @@ func run() error {
 	defer cancelRequests()
 	workerContext, cancelWorkers := context.WithCancel(context.Background())
 	defer cancelWorkers()
-	manager := syncer.New(db, cipher, fetcher, logger, cfg.PollInterval, cfg.SyncConcurrency)
+	syncInterval := cfg.PollInterval
+	if cfg.IMAPIdleEnabled {
+		syncInterval = cfg.IMAPFallbackInterval
+	}
+	manager := syncer.New(db, cipher, fetcher, logger, syncInterval, cfg.SyncConcurrency)
 	manager.SetSyncTimeout(cfg.SyncTimeout)
+	mailboxEvents := syncer.NewMailboxEvents(db, cipher, fetcher.WatchMailbox, func(ctx context.Context, accountID int64) error {
+		for {
+			err := manager.SyncAccountFromNotification(ctx, accountID)
+			if !errors.Is(err, syncer.ErrSyncPending) {
+				return err
+			}
+		}
+	}, logger)
 	appleClient, err := apple.NewClient(apple.Config{})
 	if err != nil {
 		return fmt.Errorf("初始化 Apple 客户端: %w", err)
@@ -145,7 +157,7 @@ func run() error {
 	if err := autoManager.UpgradeCadence(workerContext); err != nil {
 		return fmt.Errorf("更新隐私邮箱定时创建频率: %w", err)
 	}
-	seenWorker := syncer.NewSeenWorker(db, cipher, fetcher, manager, logger, cfg.PollInterval)
+	seenWorker := syncer.NewSeenWorker(db, cipher, fetcher, manager, logger, time.Minute)
 	seenWorker.SetOperationTimeout(seenOperationTimeout(cfg.IMAPTimeout))
 	publicIMAPCertFile := cfg.PublicIMAPTLSCertFile
 	publicIMAPKeyFile := cfg.PublicIMAPTLSKeyFile
@@ -181,6 +193,9 @@ func run() error {
 	web.SetAccountLocker(manager.WithAccountLock)
 	web.SetApplicationLogSource(applicationLogs)
 	web.SetSyncProgressProvider(manager.AccountProgress)
+	if cfg.IMAPIdleEnabled {
+		web.SetMailboxWatchHealth(mailboxEvents.Healthy)
+	}
 	web.SetHMESyncService(hmeService)
 	if err := web.StartAliasCreationJobs(workerContext); err != nil {
 		return fmt.Errorf("初始化后台隐私邮箱创建任务: %w", err)
@@ -212,6 +227,13 @@ func run() error {
 
 	var background sync.WaitGroup
 	background.Add(6)
+	if cfg.IMAPIdleEnabled {
+		background.Add(1)
+		go func() {
+			defer background.Done()
+			mailboxEvents.Run(workerContext)
+		}()
+	}
 	go func() {
 		defer background.Done()
 		web.RunAliasCreationJobs()

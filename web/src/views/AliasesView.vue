@@ -257,7 +257,7 @@
     </div>
 
     <section
-      v-if="deletionJob || deletionState.recovering || deletionState.submitting || deletionState.uncertain"
+      v-if="deletionProgressVisible"
       class="data-panel alias-deletion-progress"
       aria-labelledby="alias-deletion-title"
     >
@@ -270,6 +270,13 @@
           :disabled="deletingAliases || deletionState.submitting"
           @click="refreshDeletionJob"
         >刷新任务状态</el-button>
+        <el-button
+          v-if="isAliasDeletionJobTerminal(deletionJob)"
+          text
+          :disabled="deletionState.uncertain"
+          aria-label="关闭删除任务提示"
+          @click="deletionVisibility.dismiss()"
+        >关闭</el-button>
       </div>
       <template v-if="deletionJob">
         <p role="status" aria-live="polite" aria-atomic="true">
@@ -688,6 +695,7 @@ import {
   isAliasDeletionJobActive,
   isAliasDeletionJobTerminal,
 } from "../utils/aliasDeletionJob.js";
+import { createAliasDeletionVisibility } from "../utils/aliasDeletionVisibility.js";
 import { ADMIN_BASE_PATH } from "../utils/runtimePath.js";
 import {
   createActionLock,
@@ -767,6 +775,11 @@ let viewActive = true;
 
 const deletionState = ref({});
 const deletionResultsExpanded = ref(false);
+const deletionProgressVisible = ref(false);
+const deletionVisibility = createAliasDeletionVisibility({
+  onChange: (visible) => { deletionProgressVisible.value = visible; },
+});
+watch(() => deletionState.value, (state) => deletionVisibility.update(state), { immediate: true, deep: true });
 let deletionController = makeDeletionController();
 deletionState.value = deletionController.getState();
 const deletionJob = computed(() => deletionState.value.job);
@@ -1000,6 +1013,7 @@ async function loadGroups({ silent = false } = {}) {
     if (!silent && groupsLoadGate.isCurrent(ticket, "groups")) {
       groupsError.value = error;
     }
+    if (silent) return false;
   } finally {
     if (groupsLoadGate.isCurrent(ticket, "groups")) {
       groupsLoading.value = false;
@@ -1080,6 +1094,7 @@ async function loadAliases({ silent = false } = {}) {
     ) {
       loadError.value = error;
     }
+    if (silent) return false;
   } finally {
     if (
       aliasAbortController === abortController &&
@@ -1182,7 +1197,9 @@ const liveRefresh = createLiveRefresh(() => {
   return Promise.all([
     loadAliases({ silent: true }),
     loadGroups({ silent: true }),
-  ]);
+  ]).then((results) => results.includes(false) ? false : undefined);
+}, {
+  getIntervalMs: () => deletionWaits.value.length || ["queued", "running"].includes(deletionJob.value?.status) ? 5_000 : undefined,
 });
 
 function isAliasSelected(id) {
@@ -1714,6 +1731,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   viewActive = false;
   deletionController.stop();
+  deletionVisibility.stop();
   if (accountSearchTimer !== null) {
     window.clearTimeout(accountSearchTimer);
     accountSearchTimer = null;

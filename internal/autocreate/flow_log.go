@@ -681,6 +681,15 @@ func diagnoseAliasCreationError(err error) aliasCreationErrorInfo {
 	}
 	info.class = aliasCreationErrorClass(info.code)
 	info.reason = aliasCreationErrorReason(info.code)
+	if info.code == "APPLE_UPSTREAM_ERROR" && info.upstream != nil &&
+		info.upstream.Op == "validate Apple session" && info.retryable &&
+		!aliasCreationPendingConfirmation(err, info.code) && !aliasCreationUntrackedRemoteSideEffect(err) {
+		if info.upstream.StatusCode == 0 {
+			info.reason = "验证Apple会话时连接暂时异常，本次尚未发起创建；系统会按下一次计划自动重试，无需重新登录"
+		} else if info.upstream.StatusCode >= http.StatusInternalServerError {
+			info.reason = fmt.Sprintf("验证Apple会话时服务暂时异常（HTTP %d），本次尚未发起创建；系统会按下一次计划自动重试", info.upstream.StatusCode)
+		}
+	}
 	return info
 }
 

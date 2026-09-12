@@ -26,20 +26,21 @@ import (
 var publicDocsAssets embed.FS
 
 type Server struct {
-	store           *store.Store
-	cipher          *secure.Cipher
-	cfg             config.Config
-	logger          *slog.Logger
-	applicationLogs ApplicationLogSource
-	now             func() time.Time
-	sync            func(int64) error
-	syncProgress    func(int64) (domain.MailboxSyncProgress, bool)
-	hmeSync         HMESyncService
-	autoCreate      AliasAutoCreationService
-	lockAccount     func(context.Context, int64, func() error) error
-	seenNotify      func()
-	ready           func() bool
-	adminSPA        *adminSPA
+	store               *store.Store
+	cipher              *secure.Cipher
+	cfg                 config.Config
+	logger              *slog.Logger
+	applicationLogs     ApplicationLogSource
+	now                 func() time.Time
+	sync                func(int64) error
+	syncProgress        func(int64) (domain.MailboxSyncProgress, bool)
+	mailboxWatchHealthy func(int64) bool
+	hmeSync             HMESyncService
+	autoCreate          AliasAutoCreationService
+	lockAccount         func(context.Context, int64, func() error) error
+	seenNotify          func()
+	ready               func() bool
+	adminSPA            *adminSPA
 
 	mailSyncWakeMu       sync.Mutex
 	mailSyncWake         map[int64]time.Time
@@ -126,11 +127,20 @@ func (s *Server) withAccountLock(ctx context.Context, accountID int64, operation
 	return s.lockAccount(ctx, accountID, operation)
 }
 
+// SetMailboxWatchHealth must be called before serving requests. A healthy IDLE
+// subscription already keeps the archive current; only outages need API wakes.
+func (s *Server) SetMailboxWatchHealth(healthy func(int64) bool) {
+	s.mailboxWatchHealthy = healthy
+}
+
 // requestMailboxSync coalesces external polling into a bounded background
 // sync. API handlers never wait for IMAP work; the cooldown prevents a client
 // polling every few seconds from creating a new login for every request.
 func (s *Server) requestMailboxSync(accountID int64, now time.Time) {
 	if s == nil || s.sync == nil || accountID < 1 {
+		return
+	}
+	if s.mailboxWatchHealthy != nil && s.mailboxWatchHealthy(accountID) {
 		return
 	}
 	if now.IsZero() {

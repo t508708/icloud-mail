@@ -8,8 +8,9 @@ import (
 type MailboxSyncTrigger string
 
 const (
-	MailboxSyncTriggerManual    MailboxSyncTrigger = "manual"
-	MailboxSyncTriggerAutomatic MailboxSyncTrigger = "automatic"
+	MailboxSyncTriggerManual       MailboxSyncTrigger = "manual"
+	MailboxSyncTriggerAutomatic    MailboxSyncTrigger = "automatic"
+	MailboxSyncTriggerNotification MailboxSyncTrigger = "notification"
 )
 
 type MailboxSyncPhase string

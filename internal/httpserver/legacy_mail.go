@@ -43,8 +43,9 @@ func (s *Server) availableMailboxSnapshot(c *gin.Context) (domain.MailboxBinding
 	if minimumFreshness > staleAfter {
 		staleAfter = minimumFreshness
 	}
+	watchHealthy := s.mailboxWatchHealthy != nil && s.mailboxWatchHealthy(binding.Account.ID)
 	if binding.Alias.LastSyncStatus != domain.SyncStatusOK || binding.Alias.LastSyncedAt == nil ||
-		binding.Alias.LastSyncedAt.After(now) || now.Sub(*binding.Alias.LastSyncedAt) > staleAfter {
+		binding.Alias.LastSyncedAt.After(now) || (!watchHealthy && now.Sub(*binding.Alias.LastSyncedAt) > staleAfter) {
 		s.writeAPIError(c, http.StatusServiceUnavailable, "SYNC_UNAVAILABLE", "邮箱同步暂不可用")
 		return domain.MailboxBinding{}, time.Time{}, false
 	}

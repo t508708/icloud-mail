@@ -649,7 +649,7 @@ function openLogDetail(log) {
   if (logFlowKey(log)) void loadSelectedLogFlow();
 }
 
-const liveRefresh = createLiveRefresh(() => loadLatestLogs({ silent: true }));
+const liveRefresh = createLiveRefresh(() => loadLatestLogs({ silent: true }), { intervalMs: 5_000 });
 
 watch(autoRefreshEnabled, (enabled) => {
   if (enabled) {

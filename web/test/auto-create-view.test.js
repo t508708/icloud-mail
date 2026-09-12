@@ -81,7 +81,7 @@ test("account detail exposes automatic alias creation with persistent credential
 test("batch creation panel is directly below the privacy-mail directory", async () => {
   const source = await readFile(viewPath, "utf8");
   const directory = source.indexOf('title="隐私邮箱"');
-  const batch = source.indexOf('class="alias-creation-row"');
+  const batch = source.indexOf("alias-creation-row");
   const automatic = source.indexOf('id="auto-creation-title"');
   assert.ok(directory >= 0 && batch > directory && automatic > batch);
   assert.match(source, /请使用上方批量任务/);

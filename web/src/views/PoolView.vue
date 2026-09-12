@@ -378,50 +378,65 @@ grant_type=refresh_token&amp;client_id=CLIENT_ID&amp;refresh_token=REFRESH_TOKEN
         title="加入已有邮箱"
         width="min(760px,94vw)"
         destroy-on-close
+        :show-close="!enrollSubmitting"
+        :close-on-click-modal="!enrollSubmitting"
+        :close-on-press-escape="!enrollSubmitting"
       >
         <p>
           选择确认可分配的邮箱加入池中。列表支持分页浏览全部邮箱，也可以搜索地址定位。
         </p>
+        <RequestAlert v-if="error" :error="error" closable @close="error = null" />
+        <p v-if="enrollProgress" class="pool-hint">{{ enrollProgress }}</p>
         <div class="pool-toolbar">
           <el-input
-            v-model="enrollSearch"
+            v-model="enrollDraft"
             placeholder="搜索邮箱"
-            @keyup.enter="loadEnroll"
-          /><el-button @click="loadEnroll">搜索</el-button>
+            :disabled="enrollLocked"
+            @keyup.enter="applyEnrollSearch"
+          /><el-button :disabled="enrollLocked" @click="applyEnrollSearch">搜索</el-button>
+          <el-button :disabled="enrollLocked || !enrollItems.length" @click="selectCurrentPage">全选本页</el-button>
+          <el-button :disabled="enrollLocked || !enrollTotal" :loading="enrollSelectingAll" @click="selectAllResults">全选搜索结果</el-button>
+          <el-button :disabled="enrollLocked || !selected.length" @click="clearSelection">清空选择</el-button>
+          <span class="pool-enrollment-count" aria-live="polite">已选 {{ selected.length }}</span>
         </div>
           <el-table
+            ref="enrollTable"
+            row-key="id"
             :data="enrollItems"
+            v-loading="enrollLoading || enrollSelectingAll"
             max-height="380"
-            @selection-change="selected = $event.map((row) => row.id)"
+            @selection-change="onEnrollSelectionChange"
         >
           <el-table-column
             type="selection"
             width="45"
-            :selectable="(row) => row.enabled && row.credential_mode === 'v2'"
+            :selectable="(row) => !enrollLocked && isSelectable(row)"
           />
           <el-table-column prop="address" label="邮箱" /><el-table-column
-            prop="account_email"
+            prop="accountEmail"
             label="主号"
           />
           </el-table>
-        <div v-if="enrollTotal > enrollPageSize" class="enroll-pagination">
+        <div v-if="enrollTotal > 0" class="enroll-pagination">
           <span>共 {{ enrollTotal }} 条</span>
           <el-pagination
             background
             layout="prev, pager, next"
+            size="small"
             :current-page="enrollPage"
             :page-size="enrollPageSize"
             :total="enrollTotal"
-            :disabled="busy"
+            :disabled="enrollLocked"
+            :pager-count="5"
             @current-change="changeEnrollPage"
           />
         </div>
         <template #footer
-          ><el-button @click="enrollOpen = false">取消</el-button
+          ><el-button :disabled="enrollSubmitting" @click="closeEnroll">取消</el-button
           ><el-button
             type="primary"
-            :disabled="selected.length === 0"
-            :loading="busy"
+            :disabled="selected.length === 0 || enrollLocked"
+            :loading="enrollSubmitting"
             @click="enroll"
             >加入 {{ selected.length }} 个邮箱</el-button
           ></template
@@ -445,10 +460,12 @@ grant_type=refresh_token&amp;client_id=CLIENT_ID&amp;refresh_token=REFRESH_TOKEN
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
 import { apiRequest } from "../api/client.js";
+import { getAliasPage, getAllAliases, getAllAccounts } from "../api/admin.js";
+import { mergePoolPageSelection, poolAliasSelectable, submitPoolEnrollment } from "../utils/poolEnrollment.js";
 import { useAuth } from "../stores/auth.js";
 import SectionHeader from "../components/SectionHeader.vue";
 import RequestAlert from "../components/RequestAlert.vue";
@@ -471,12 +488,21 @@ const memberState = ref(""),
 const memberPage = ref(1),
   leasePage = ref(1);
 const enrollOpen = ref(false),
+  enrollDraft = ref(""),
   enrollSearch = ref(""),
   enrollPage = ref(1),
   enrollPageSize = 50,
   enrollTotal = ref(0),
   enrollItems = ref([]),
-  selected = ref([]);
+  selected = ref([]),
+  enrollTable = ref(null),
+  enrollProgress = ref("");
+const enabledAccountIds = ref(new Set());
+const enrollLoading = ref(false), enrollSelectingAll = ref(false), enrollSubmitting = ref(false);
+const enrollLocked = computed(() => busy.value || enrollLoading.value || enrollSelectingAll.value || enrollSubmitting.value);
+let enrollTicket = 0;
+let restoringEnrollSelection = false;
+let enrollAbortController;
 const secretOpen = ref(false),
   secretTitle = ref(""),
   secret = ref("");
@@ -640,35 +666,150 @@ async function toggleAutoCreate(row, enabled) {
     row.auto_create = enabled;
   });
 }
-async function loadEnroll() {
-  await attempt(async () => {
-    const result = await request(
-      "/aliases?" +
-        query({
-          query: enrollSearch.value.trim(),
-          limit: enrollPageSize,
-          offset: (enrollPage.value - 1) * enrollPageSize,
-        }),
-    );
-    enrollItems.value = result.aliases || result.items || [];
-    enrollTotal.value = Number(result.pagination?.total ?? result.total ?? enrollItems.value.length) || 0;
-    selected.value = [];
-  });
+function beginEnrollRead() {
+  enrollAbortController?.abort();
+  const ticket = ++enrollTicket;
+  enrollAbortController = new AbortController();
+  return { signal: enrollAbortController.signal, current: () => enrollOpen.value && ticket === enrollTicket };
 }
+
+async function restoreEnrollSelection() {
+  restoringEnrollSelection = true;
+  try {
+    await nextTick();
+    const ids = new Set(selected.value);
+    for (const row of enrollItems.value) enrollTable.value?.toggleRowSelection(row, ids.has(row.id));
+    await nextTick();
+  } finally {
+    restoringEnrollSelection = false;
+  }
+}
+
+async function loadEnroll({ includeAccounts = false } = {}) {
+  const scope = beginEnrollRead();
+  enrollLoading.value = true;
+  error.value = null;
+  try {
+    const [result, accountList] = await Promise.all([
+      getAliasPage("", { query: enrollSearch.value, limit: enrollPageSize, offset: (enrollPage.value - 1) * enrollPageSize, signal: scope.signal }),
+      includeAccounts ? getAllAccounts({ signal: scope.signal }) : Promise.resolve(null),
+    ]);
+    if (!scope.current()) return;
+    if (accountList) enabledAccountIds.value = new Set(accountList.filter((a) => a.enabled).map((a) => a.id));
+    restoringEnrollSelection = true;
+    enrollItems.value = result.items;
+    enrollTotal.value = result.total;
+    const stale = new Set(result.items.filter((row) => !isSelectable(row)).map((row) => row.id));
+    selected.value = selected.value.filter((id) => !stale.has(id));
+    await restoreEnrollSelection();
+  } catch (e) {
+    if (scope.current() && e.name !== "AbortError") error.value = e;
+  } finally {
+    if (scope.current()) enrollLoading.value = false;
+  }
+}
+
 async function openEnroll() {
+  if (busy.value || enrollOpen.value) return;
   enrollOpen.value = true;
   enrollPage.value = 1;
+  enrollDraft.value = enrollSearch.value = enrollProgress.value = "";
+  selected.value = [];
+  enrollItems.value = [];
+  enrollTotal.value = 0;
+  enabledAccountIds.value = new Set();
+  await loadEnroll({ includeAccounts: true });
+}
+
+function closeEnroll() {
+  if (!enrollSubmitting.value) enrollOpen.value = false;
+}
+
+function resetEnroll() {
+  ++enrollTicket;
+  enrollAbortController?.abort();
+  selected.value = [];
+  enrollItems.value = [];
+  enrollLoading.value = enrollSelectingAll.value = false;
+}
+watch(enrollOpen, (open) => { if (!open) resetEnroll(); }, { flush: "sync" });
+onBeforeUnmount(resetEnroll);
+
+function isSelectable(row) {
+  return poolAliasSelectable(row, enabledAccountIds.value);
+}
+
+function onEnrollSelectionChange(rows) {
+  if (restoringEnrollSelection || enrollLocked.value || !enrollOpen.value) return;
+  selected.value = mergePoolPageSelection(selected.value, enrollItems.value, rows.filter(isSelectable));
+}
+
+async function selectCurrentPage() {
+  if (enrollLocked.value) return;
+  selected.value = [...new Set([...selected.value, ...enrollItems.value.filter(isSelectable).map((row) => row.id)])];
+  await restoreEnrollSelection();
+}
+
+async function clearSelection() {
+  if (enrollLocked.value) return;
+  selected.value = [];
+  await restoreEnrollSelection();
+}
+
+async function applyEnrollSearch() {
+  if (enrollLocked.value) return;
+  enrollSearch.value = enrollDraft.value.trim();
+  enrollPage.value = 1;
+  selected.value = [];
   await loadEnroll();
 }
+
+async function selectAllResults() {
+  if (enrollLocked.value) return;
+  const scope = beginEnrollRead();
+  enrollSelectingAll.value = true;
+  error.value = null;
+  try {
+    const items = await getAllAliases("", { query: enrollSearch.value, enabled: true, signal: scope.signal });
+    if (!scope.current()) return;
+    selected.value = [...new Set(items.filter(isSelectable).map((row) => row.id))];
+    await restoreEnrollSelection();
+  } catch (e) {
+    if (scope.current() && e.name !== "AbortError") error.value = e;
+  } finally {
+    if (scope.current()) enrollSelectingAll.value = false;
+  }
+}
+
 async function changeEnrollPage(page) {
+  if (enrollLocked.value) return;
   enrollPage.value = Math.max(1, Number(page) || 1);
   await loadEnroll();
 }
+
 async function enroll() {
-  await mutate(async () => {
-    await request("/pool/members", "POST", { alias_ids: selected.value });
-    enrollOpen.value = false;
-  });
+  if (enrollLocked.value || !selected.value.length) return;
+  const ticket = enrollTicket;
+  const current = () => enrollOpen.value && ticket === enrollTicket;
+  enrollSubmitting.value = true;
+  error.value = null;
+  try {
+    await submitPoolEnrollment(selected.value,
+      (ids) => request("/pool/members", "POST", { alias_ids: ids }),
+      async ({ done, total, remaining }) => {
+        selected.value = remaining;
+        enrollProgress.value = `已完成 ${done}/${total}`;
+        await restoreEnrollSelection();
+      }, current);
+    if (current()) {
+      enrollOpen.value = false;
+      await refresh();
+    }
+  } catch (e) {
+    if (current()) error.value = e;
+  } finally {
+    enrollSubmitting.value = false;
+  }
 }
 async function showCredentials(id) {
   await attempt(async () => {

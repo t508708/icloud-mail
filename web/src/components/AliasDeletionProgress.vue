@@ -1,25 +1,26 @@
 <template>
   <section
-    v-if="job || state.recovering || state.submitting || state.uncertain"
+    v-if="visible"
     class="data-panel alias-deletion-progress"
     aria-label="Apple 批量删除任务"
   >
     <div class="alias-deletion-progress__header">
       <strong>Apple 批量删除</strong>
       <el-tag :type="statusType">{{ statusLabel }}</el-tag>
-      <span v-if="collapsed && job" class="alias-deletion-progress__summary">
-        已处理 {{ job.processed }} / {{ job.requested }} · 成功 {{ job.deleted }} · 失败/未执行 {{ job.failed }}
-      </span>
-      <el-button v-if="job" text @click="collapsed = !collapsed">
-        {{ collapsed ? "展开详情" : "收起详情" }}
-      </el-button>
       <el-button
         :loading="state.checking"
         :disabled="state.submitting"
         @click="$emit('refresh')"
       >刷新任务状态</el-button>
+      <el-button
+        v-if="job?.status === 'completed' || job?.status === 'interrupted'"
+        text
+        :disabled="state.uncertain"
+        aria-label="关闭删除任务提示"
+        @click="visibility.dismiss()"
+      >关闭</el-button>
     </div>
-    <template v-if="job && !collapsed">
+    <template v-if="job">
       <p role="status" aria-live="polite" aria-atomic="true">
         已处理 {{ job.processed }} / {{ job.requested }}；
         成功删除 {{ job.deleted }}；失败/未执行 {{ job.failed }}
@@ -66,19 +67,22 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import {
   ALIAS_DELETION_OPERATION_LABELS,
   formatAliasDeletionResultMessage,
   isAliasDeletionJobActive,
 } from "../utils/aliasDeletionJob.js";
 import { formatTime } from "../utils/format.js";
+import { createAliasDeletionVisibility } from "../utils/aliasDeletionVisibility.js";
 
 const props = defineProps({ state: { type: Object, required: true } });
 defineEmits(["refresh", "acknowledge"]);
 const resultsExpanded = ref(false);
-const collapsed = ref(false);
-let collapseTimer;
+const visible = ref(false);
+const visibility = createAliasDeletionVisibility({
+  onChange: (value) => { visible.value = value; },
+});
 const job = computed(() => props.state.job);
 const percentage = computed(() => job.value?.requested
   ? Math.min(100, Math.max(0, job.value.processed / job.value.requested * 100)) : 0);
@@ -95,22 +99,14 @@ const statusLabel = computed(() => {
 });
 watch(() => job.value?.jobId, () => {
   resultsExpanded.value = false;
-  collapsed.value = false;
 });
-watch(() => job.value?.status, (status) => {
-  if (collapseTimer) clearTimeout(collapseTimer);
-  if (status === "completed") {
-    collapseTimer = setTimeout(() => { collapsed.value = true; }, 1800);
-  } else {
-    collapsed.value = false;
-  }
-});
+watch(() => props.state, (state) => visibility.update(state), { immediate: true, deep: true });
+onBeforeUnmount(() => visibility.stop());
 </script>
 
 <style scoped>
 .alias-deletion-progress { display: grid; gap: 12px; padding: 16px; overflow-wrap: anywhere; }
 .alias-deletion-progress__header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-.alias-deletion-progress__summary { color: var(--text-secondary); font-size: 13px; }
 .alias-deletion-progress p { margin: 0; line-height: 1.7; }
 .alias-deletion-progress__waits,
 .alias-deletion-progress__failures { display: grid; gap: 6px; color: var(--text-secondary); }

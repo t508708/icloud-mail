@@ -851,10 +851,18 @@ func (m *Manager) syncAllRoundDetailedWithContexts(
 // SyncAccountWithTimeout bounds queueing and mailbox work separately so a busy
 // account or IMAP slot does not consume the mailbox operation's full budget.
 func (m *Manager) SyncAccountWithTimeout(ctx context.Context, accountID int64) error {
+	return m.syncAccountWithTrigger(ctx, accountID, domain.MailboxSyncTriggerManual)
+}
+
+func (m *Manager) SyncAccountFromNotification(ctx context.Context, accountID int64) error {
+	return m.syncAccountWithTrigger(ctx, accountID, domain.MailboxSyncTriggerNotification)
+}
+
+func (m *Manager) syncAccountWithTrigger(ctx context.Context, accountID int64, trigger domain.MailboxSyncTrigger) error {
 	seed := m.newSyncFlowSeed()
 	waiting := m.ensureProgress(
 		accountID,
-		domain.MailboxSyncTriggerManual,
+		trigger,
 		domain.MailboxSyncPhaseWaiting,
 		2,
 		seed,
@@ -864,12 +872,12 @@ func (m *Manager) SyncAccountWithTimeout(ctx context.Context, accountID int64) e
 		slog.LevelDebug,
 		"邮件同步正在等待执行资源",
 		accountID,
-		domain.MailboxSyncTriggerManual,
+		trigger,
 		"waiting",
 		waiting,
 		slog.String("wait_for", "account_lock_and_global_imap_slot"),
 	)
-	defer m.finishProgress(accountID, domain.MailboxSyncTriggerManual)
+	defer m.finishProgress(accountID, trigger)
 	waitCtx, cancelWait := m.withTimeout(ctx, m.syncTimeout)
 	defer cancelWait()
 	started := false
@@ -877,19 +885,19 @@ func (m *Manager) SyncAccountWithTimeout(ctx context.Context, accountID int64) e
 		cancelWait()
 		flow := m.beginProgress(
 			accountID,
-			domain.MailboxSyncTriggerManual,
+			trigger,
 			domain.MailboxSyncPhasePreparing,
 			3,
 			seed,
 		)
 		started = true
-		m.logSyncBatchStarted(ctx, accountID, domain.MailboxSyncTriggerManual, flow)
+		m.logSyncBatchStarted(ctx, accountID, trigger, flow)
 		syncCtx, cancelSync := m.withTimeout(ctx, m.syncTimeout)
 		defer cancelSync()
-		return m.syncAccountLocked(syncCtx, accountID, domain.MailboxSyncTriggerManual, flow)
+		return m.syncAccountLocked(syncCtx, accountID, trigger, flow)
 	})
 	if err != nil && !started {
-		m.logSyncFailure(ctx, accountID, domain.MailboxSyncTriggerManual, waiting, "wait_sync_resources", err)
+		m.logSyncFailure(ctx, accountID, trigger, waiting, "wait_sync_resources", err)
 	}
 	return err
 }
