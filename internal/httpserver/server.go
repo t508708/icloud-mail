@@ -45,6 +45,8 @@ type Server struct {
 	mailSyncWake         map[int64]time.Time
 	credentialRotationMu sync.RWMutex
 	poolMu               sync.Mutex
+	manualAliasMu        sync.Mutex
+	manualAliasesRunning map[int64]bool
 	aliasDeletionJobs    aliasDeletionJobRuntime
 	// beforeCredentialRotationLock is a deterministic test seam. Production
 	// leaves it nil.

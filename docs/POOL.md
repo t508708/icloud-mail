@@ -12,6 +12,23 @@
 4. 在「邮箱库存」选择已确认可分配的已有地址加入池。启用自动入池之前存在的地址保持原状；之后创建或首次同步进入本地的地址自动入池。
 5. 在「项目 API Key」创建项目，保存一次性展示的 Key。每个项目的领取记录独立，所有项目共享管理员加入的空闲库存。
 
+## 手动创建 Apple 隐藏邮箱
+
+在「主号管理 → 主号详情 → 自动创建隐私邮箱」填写数量 1-20，点击「立即创建」。
+每个请求实际创建一个 Apple HME 地址，前端串行执行并显示已完成地址；「停止后续创建」保留当前已发出的请求。
+Apple 未登录时先完成登录，再点击创建。遇到限流、网络错误或待确认结果，本轮立即停止且不自动重试。
+
+- 手动创建跳过本项目每小时 5 次、至少间隔 5 分钟的自动调度，也不依赖自动开关或库存目标。
+- Apple 上游配额、主号启用状态、邮箱容量和结果确认仍生效。手动与自动共用账号锁。
+- 本次仍使用 iCloud Web 创建通道；Apple Account 新通道调研见 [创建速率调研](HME-LIMITS.md)。
+- 成功后从隐私邮箱列表复制完整凭据。若启用自动入池，新邮箱按原入池流程进入库存。
+- 关闭页面会停止后续请求；结果不明时先刷新/同步目录，避免重复提交。
+
+管理接口：`POST /admin/api/v1/accounts/ACCOUNT_ID/aliases/create-now`，JSON `{}`。
+使用管理员 session Cookie 和 `X-CSRF-Token`，不是邮箱池项目 Key。
+成功返回 `201 {"data":{"alias":ALIAS_DTO}}`，包含完整凭据且 `Cache-Control: no-store`。
+同主号并发手动请求返回 `409 ALIAS_CREATION_BUSY`；Apple 限流返回 `429 APPLE_RATE_LIMITED`，可用时附带 `Retry-After`。
+
 ## 领取和使用
 
 外部邮箱池接口统一使用 `Authorization: Bearer PROJECT_KEY`，PROJECT_KEY 以 `pool_` 开头。

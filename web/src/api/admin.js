@@ -865,6 +865,14 @@ export async function createAlias(accountId, payload, csrfToken) {
   );
 }
 
+export async function createAliasNow(accountId, csrfToken) {
+  const data = await apiRequest(
+    `/accounts/${encodeURIComponent(accountId)}/aliases/create-now`,
+    { method: "POST", body: {}, csrfToken },
+  );
+  return normalizeAlias(data?.alias || data || {});
+}
+
 export function getAliases(accountId = "", options = {}) {
   return getAllAliases(accountId, options);
 }

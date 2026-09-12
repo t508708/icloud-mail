@@ -71,6 +71,7 @@ func (s *Server) registerAdminAPIRoutes(api *gin.RouterGroup) {
 	protected.POST("/accounts/:id/apple-auth/verify", s.adminAPIVerifyAppleAuth)
 	protected.DELETE("/accounts/:id/apple-auth", s.adminAPIClearAppleAuth)
 	protected.PUT("/accounts/:id/aliases/auto-create", s.adminAPISetAliasAutoCreation)
+	protected.POST("/accounts/:id/aliases/create-now", s.adminAPICreateAppleAlias)
 	protected.GET("/accounts/:id/aliases/auto-create/keys", s.adminAPIGetAliasAutoCreationKeys)
 	protected.DELETE("/accounts/:id/aliases/auto-create/keys", s.adminAPIAcknowledgeAliasAutoCreationKeys)
 	protected.POST("/accounts/:id/aliases", s.adminAPICreateAlias(basePath))
