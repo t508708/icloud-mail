@@ -1,0 +1,3 @@
+#!/bin/sh
+set -eu
+exec /bin/sh /opt/icloud-mail/scripts/deploy-public-certificate.sh

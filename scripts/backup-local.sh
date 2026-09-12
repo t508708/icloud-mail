@@ -16,7 +16,19 @@ docker compose run --rm --no-deps -T --entrypoint tar icloud-api -C /app/mail-ar
 if [ -f .local/access.json ]; then
   cp .local/access.json "$backup_dir/access.json"
 fi
-(cd "$backup_dir" && sha256sum postgres.dump keys.tar mail-archive.tar > SHA256SUMS)
+if [ -f .env ]; then
+  cp .env "$backup_dir/deployment.env"
+fi
+if [ -d .local/tls ]; then
+  tar -C .local/tls -cf "$backup_dir/public-tls.tar" .
+fi
+set -- postgres.dump keys.tar mail-archive.tar
+for artifact in access.json deployment.env public-tls.tar; do
+  if [ -f "$backup_dir/$artifact" ]; then
+    set -- "$@" "$artifact"
+  fi
+done
+(cd "$backup_dir" && sha256sum "$@" > SHA256SUMS)
 docker compose start icloud-api
 trap - EXIT
 printf 'Backup saved: %s\n' "$backup_dir"

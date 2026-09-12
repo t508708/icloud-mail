@@ -1,0 +1,4 @@
+services:
+  icloud-api:
+    volumes:
+      - ./.local/tls:/app/public-tls:ro
