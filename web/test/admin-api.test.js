@@ -980,6 +980,37 @@ test("alias pages omit disabled latest-mail filters", async () => {
   }
 });
 
+test("alias pages preserve enabled=false", async () => {
+  let request;
+  globalThis.fetch = async (url) => {
+    request = new URL(url, "https://admin.invalid");
+    return jsonResponse({ items: [], pagination: { total: 0, limit: 20, offset: 0 } });
+  };
+  await getAliasPage(12, { enabled: false });
+  assert.equal(request.searchParams.get("enabled"), "false");
+});
+
+test("all alias pages retain account, status and query filters across offsets", async () => {
+  const requests = [];
+  globalThis.fetch = async (url) => {
+    const query = new URL(url, "https://admin.invalid").searchParams;
+    requests.push(query);
+    const offset = Number(query.get("offset"));
+    return jsonResponse({
+      items: [{ id: offset + 1, account_id: 12, enabled: false }],
+      pagination: { total: 3, limit: 1, offset, has_more: offset < 2 },
+    });
+  };
+  const aliases = await getAllAliases(12, { enabled: false, query: "filter" });
+  assert.deepEqual(aliases.map((alias) => alias.id), [1, 2, 3]);
+  assert.deepEqual(requests.map((query) => query.get("offset")), ["0", "1", "2"]);
+  for (const query of requests) {
+    assert.equal(query.get("account_id"), "12");
+    assert.equal(query.get("enabled"), "false");
+    assert.equal(query.get("query"), "filter");
+  }
+});
+
 test("mail groups normalize counts and send authenticated mutations", async () => {
   const requests = [];
   const responses = [

@@ -202,6 +202,28 @@ func TestAdminAPIListAliasesRejectsInvalidOrConflictingLatestMail(t *testing.T) 
 	}
 }
 
+func TestAdminAPIListAliasesFiltersEnabledAndRejectsInvalid(t *testing.T) {
+	env := newAdminAPITestEnv(t)
+	cookie, csrf, _ := env.createSession(t, "enabled-filter-admin", "unused-password")
+	account := adminAPITestCreateAccount(t, env, "enabled-filter-api@icloud.com")
+	for i, enabled := range []bool{false, true} {
+		if _, err := env.store.CreateAlias(context.Background(), domain.Alias{AccountID: account.ID, Address: fmt.Sprintf("enabled-%d@icloud.com", i), Enabled: enabled}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := fmt.Sprintf("/admin/api/v1/aliases?account_id=%d&enabled=false&limit=1", account.ID)
+	page := decodeAdminAPIAliasListTestEnvelope(t, env.request(t, http.MethodGet, target, nil, "", []*http.Cookie{cookie}, csrf))
+	if page.Data.Pagination.Total != 1 || len(page.Data.Items) != 1 || page.Data.Items[0].Enabled {
+		t.Fatalf("enabled=false page = %#v", page.Data)
+	}
+	for _, value := range []string{"yes", "1"} {
+		response := env.request(t, http.MethodGet, "/admin/api/v1/aliases?enabled="+value, nil, "", []*http.Cookie{cookie}, csrf)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("enabled=%s status=%d", value, response.Code)
+		}
+	}
+}
+
 func decodeAdminAPIAliasListTestEnvelope(
 	t *testing.T,
 	response *httptest.ResponseRecorder,

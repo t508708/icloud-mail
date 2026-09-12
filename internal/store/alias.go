@@ -32,6 +32,7 @@ const aliasJoins = `
 
 type AliasListFilter struct {
 	AccountID         *int64
+	Enabled           *bool
 	GroupID           *int64
 	Ungrouped         bool
 	WithLatestMail    bool
@@ -227,6 +228,10 @@ func (s *Store) ListAliasesPage(ctx context.Context, filter AliasListFilter) (Al
 		}
 		predicates = append(predicates, `al.account_id = ?`)
 		filterArgs = append(filterArgs, *filter.AccountID)
+	}
+	if filter.Enabled != nil {
+		predicates = append(predicates, `al.enabled = ?`)
+		filterArgs = append(filterArgs, *filter.Enabled)
 	}
 	if filter.GroupID != nil {
 		if *filter.GroupID < 1 {

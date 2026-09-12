@@ -1590,6 +1590,22 @@ func (s *Server) adminAPIListAliases(c *gin.Context) {
 		}
 		accountID = &parsedID
 	}
+	var enabled *bool
+	if rawEnabled, present := c.GetQuery("enabled"); present {
+		switch strings.TrimSpace(rawEnabled) {
+		case "":
+			// An explicitly empty value is equivalent to omitting the filter.
+		case "true":
+			value := true
+			enabled = &value
+		case "false":
+			value := false
+			enabled = &value
+		default:
+			writeAdminAPIError(c, http.StatusBadRequest, "VALIDATION_FAILED", "enabled 必须是 true 或 false")
+			return
+		}
+	}
 	var groupID *int64
 	groupUngrouped := false
 	if rawGroupID := strings.TrimSpace(c.Query("group_id")); rawGroupID != "" {
@@ -1606,6 +1622,7 @@ func (s *Server) adminAPIListAliases(c *gin.Context) {
 	}
 	page, err := s.store.ListAliasesPage(c.Request.Context(), store.AliasListFilter{
 		AccountID:         accountID,
+		Enabled:           enabled,
 		GroupID:           groupID,
 		Ungrouped:         groupUngrouped,
 		WithLatestMail:    withLatestMail,

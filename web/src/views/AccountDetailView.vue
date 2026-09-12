@@ -399,6 +399,17 @@
               @clear="applyAliasSearch"
             />
           </label>
+          <el-select
+            v-model="aliasEnabledFilter"
+            class="account-alias-search__status"
+            aria-label="邮箱状态筛选"
+            placeholder="全部状态"
+            @change="applyAliasEnabledFilter"
+          >
+            <el-option label="全部状态" value="" />
+            <el-option label="启用" value="true" />
+            <el-option label="停用" value="false" />
+          </el-select>
           <div class="account-alias-search__actions">
             <el-button
               type="primary"
@@ -416,8 +427,36 @@
               清空
             </el-button>
           </div>
+          <div v-if="!isCustomMailbox" class="account-alias-search__selection">
+            <el-checkbox
+              :model-value="allAliasesSelected"
+              :indeterminate="someAliasesSelected"
+              :disabled="!selectableAliases.length || aliasSelectionBusy"
+              @change="setAllAliasesSelected"
+            >本页全选</el-checkbox>
+            <span class="account-alias-selected-count">已选 {{ selectedAliasIds.length }}</span>
+            <el-button
+              text
+              :disabled="!selectedAliasIds.length || aliasSelectionBusy"
+              @click="clearAliasSelection"
+            >清选</el-button>
+          </div>
+          <el-button
+            v-if="!isCustomMailbox"
+            class="account-alias-delete-button"
+            type="danger"
+            :disabled="!selectedAliasIds.length || loading || detailMutationPending()"
+            :loading="batchDeleteConfirming || deletionState.submitting"
+            @click="deleteSelectedAliases"
+          >从 iCloud 永久删除隐藏邮箱</el-button>
         </div>
 
+        <AliasDeletionProgress
+          v-if="!isCustomMailbox"
+          :state="deletionState"
+          @refresh="refreshDeletionJob"
+          @acknowledge="acknowledgeDeletionState"
+        />
         <div
           v-if="loading && aliases.length === 0"
           class="data-panel loading-panel"
@@ -444,15 +483,33 @@
           :aria-busy="loading"
         >
           <VirtualDataTable
-            :columns="aliasColumns"
+            :columns="visibleAliasColumns"
             :data="aliases"
             row-key="id"
             fill-height
             :row-height="64"
             :loading="loading"
           >
+            <template #header-cell="{ column }">
+              <el-checkbox
+                v-if="column.key === 'selection'"
+                :model-value="allAliasesSelected"
+                :indeterminate="someAliasesSelected"
+                :disabled="!selectableAliases.length || aliasSelectionBusy"
+                aria-label="勾选本页隐私邮箱"
+                @change="setAllAliasesSelected"
+              />
+              <template v-else>{{ column.title }}</template>
+            </template>
             <template #cell="{ column, rowData: row }">
-              <template v-if="column.key === 'address'">
+              <el-checkbox
+                v-if="column.key === 'selection'"
+                :model-value="selectedAliasIds.includes(row.id)"
+                :disabled="isAliasConfirmationPending(row) || aliasSelectionBusy"
+                :aria-label="`勾选 ${row.address}`"
+                @change="setAliasSelected(row, $event)"
+              />
+              <template v-else-if="column.key === 'address'">
                 <div class="primary-stack">
                   <strong>{{ row.address }}</strong>
                   <small>{{ row.label || "未填写用途备注" }}</small>
@@ -566,6 +623,13 @@
         >
           <article v-for="alias in aliases" :key="alias.id" class="mobile-record">
             <header class="mobile-record__header">
+              <el-checkbox
+                v-if="!isCustomMailbox"
+                :model-value="selectedAliasIds.includes(alias.id)"
+                :disabled="isAliasConfirmationPending(alias) || aliasSelectionBusy"
+                :aria-label="`勾选 ${alias.address}`"
+                @change="setAliasSelected(alias, $event)"
+              />
               <div class="primary-stack">
                 <strong>{{ alias.address }}</strong>
                 <small>{{ alias.label || "未填写用途备注" }}</small>
@@ -805,6 +869,8 @@ import {
   deleteAppleSession,
   getAccount,
   getAliasPage,
+  getAliasDeletionJob,
+  getLatestAliasDeletionJob,
   getAllAliases,
   getMailGroups,
   loginAppleSession,
@@ -815,9 +881,11 @@ import {
   syncAccount,
   syncAccountAliases,
   verifyAppleSession,
+  startAliasDeletionJob,
 } from "../api/admin.js";
 import EmptyState from "../components/EmptyState.vue";
 import AliasCreationPanel from "../components/AliasCreationPanel.vue";
+import AliasDeletionProgress from "../components/AliasDeletionProgress.vue";
 import ListPagination from "../components/ListPagination.vue";
 import RequestAlert from "../components/RequestAlert.vue";
 import SectionHeader from "../components/SectionHeader.vue";
@@ -843,6 +911,12 @@ import {
 } from "../utils/feedback.js";
 import { formatTime } from "../utils/format.js";
 import { formatIMAPEndpoint, mailboxReceiveRule } from "../utils/imap.js";
+import {
+  createAliasDeletionController,
+  createAliasDeletionStorage,
+  isAliasDeletionJobTerminal,
+} from "../utils/aliasDeletionJob.js";
+import { ADMIN_BASE_PATH } from "../utils/runtimePath.js";
 import { createLiveRefresh } from "../utils/liveRefresh.js";
 import {
   ALL_PAGE_SIZE,
@@ -860,6 +934,11 @@ const pageSize = ref(DEFAULT_PAGE_SIZE);
 const total = ref(0);
 const aliasQueryDraft = ref("");
 const appliedAliasQuery = ref("");
+const aliasEnabledFilter = ref("");
+const selectedAliasIds = ref([]);
+const deletionState = ref({ job: null, blocked: true, recovering: true });
+const batchDeleteConfirming = ref(false);
+let deletionController;
 const groups = ref([]);
 const groupsLoading = ref(false);
 const groupsError = ref(null);
@@ -906,10 +985,22 @@ let resumeAutoCreationAfterAuth = false;
 
 const syncActive = computed(() => Boolean(account.value?.syncProgress?.active));
 const hasAliasSearch = computed(() =>
-  Boolean(aliasQueryDraft.value.trim() || appliedAliasQuery.value),
+  Boolean(aliasQueryDraft.value.trim() || appliedAliasQuery.value || aliasEnabledFilter.value),
 );
+const selectableAliases = computed(() => aliases.value.filter((alias) =>
+  String(alias.accountId) === detailRouteKey() && !isAliasConfirmationPending(alias),
+));
+const allAliasesSelected = computed(() => selectableAliases.value.length > 0 &&
+  selectableAliases.value.every((alias) => selectedAliasIds.value.includes(alias.id)),
+);
+const someAliasesSelected = computed(() => selectedAliasIds.value.length > 0 && !allAliasesSelected.value);
+const aliasSelectionBusy = computed(() => loading.value || batchDeleteConfirming.value || deletionState.value.blocked);
 const isCustomMailbox = computed(
   () => account.value?.mailboxType === "custom",
+);
+const visibleAliasColumns = computed(() => isCustomMailbox.value
+  ? aliasColumns.filter((column) => column.key !== "selection")
+  : aliasColumns,
 );
 const receiveRuleLabel = computed(() => {
   switch (mailboxReceiveRule(account.value || {})) {
@@ -942,6 +1033,7 @@ const appleVerificationRules = {
   ],
 };
 const aliasColumns = Object.freeze([
+  { key: "selection", title: "", width: 48, minWidth: 48, align: "center" },
   {
     key: "address",
     dataKey: "address",
@@ -1228,7 +1320,61 @@ function detailRequestKey(
   selectedPageSize = pageSize.value,
   query = appliedAliasQuery.value,
 ) {
-  return `${accountId}\u0000${query}\u0000${page}\u0000${selectedPageSize}`;
+  return `${accountId}\u0000${query}\u0000${aliasEnabledFilter.value}\u0000${page}\u0000${selectedPageSize}`;
+}
+
+function clearAliasSelection() {
+  selectedAliasIds.value = [];
+}
+
+function setAliasSelected(alias, checked) {
+  if (aliasSelectionBusy.value || !selectableAliases.value.some((item) => item.id === alias.id)) return;
+  selectedAliasIds.value = checked
+    ? [...new Set([...selectedAliasIds.value, alias.id])]
+    : selectedAliasIds.value.filter((id) => id !== alias.id);
+}
+
+function setAllAliasesSelected(checked) {
+  if (aliasSelectionBusy.value) return;
+  selectedAliasIds.value = checked ? selectableAliases.value.map((alias) => alias.id) : [];
+}
+
+function applyAliasEnabledFilter() {
+  resetAliasSearchResults();
+}
+
+async function deleteSelectedAliases() {
+  if (!viewActive || !auth.state.username || isCustomMailbox.value || loading.value || detailMutationPending()) return;
+  const ids = [...selectedAliasIds.value];
+  if (!ids.length || !ids.every((id) => selectableAliases.value.some((alias) => alias.id === id))) return;
+  const controller = deletionController;
+  const username = auth.state.username;
+  const contextKey = detailRequestKey();
+  batchDeleteConfirming.value = true;
+  beginDetailMutation();
+  try {
+    await ElMessageBox.confirm(
+      `将从 iCloud 永久删除所选的 ${ids.length} 个隐藏邮箱，并清除本项目中的对应记录。启用的邮箱会先停用，Apple 端删除后不可恢复。`,
+      "确认批量永久删除",
+      {
+        type: "warning",
+        confirmButtonText: "永久删除",
+        cancelButtonText: "取消",
+        confirmButtonClass: "el-button--danger",
+        autofocus: false,
+      },
+    );
+    if (!viewActive || controller !== deletionController || username !== auth.state.username ||
+        contextKey !== detailRequestKey() || deletionState.value.blocked ||
+        ids.length !== selectedAliasIds.value.length || !ids.every((id) =>
+          selectedAliasIds.value.includes(id) && selectableAliases.value.some((alias) => alias.id === id))) return;
+    await controller.submit(ids, auth.state.csrfToken);
+  } catch (error) {
+    if (!confirmationCancelled(error)) showRequestError(error, "批量删除提交失败。");
+  } finally {
+    batchDeleteConfirming.value = false;
+    if (viewActive) void loadDetail({ silent: true });
+  }
 }
 
 function replaceAlias(updated) {
@@ -1239,6 +1385,8 @@ function replaceAlias(updated) {
 
 function detailMutationPending() {
   return (
+    batchDeleteConfirming.value ||
+    deletionState.value.blocked ||
     syncLoading.value ||
     aliasesSyncLoading.value ||
     appleAuthLoading.value ||
@@ -1296,6 +1444,7 @@ async function loadDetail({ silent = false } = {}) {
   const page = currentPage.value;
   const selectedPageSize = pageSize.value;
   const query = appliedAliasQuery.value;
+  const enabled = aliasEnabledFilter.value === "" ? undefined : aliasEnabledFilter.value === "true";
   const requestKey = detailRequestKey(accountId, page, selectedPageSize, query);
   const ticket = detailGate.begin(requestKey);
   detailAbortController?.abort();
@@ -1319,9 +1468,10 @@ async function loadDetail({ silent = false } = {}) {
         getAllAliases(accountId, {
           signal: abortController.signal,
           query,
+          enabled,
         }),
       ]);
-    } else if (query) {
+    } else if (query || enabled !== undefined) {
       [detail, aliasPage] = await Promise.all([
         // Keep the account request focused on metadata. Its alias count is
         // the unfiltered total used by the automatic-creation panel.
@@ -1334,6 +1484,7 @@ async function loadDetail({ silent = false } = {}) {
           limit: selectedPageSize,
           offset: (page - 1) * selectedPageSize,
           query,
+          enabled,
           signal: abortController.signal,
         }),
       ]);
@@ -1371,10 +1522,12 @@ async function loadDetail({ silent = false } = {}) {
       loadError.value = null;
       return await loadDetail({ silent });
     }
-    account.value = allItems && !query
+    account.value = allItems && !query && enabled === undefined
       ? { ...detail.account, aliasCount: resolvedTotal }
       : detail.account;
     aliases.value = nextAliases;
+    const validIds = new Set(selectableAliases.value.map((alias) => alias.id));
+    selectedAliasIds.value = selectedAliasIds.value.filter((id) => validIds.has(id));
     total.value = resolvedTotal;
     void loadMailGroups({ silent });
     appleSession.value = detail.appleSession;
@@ -1416,6 +1569,7 @@ function handlePageChange(page) {
   if (pageSize.value === ALL_PAGE_SIZE) return;
   const nextPage = Math.max(1, Number(page) || 1);
   if (nextPage === currentPage.value) return;
+  clearAliasSelection();
   currentPage.value = nextPage;
   aliases.value = [];
   loadError.value = null;
@@ -1426,6 +1580,7 @@ function handlePageSizeChange(value) {
   const nextPageSize = normalizePageSize(value);
   if (nextPageSize === pageSize.value) return;
   pageSize.value = nextPageSize;
+  clearAliasSelection();
   currentPage.value = 1;
   aliases.value = [];
   total.value = 0;
@@ -1436,6 +1591,7 @@ function handlePageSizeChange(value) {
 }
 
 function resetAliasSearchResults() {
+  clearAliasSelection();
   currentPage.value = 1;
   aliases.value = [];
   total.value = 0;
@@ -1453,9 +1609,10 @@ function applyAliasSearch() {
 }
 
 function clearAliasSearch() {
-  if (!aliasQueryDraft.value && !appliedAliasQuery.value) return;
+  if (!hasAliasSearch.value) return;
   aliasQueryDraft.value = "";
   appliedAliasQuery.value = "";
+  aliasEnabledFilter.value = "";
   resetAliasSearchResults();
 }
 
@@ -1975,6 +2132,7 @@ function isCopying(alias) {
 function isAliasActionBusy(alias) {
   const id = alias?.id;
   return Boolean(
+    batchDeleteConfirming.value || deletionState.value.blocked ||
     isCopying(alias) ||
       toggleLoading[id] ||
       rotateLoading[id] ||
@@ -2067,6 +2225,7 @@ async function toggleAlias(alias, enabled) {
     );
     if (!isCurrentAccount(accountId)) return;
     replaceAlias(updated);
+    if (aliasEnabledFilter.value !== "") await loadDetail();
     successMessage(enabled ? "隐私邮箱已启用。" : "隐私邮箱已停用。");
   } catch (error) {
     if (!isCurrentAccount(accountId)) return;
@@ -2210,6 +2369,8 @@ watch(
       total.value = 0;
       aliasQueryDraft.value = "";
       appliedAliasQuery.value = "";
+      aliasEnabledFilter.value = "";
+      clearAliasSelection();
       appleSession.value = null;
       autoCreation.value = null;
       aliasSyncSummary.value = null;
@@ -2221,13 +2382,60 @@ watch(
   },
 );
 
+function makeDeletionController() {
+  const username = auth.state.username;
+  let refreshedTerminal = "";
+  return createAliasDeletionController({
+    startJob: startAliasDeletionJob,
+    getJob: getAliasDeletionJob,
+    getLatestJob: getLatestAliasDeletionJob,
+    storage: createAliasDeletionStorage(ADMIN_BASE_PATH, username),
+    onChange: (state) => {
+      if (!viewActive || auth.state.username !== username) return;
+      const previousJob = deletionState.value.job;
+      deletionState.value = state;
+      if (state.job && state.job.jobId !== previousJob?.jobId) clearAliasSelection();
+      const terminalKey = isAliasDeletionJobTerminal(state.job)
+        ? `${state.job.jobId}:${state.job.status}:${state.job.processed}` : "";
+      // Accepting a result precedes clearing the controller's read/submission lock.
+      if (terminalKey && !state.blocked && terminalKey !== refreshedTerminal) {
+        refreshedTerminal = terminalKey;
+        clearAliasSelection();
+        void loadDetail({ silent: true });
+      }
+    },
+  });
+}
+
+function refreshDeletionJob() {
+  return deletionController.refresh({ latest: true });
+}
+
+function acknowledgeDeletionState() {
+  if (!deletionController.acknowledgeUnmatched()) return;
+  clearAliasSelection();
+  void loadDetail();
+}
+
+watch(() => auth.state.username, () => {
+  deletionController?.stop();
+  deletionController = makeDeletionController();
+  deletionState.value = deletionController.getState();
+  clearAliasSelection();
+  if (viewActive && auth.state.username) void deletionController.start();
+}, { flush: "sync" });
+
 onMounted(() => {
+  deletionController = makeDeletionController();
+  deletionState.value = deletionController.getState();
+  void deletionController.start();
   loadDetail();
   liveRefresh.start({ immediate: false });
 });
 
 onBeforeUnmount(() => {
   viewActive = false;
+  deletionController?.stop();
   liveRefresh.stop();
   detailGate.deactivate();
   detailAbortController?.abort();
@@ -2240,9 +2448,10 @@ onBeforeUnmount(() => {
 <style scoped>
 .account-alias-search {
   display: flex;
-  align-items: flex-end;
-  gap: 14px;
-  padding: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -2282,22 +2491,49 @@ onBeforeUnmount(() => {
 }
 
 .account-alias-search__field {
-  display: grid;
+  display: flex;
+  align-items: center;
   min-width: 0;
-  flex: 1 1 auto;
-  gap: 6px;
+  flex: 1 1 200px;
+  gap: 8px;
 }
 
 .account-alias-search__field > span {
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.account-alias-search__status {
+  flex: 0 0 110px;
+  width: 110px;
 }
 
 .account-alias-search__actions {
   display: flex;
   flex: 0 0 auto;
   gap: 8px;
+}
+
+.account-alias-search__selection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-alias-selected-count {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.account-alias-search :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
+.account-alias-delete-button {
+  margin-left: auto;
 }
 
 .credential-value {
@@ -2334,14 +2570,21 @@ onBeforeUnmount(() => {
   }
 
   .account-alias-search {
-    flex-direction: column;
-    align-items: stretch;
     padding: 14px;
   }
 
+  .account-alias-search__field {
+    flex-basis: 100%;
+  }
+
   .account-alias-search__actions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    flex: 1;
+    justify-content: flex-end;
+  }
+
+  .account-alias-delete-button {
+    flex-basis: 100%;
+    margin-left: 0;
   }
 }
 </style>
