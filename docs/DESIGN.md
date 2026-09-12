@@ -8,6 +8,8 @@
 
 字体优先系统 UI 字体；JS、CSS、图标均随应用本地打包，不调用外部 CDN。主题初始化使用同源 `assets/theme-init-v1.js`，在主包执行前应用偏好，兼容现有 CSP。该文件长期缓存，修改时须递增文件名版本。间距以 4 / 8 / 12 / 16 / 24 为主。
 
+应用响应使用 `Cache-Control: no-store, no-transform`，避免 Cloudflare 自动注入外部统计脚本；静态资源仍长期缓存。依据 [Cloudflare 自动注入说明](https://developers.cloudflare.com/web-analytics/get-started/#sites-proxied-through-cloudflare)，发布验收须在真实浏览器中确认请求来源，源码扫描不足以发现代理层注入。
+
 布局：左侧悬浮工作区导航，右侧玻璃顶栏和内容；标题左对齐，主操作靠右。主号的连接详情、自动创建计划明细折叠展示，状态、异常与常用操作常驻；批量创建与隐私邮箱同级。列表筛选和批量操作各有明确位置。表格保留虚拟滚动，移动端使用可操作的记录卡片。
 
 ```
