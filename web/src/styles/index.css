@@ -1339,16 +1339,130 @@ code {
 .el-button {
   font-weight: 560;
   min-height: 32px;
+  padding: 0 13px;
+  border-radius: 8px;
   transition: background-color 120ms, border-color 120ms, box-shadow 120ms;
 }
 
 .el-button:not(.is-text, .is-link, .el-button--primary, .is-disabled) {
-  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+  color: var(--text);
+  background: rgb(255 255 255 / 72%);
+  border-color: #d3d3d8;
+  box-shadow: 0 1px 2px rgb(29 29 31 / 5%);
+}
+.el-button:not(.is-disabled):hover {
+  color: var(--text);
+  background: #f0f0f3;
+  border-color: #bdbdc4;
 }
 .el-button--primary:not(.is-plain, .is-text, .is-link) {
+  color: #fff;
+  background: var(--primary);
+  border-color: var(--primary);
   box-shadow: 0 1px 2px rgb(0 95 205 / 16%), inset 0 1px 0 rgb(255 255 255 / 14%);
 }
+.el-button--primary:not(.is-disabled):hover {
+  color: #fff;
+  background: #0071e3;
+  border-color: #0071e3;
+}
+.el-button--primary.is-plain {
+  color: #0064d2;
+  background: #edf5ff;
+  border-color: #c9e1ff;
+}
+.el-button--danger.is-plain {
+  color: #c62828;
+  background: #fff5f5;
+  border-color: #f1c7c7;
+}
+.el-button.is-text,
+.el-button.is-link {
+  padding-right: 8px;
+  padding-left: 8px;
+  border-radius: 7px;
+}
+.el-button.is-link { color: var(--primary); }
+.el-button.is-link.el-button--danger { color: var(--danger); }
+.el-button.is-circle {
+  width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 50%;
+}
+.el-button.is-disabled { opacity: .48; }
+.el-button-group .el-button { border-radius: 0; }
+.el-button-group .el-button:first-child { border-radius: 8px 0 0 8px; }
+.el-button-group .el-button:last-child { border-radius: 0 8px 8px 0; }
 .el-tag { border-radius: 6px; }
+.el-tag {
+  --el-tag-font-size: 12px;
+  --el-tag-border-radius: 7px;
+  min-height: 24px;
+  padding: 0 9px;
+  font-weight: 550;
+  line-height: 22px;
+}
+.el-tag.el-tag--success {
+  --el-tag-bg-color: #e8f6eb;
+  --el-tag-border-color: #c5e7ca;
+  --el-tag-text-color: #248a3d;
+}
+.el-tag.el-tag--warning {
+  --el-tag-bg-color: #fff5dc;
+  --el-tag-border-color: #f4df9f;
+  --el-tag-text-color: #946200;
+}
+.el-tag.el-tag--danger {
+  --el-tag-bg-color: #fff0f0;
+  --el-tag-border-color: #f1c7c7;
+  --el-tag-text-color: #c62828;
+}
+.el-tag.el-tag--info {
+  --el-tag-bg-color: #f0f0f3;
+  --el-tag-border-color: #dedee3;
+  --el-tag-text-color: #6b6b73;
+}
+
+/* Use a segmented, low-contrast tab treatment across the pool workspace. */
+.el-tabs {
+  --el-tabs-header-height: 42px;
+}
+.el-tabs__header {
+  margin: 0 0 18px;
+  border-bottom: 0;
+}
+.el-tabs__nav-wrap::after { display: none; }
+.el-tabs__nav {
+  gap: 3px;
+  padding: 3px;
+  background: #e9e9ee;
+  border: 1px solid #dedee3;
+  border-radius: 10px;
+}
+.el-tabs__item {
+  height: 34px;
+  padding: 0 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  border-radius: 7px;
+  transition: color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+.el-tabs__item:hover { color: var(--text); }
+.el-tabs__item.is-active {
+  color: var(--text);
+  font-weight: 620;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgb(29 29 31 / 12%);
+}
+.el-tabs__active-bar { display: none; }
+.el-tabs__content { overflow: visible; }
+
+.el-checkbox {
+  --el-checkbox-checked-bg-color: var(--primary);
+  --el-checkbox-checked-input-border-color: var(--primary);
+}
+.el-checkbox__inner { border-radius: 5px; }
 .el-dialog, .el-message-box {
   --el-dialog-border-radius: 16px;
   border-radius: 16px;
