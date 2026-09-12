@@ -224,6 +224,18 @@
           </template>
         </SectionHeader>
 
+        <div v-if="!isCustomMailbox" class="alias-creation-row">
+          <AliasCreationPanel
+            :account-id="account.id"
+            :apple-id-hint="appleSession?.appleId || account.email"
+            :account-enabled="account.enabled"
+            :web-authenticated="appleSessionAuthenticated"
+            :csrf-token="auth.state.csrfToken"
+            @busy="(busy) => (manualAliasLoading = busy)"
+            @change="onAliasCreationChange"
+          />
+        </div>
+
         <div v-if="!isCustomMailbox" class="apple-session-strip">
           <div class="apple-session-strip__identity">
             <el-tag :type="appleSessionAuthenticated ? 'success' : 'info'" effect="plain">
@@ -262,7 +274,7 @@
                 </el-tag>
               </div>
               <p>
-                自动双通道 · 每主号每小时 40 次计划 · 最短 60 秒、平均约 90 秒。最多 3 个主号并行，同一主号串行确认；一次几十个请使用下方批量任务。
+                自动双通道 · 每主号每小时 40 次计划 · 最短 60 秒、平均约 90 秒。最多 3 个主号并行，同一主号串行确认；一次几十个请使用上方批量任务。
               </p>
             </div>
             <div class="auto-creation-panel__actions">
@@ -321,15 +333,6 @@
             <span>{{ autoCreationErrorMessage(autoCreation.lastError) }}</span>
           </div>
 
-          <AliasCreationPanel
-            :account-id="account.id"
-            :apple-id-hint="appleSession?.appleId || account.email"
-            :account-enabled="account.enabled"
-            :web-authenticated="appleSessionAuthenticated"
-            :csrf-token="auth.state.csrfToken"
-            @busy="(busy) => (manualAliasLoading = busy)"
-            @change="onAliasCreationChange"
-          />
         </div>
 
         <div
@@ -1032,7 +1035,7 @@ const AUTO_CREATION_ERROR_MESSAGES = Object.freeze({
   APPLE_UPSTREAM_ERROR:
     "Apple 服务暂时异常，请稍后再试；自动创建会按计划继续执行",
   APPLE_ALIAS_CONFIRMATION_PENDING:
-    "Apple 已创建隐私邮箱，正在等待目录确认；后续自动创建计划只会继续确认，不会重复创建",
+    "Apple 创建结果尚未完成目录确认；后续计划会继续确认，确认前不会重复创建",
   APPLE_ACCOUNT_MISMATCH:
     "Apple 登录账户或隐藏邮件地址的默认转发目标与当前主号不匹配，请确认登录了正确的 Apple 账户，并在 iCloud 设置中把‘转发到’改为当前主号后重新开启",
   APPLE_FORWARDING_TARGET_MISSING:
@@ -2245,6 +2248,39 @@ onBeforeUnmount(() => {
   border-radius: 6px;
 }
 
+.alias-creation-row {
+  min-width: 0;
+}
+
+/* Keep the high-frequency batch controls alongside their title on wide screens. */
+.alias-creation-row :deep(.creation-job-panel) {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.alias-creation-row :deep(.creation-job-panel > strong) {
+  grid-column: 1;
+  grid-row: 1;
+  white-space: nowrap;
+}
+
+.alias-creation-row :deep(.creation-job-panel__controls) {
+  grid-column: 2;
+  grid-row: 1;
+  justify-content: flex-end;
+}
+
+.alias-creation-row :deep(.creation-job-panel__apple),
+.alias-creation-row :deep(.creation-job-panel > .field-help),
+.alias-creation-row :deep(.creation-job-panel__status),
+.alias-creation-row :deep(.creation-job-panel > details),
+.alias-creation-row :deep(.creation-job-panel > .el-alert) {
+  grid-column: 1 / -1;
+}
+
 .account-alias-search__field {
   display: grid;
   min-width: 0;
@@ -2283,6 +2319,20 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 720px) {
+  .alias-creation-row :deep(.creation-job-panel) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .alias-creation-row :deep(.creation-job-panel > strong),
+  .alias-creation-row :deep(.creation-job-panel__controls) {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .alias-creation-row :deep(.creation-job-panel__controls) {
+    justify-content: flex-start;
+  }
+
   .account-alias-search {
     flex-direction: column;
     align-items: stretch;

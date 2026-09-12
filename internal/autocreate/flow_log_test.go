@@ -425,6 +425,17 @@ func TestAliasCreationMissingForwardingTargetIsSpecificAndSafe(t *testing.T) {
 	assertFlowLogsDoNotContain(t, logs, "sensitive forwarding fixture")
 }
 
+func TestAliasCreationPendingConfirmationReasonDoesNotClaimCreation(t *testing.T) {
+	reason := aliasCreationErrorReason("APPLE_ALIAS_CONFIRMATION_PENDING")
+	want := "Apple 创建结果尚未完成目录确认；后续计划会继续确认，确认前不会重复创建"
+	if reason != want {
+		t.Fatalf("pending confirmation reason = %q, want %q", reason, want)
+	}
+	if strings.Contains(reason, "地址已创建") || strings.Contains(reason, "已创建隐私邮箱") {
+		t.Fatalf("pending confirmation reason claims confirmed creation: %q", reason)
+	}
+}
+
 func TestAliasCreationForwardingInitializationReportsRemoteMutation(t *testing.T) {
 	clock := newTestClock(time.Date(2026, 8, 8, 9, 0, 0, 0, time.UTC))
 	repo := newFakeRepository()

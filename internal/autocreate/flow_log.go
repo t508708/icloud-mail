@@ -832,7 +832,7 @@ func aliasCreationErrorReason(code string) string {
 	case "APPLE_FORWARDING_TARGET_MISSING":
 		return "Apple 未能确认隐私邮箱的默认转发目标，本次未发起创建；请确认当前主号可作为转发邮箱，或先在 iCloud 手动创建一个隐私邮箱"
 	case "APPLE_ALIAS_CONFIRMATION_PENDING":
-		return "Apple 地址已创建但目录确认尚未完成，后续计划会继续确认"
+		return "Apple 创建结果尚未完成目录确认；后续计划会继续确认，确认前不会重复创建"
 	case "ALIAS_LIMIT_REACHED":
 		return "主号已达到隐私邮箱容量上限"
 	case "ACCOUNT_CHANGED":

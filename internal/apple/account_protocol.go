@@ -170,15 +170,21 @@ func (c *Client) accountCall(ctx context.Context, s *AccountSession, method, raw
 func accountResponseError(r responseData, kind error) *Error {
 	e := r.operationError("account API", kind, nil)
 	var envelope struct {
-		ErrorCode     json.RawMessage `json:"errorCode"`
-		Code          json.RawMessage `json:"code"`
-		ErrorMessage  string          `json:"errorMessage"`
-		ServiceErrors []struct {
+		ErrorCode           json.RawMessage `json:"errorCode"`
+		Code                json.RawMessage `json:"code"`
+		ErrorMessage        string          `json:"errorMessage"`
+		IneligibilityReason string          `json:"ineligibilityReason"`
+		ServiceErrors       []struct {
 			Code    json.RawMessage `json:"code"`
 			Message string          `json:"message"`
 		} `json:"serviceErrors"`
 	}
 	if json.Unmarshal(r.body, &envelope) == nil {
+		if strings.EqualFold(strings.TrimSpace(envelope.IneligibilityReason), "rate_limit_exceeded") {
+			// The account management API reports HME throttling as HTTP 412
+			// with this settings payload rather than errorCode -41015.
+			e.ServiceCode = hmeRateLimitCodeBatch
+		}
 		code := envelope.ErrorCode
 		if len(code) == 0 {
 			code = envelope.Code

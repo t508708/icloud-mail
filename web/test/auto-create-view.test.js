@@ -69,9 +69,23 @@ test("account detail exposes automatic alias creation with persistent credential
     "Apple 请求过于频繁，自动创建已进入冷却，冷却后会继续执行",
   );
   assert.equal(
+    formatAutoCreationError("APPLE_ALIAS_CONFIRMATION_PENDING"),
+    "Apple 创建结果尚未完成目录确认；后续计划会继续确认，确认前不会重复创建",
+  );
+  assert.equal(
     formatAutoCreationError(" unknown upstream detail "),
     " unknown upstream detail ",
   );
+});
+
+test("batch creation panel is directly below the privacy-mail directory", async () => {
+  const source = await readFile(viewPath, "utf8");
+  const directory = source.indexOf('title="隐私邮箱"');
+  const batch = source.indexOf('class="alias-creation-row"');
+  const automatic = source.indexOf('id="auto-creation-title"');
+  assert.ok(directory >= 0 && batch > directory && automatic > batch);
+  assert.match(source, /请使用上方批量任务/);
+  assert.doesNotMatch(source, /请使用下方批量任务/);
 });
 
 test("account detail hides alias credential fields while retaining export actions", async () => {
