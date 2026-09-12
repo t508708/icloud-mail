@@ -142,6 +142,9 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("初始化隐私邮箱自动创建服务: %w", err)
 	}
+	if err := autoManager.UpgradeCadence(workerContext); err != nil {
+		return fmt.Errorf("更新隐私邮箱定时创建频率: %w", err)
+	}
 	seenWorker := syncer.NewSeenWorker(db, cipher, fetcher, manager, logger, cfg.PollInterval)
 	seenWorker.SetOperationTimeout(seenOperationTimeout(cfg.IMAPTimeout))
 	publicIMAPCertFile := cfg.PublicIMAPTLSCertFile

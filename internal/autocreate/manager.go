@@ -23,10 +23,10 @@ import (
 
 const (
 	// CreationsPerCycle is the number of attempts in one hourly schedule.
-	CreationsPerCycle = 5
+	CreationsPerCycle = 40
 
 	// MinimumInterval is the smallest permitted interval between attempts.
-	MinimumInterval = 5 * time.Minute
+	MinimumInterval = time.Minute
 
 	// CycleDuration is the duration covered by one generated plan.
 	CycleDuration = time.Hour
@@ -35,7 +35,7 @@ const (
 	// batch window before another generated address is submitted.
 	appleRateLimitCooldown = 61 * time.Minute
 
-	defaultPollInterval                  = 30 * time.Second
+	defaultPollInterval                  = 5 * time.Second
 	defaultOverdueGrace                  = 2 * time.Minute
 	terminalStatePersistTimeout          = 5 * time.Second
 	appleServiceCodeFingerprintHexLength = 16
@@ -252,6 +252,18 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
+// UpgradeCadence runs before the polling loop. A durable marker ensures that
+// restarting the service never resets an already running plan or cooldown.
+func (m *Manager) UpgradeCadence(ctx context.Context) error {
+	upgrader, ok := m.repo.(interface {
+		UpgradeAliasCreationCadence(context.Context, string, time.Time, func(time.Time) ([]time.Time, error)) error
+	})
+	if !ok {
+		return nil
+	}
+	return upgrader.UpgradeAliasCreationCadence(ctx, "40-per-hour-v1", m.now(), m.newPlan)
+}
+
 // GetSchedule returns a persisted schedule. An absent row means the feature
 // has never been enabled and is represented as a disabled default.
 func (m *Manager) GetSchedule(ctx context.Context, accountID int64) (domain.AliasCreationSchedule, error) {
@@ -437,7 +449,7 @@ func (m *Manager) processDue(ctx context.Context, schedule domain.AliasCreationS
 	}
 	// Claim time is persisted before the remote side effect. Re-read the clock
 	// after the CAS so database latency cannot leave the next deadline inside
-	// five minutes of the post-claim start boundary.
+	// MinimumInterval of the post-claim start boundary.
 	attemptedAt := claimAt
 	actualAt := m.now()
 	flow := m.newAliasCreationFlow(actualAt)
@@ -786,14 +798,14 @@ func (m *Manager) newPlanStartingAt(first time.Time) ([]time.Time, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Keep five attempts in the following hour, but make the first deadline the
+	// Keep the configured attempts in the following hour, with the first deadline
 	// exact end of the cooldown instead of adding another random scheduling gap.
 	planned[0] = first.UTC()
 	return planned, nil
 }
 
-// generatePlan creates five cumulative deadlines. The five random gaps are
-// integer minutes, each at least five minutes, and add up to one hour.
+// generatePlan spreads forty deadlines across an hour. Gaps are randomized
+// in seconds, at least one minute, and total exactly one hour.
 func generatePlan(anchor time.Time, random RandomSource) ([]time.Time, error) {
 	if random == nil {
 		return nil, errors.New("random source is required")
@@ -805,13 +817,13 @@ func generatePlan(anchor time.Time, random RandomSource) ([]time.Time, error) {
 	for index := range gaps {
 		gaps[index] = MinimumInterval
 	}
-	remaining := int((CycleDuration - minimumCycleDuration) / time.Minute)
+	remaining := int((CycleDuration - minimumCycleDuration) / time.Second)
 	for index := 0; index < remaining; index++ {
 		bucket := random.IntN(CreationsPerCycle)
 		if bucket < 0 || bucket >= CreationsPerCycle {
 			return nil, fmt.Errorf("%w: %d", errInvalidRandom, bucket)
 		}
-		gaps[bucket] += time.Minute
+		gaps[bucket] += time.Second
 	}
 	planned := make([]time.Time, CreationsPerCycle)
 	next := anchor.UTC()

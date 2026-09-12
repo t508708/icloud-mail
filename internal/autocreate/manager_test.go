@@ -448,9 +448,8 @@ func TestClaimLatencyCannotShortenActualAttemptGap(t *testing.T) {
 	now := time.Date(2026, 8, 8, 9, 0, 0, 0, time.UTC)
 	clock := newTestClock(now)
 	repo := newFakeRepository()
-	// The hook models a slow database CAS. The first generated plan uses a
-	// 40-minute first gap followed by five-minute gaps, so the next slot would
-	// otherwise be too close after a one-minute claim delay.
+	// The hook models a slow database CAS. Later gaps are at MinimumInterval,
+	// so a one-minute claim delay would otherwise shorten the next interval.
 	repo.claimHook = func() { clock.Advance(time.Minute) }
 	creatorCalls := 0
 	manager := newManagerForTest(t, repo, clock, func(context.Context, int64) (domain.Alias, error) {
@@ -715,7 +714,8 @@ func TestActualAttemptGapIsEnforcedWhenClockPollsEarly(t *testing.T) {
 	repo := newFakeRepository()
 	manager := newManagerForTest(t, repo, clock, nil)
 	enableForTest(t, manager, 7)
-	lastAttempt := now.Add(-time.Minute)
+	// Poll one second before the per-account minimum interval elapses.
+	lastAttempt := now.Add(-time.Minute + time.Second)
 	current := repo.schedules[7]
 	current.LastAttemptedAt = timePtr(lastAttempt)
 	current.NextRunAt = timePtr(now)
