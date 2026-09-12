@@ -111,11 +111,30 @@ func TestAccountAliasCompleteSettingsRateLimitReturnsEmpty(t *testing.T) {
 		if n == 1 {
 			return accountResp(200, `{"emailAddress":"a@icloud.com"}`), nil
 		}
-		return accountResp(412, `{"active":false,"exists":false,"ineligibilityReason":"rate_limit_exceeded","ineligibilityType":"settings"}`), nil
+		return accountResp(412, `{"active":false,"exists":false,"code":123,"ineligibilityReason":"rate_limit_exceeded","ineligibilityType":"settings"}`), nil
 	})
 	a, _, err := c.CreateAccountAlias(context.Background(), AccountSession{SCNT: "s", APIKey: "k", ExpiresAt: time.Now().Add(time.Hour)}, "L", "")
-	if n != 2 || a.HME != "" || err == nil || !IsRateLimited(err) {
+	if n != 2 || a.HME != "" || err == nil || !IsRateLimited(err) || errors.Is(err, ErrTermsRequired) {
 		t.Fatalf("alias=%+v calls=%d err=%v", a, n, err)
+	}
+}
+
+func TestAccountAliasCompleteUnknownSettingsReasonKeepsCandidate(t *testing.T) {
+	for _, body := range []string{`{"active":false,"exists":false,"ineligibilityReason":"other"}`, `{}`} {
+		t.Run(body, func(t *testing.T) {
+			n := 0
+			c := accountClient(t, func(r *http.Request) (*http.Response, error) {
+				n++
+				if n == 1 {
+					return accountResp(200, `{"emailAddress":"a@icloud.com"}`), nil
+				}
+				return accountResp(412, body), nil
+			})
+			a, _, err := c.CreateAccountAlias(context.Background(), AccountSession{SCNT: "s", APIKey: "k", ExpiresAt: time.Now().Add(time.Hour)}, "L", "")
+			if n != 2 || a.HME != "a@icloud.com" || err == nil || !errors.Is(err, ErrTermsRequired) || IsRateLimited(err) {
+				t.Fatalf("alias=%+v calls=%d err=%v", a, n, err)
+			}
+		})
 	}
 }
 

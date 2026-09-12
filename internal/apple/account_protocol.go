@@ -180,11 +180,6 @@ func accountResponseError(r responseData, kind error) *Error {
 		} `json:"serviceErrors"`
 	}
 	if json.Unmarshal(r.body, &envelope) == nil {
-		if strings.EqualFold(strings.TrimSpace(envelope.IneligibilityReason), "rate_limit_exceeded") {
-			// The account management API reports HME throttling as HTTP 412
-			// with this settings payload rather than errorCode -41015.
-			e.ServiceCode = hmeRateLimitCodeBatch
-		}
 		code := envelope.ErrorCode
 		if len(code) == 0 {
 			code = envelope.Code
@@ -202,6 +197,12 @@ func accountResponseError(r responseData, kind error) *Error {
 		}
 		if strings.Contains(message, "limit of addresses") || strings.Contains(message, "maximum number of") || strings.Contains(message, "too many") {
 			e.ServiceCode = hmeRateLimitCodeBatch
+		}
+		if strings.EqualFold(strings.TrimSpace(envelope.IneligibilityReason), "rate_limit_exceeded") {
+			// This explicit settings response is a throttle, including on HTTP
+			// 412. Do not expose it as an account-terms action to service callers.
+			e.ServiceCode = hmeRateLimitCodeBatch
+			e.Kind = ErrService
 		}
 	}
 	return e
