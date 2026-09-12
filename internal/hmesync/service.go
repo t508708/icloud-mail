@@ -107,6 +107,8 @@ type Service struct {
 	accountFlows                 map[int64]string
 	operationMu                  sync.Mutex
 	operationLock                map[int64]*operationLock
+	accountAuthChallenges        map[int64]accountAuthChallenge
+	creationCooldowns            map[int64]map[string]time.Time
 }
 
 func New(repo Repository, cipher SessionCipher, client AppleClient, locker AccountLocker, options ...Option) (*Service, error) {
@@ -513,6 +515,15 @@ func (s *Service) deleteLocalAliasAfterApple(ctx context.Context, repo AliasDele
 // retries reserve because repeating that remote side effect could create
 // duplicates; only the read-only directory confirmation is retried.
 func (s *Service) CreateAutoAlias(ctx context.Context, accountID int64) (createdAlias domain.Alias, resultErr error) {
+	return s.CreateAliasWithChannel(ctx, accountID, "auto")
+}
+
+// CreateAliasWithChannel shares the same publication and reconciliation path
+// for both Apple creation APIs. Only the remote reservation step differs.
+func (s *Service) CreateAliasWithChannel(ctx context.Context, accountID int64, channel string) (createdAlias domain.Alias, resultErr error) {
+	if channel != "auto" && channel != "apple_account" && channel != "icloud_web" {
+		return domain.Alias{}, errors.New("invalid alias creation channel")
+	}
 	currentPercent := autoCreatePreparingPercent
 	pendingConfirmationTracked := false
 	reportProgress := func(phase domain.AliasCreationPhase, percent, attempt int) {
@@ -981,10 +992,13 @@ func (s *Service) CreateAutoAlias(ctx context.Context, accountID int64) (created
 	}
 
 	reportProgress(domain.AliasCreationPhaseReserving, autoCreateReservingPercent, 0)
-	created, updated, createErr := autoClient.CreateAlias(ctx, listedSession, autoCreateLabel, autoCreateNote)
+	created, updated, createErr := s.createRemoteAliasWithChannel(ctx, accountID, listedSession, autoClient, channel)
 	var mappedCreateErr error
 	if createErr != nil {
-		mappedCreateErr = mapAppleError(createErr, false)
+		mappedCreateErr = createErr
+		if Code(createErr) == "" {
+			mappedCreateErr = mapAppleError(createErr, false)
+		}
 	}
 
 	// Once reserve may have reached Apple, a valid generated HME is the durable

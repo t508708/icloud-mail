@@ -321,45 +321,14 @@
             <span>{{ autoCreationErrorMessage(autoCreation.lastError) }}</span>
           </div>
 
-          <div class="manual-creation-row">
-            <div>
-              <strong>手动创建</strong>
-              <p class="field-help">跳过本项目自动调度间隔，实际数量以 Apple 响应为准；停止只取消后续请求。</p>
-              <p v-if="manualAliasProgress.total" class="field-help" aria-live="polite">
-                已完成 {{ manualAliasProgress.completed }}/{{ manualAliasProgress.total }}
-                <span v-if="manualAliasProgress.addresses.length">
-                  ：{{ manualAliasProgress.addresses.join("、") }}
-                </span>
-              </p>
-            </div>
-            <div class="manual-creation-row__actions">
-              <el-input-number
-                v-model="manualAliasCount"
-                :min="1"
-                :max="20"
-                :disabled="manualAliasLoading"
-                :controls="false"
-                aria-label="手动创建数量"
-              />
-              <el-button
-                v-if="manualAliasLoading"
-                :icon="SwitchButton"
-                @click="manualAliasStopRequested = true"
-              >停止后续创建</el-button>
-              <el-button
-                v-else
-                type="primary"
-                :loading="manualAliasLoading"
-                :disabled="!account.enabled || autoCreationControlDisabled || syncLoading || syncActive"
-                @click="createManualAliases"
-              >立即创建</el-button>
-            </div>
-          </div>
-          <RequestAlert
-            v-if="manualAliasError"
-            :error="manualAliasError"
-            closable
-            @close="manualAliasError = null"
+          <AliasCreationPanel
+            :account-id="account.id"
+            :apple-id-hint="appleSession?.appleId || account.email"
+            :account-enabled="account.enabled"
+            :web-authenticated="appleSessionAuthenticated"
+            :csrf-token="auth.state.csrfToken"
+            @busy="(busy) => (manualAliasLoading = busy)"
+            @change="onAliasCreationChange"
           />
         </div>
 
@@ -827,7 +796,6 @@ import {
 
 import {
   createAlias,
-  createAliasNow,
   createRandomAliases,
   deleteAccount,
   deleteAlias,
@@ -846,6 +814,7 @@ import {
   verifyAppleSession,
 } from "../api/admin.js";
 import EmptyState from "../components/EmptyState.vue";
+import AliasCreationPanel from "../components/AliasCreationPanel.vue";
 import ListPagination from "../components/ListPagination.vue";
 import RequestAlert from "../components/RequestAlert.vue";
 import SectionHeader from "../components/SectionHeader.vue";
@@ -871,7 +840,6 @@ import {
 } from "../utils/feedback.js";
 import { formatTime } from "../utils/format.js";
 import { formatIMAPEndpoint, mailboxReceiveRule } from "../utils/imap.js";
-import { runSerialAliasCreation } from "../utils/manualAliasCreation.js";
 import { createLiveRefresh } from "../utils/liveRefresh.js";
 import {
   ALL_PAGE_SIZE,
@@ -914,12 +882,7 @@ const autoCreationLoading = ref(false);
 const randomAliasCount = ref(1);
 const randomAliasLoading = ref(false);
 const randomAliasError = ref(null);
-const manualAliasCount = ref(1);
 const manualAliasLoading = ref(false);
-const manualAliasStopRequested = ref(false);
-const manualAliasProgress = ref({ completed: 0, total: 0, addresses: [] });
-const manualAliasError = ref(null);
-let manualAliasRun = 0;
 const aliasSyncSummary = ref(null);
 const copyLoading = reactive({});
 const toggleLoading = reactive({});
@@ -1204,6 +1167,10 @@ function isCurrentAccount(accountId) {
     route.name === "account-detail" &&
     detailRouteKey() === String(accountId || "")
   );
+}
+
+function onAliasCreationChange(job) {
+  if (job && isCurrentAccount(job.account_id)) loadDetail();
 }
 
 function isAppleSessionInvalid(error) {
@@ -1936,64 +1903,6 @@ async function generateRandomAliases() {
   }
 }
 
-async function createManualAliases() {
-  if (!account.value || manualAliasLoading.value) return;
-  if (!account.value.enabled) {
-    manualAliasError.value = new Error("请先启用主号再创建隐私邮箱");
-    return;
-  }
-  if (!appleSessionAuthenticated.value) {
-    openAppleLogin();
-    return;
-  }
-  const count = Number(manualAliasCount.value);
-  if (!Number.isInteger(count) || count < 1 || count > 20) {
-    manualAliasError.value = new Error("创建数量必须是 1 到 20 之间的整数");
-    return;
-  }
-  const accountId = account.value.id;
-  const run = ++manualAliasRun;
-  const isCurrentRun = () => run === manualAliasRun && isCurrentAccount(accountId);
-  beginDetailMutation();
-  manualAliasLoading.value = true;
-  manualAliasStopRequested.value = false;
-  manualAliasError.value = null;
-  manualAliasProgress.value = { completed: 0, total: count, addresses: [] };
-  try {
-    const result = await runSerialAliasCreation({
-      count,
-      create: () => createAliasNow(accountId, auth.state.csrfToken),
-      shouldContinue: () =>
-        isCurrentRun() &&
-        !manualAliasStopRequested.value,
-      onCreated: (alias, completed) => {
-        if (!isCurrentRun()) return;
-        manualAliasProgress.value = {
-          ...manualAliasProgress.value,
-          completed,
-          addresses: [...manualAliasProgress.value.addresses, alias.address],
-        };
-      },
-    });
-    if (!isCurrentRun()) return;
-    await loadDetail();
-    if (!isCurrentRun()) return;
-    if (result.stopped) {
-      successMessage(`已完成 ${result.completed}/${count} 个，已停止后续创建。`);
-    } else {
-      successMessage(`已创建 ${result.completed} 个隐私邮箱，可通过列表复制完整凭证。`);
-    }
-  } catch (error) {
-    if (!isCurrentRun()) return;
-    manualAliasError.value = error;
-    showRequestError(error, "手动创建隐私邮箱失败，已停止后续创建。");
-    // Preserve the original error while reconciling any completed remote work.
-    await loadDetail();
-  } finally {
-    if (run === manualAliasRun) manualAliasLoading.value = false;
-  }
-}
-
 async function rotateKey(alias) {
   if (
     isAliasConfirmationPending(alias) ||
@@ -2303,11 +2212,7 @@ watch(
       aliasSyncSummary.value = null;
       randomAliasCount.value = 1;
       randomAliasError.value = null;
-      manualAliasStopRequested.value = true;
-      manualAliasRun++;
       manualAliasLoading.value = false;
-      manualAliasError.value = null;
-      manualAliasProgress.value = { completed: 0, total: 0, addresses: [] };
       loadDetail();
     }
   },
@@ -2320,8 +2225,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   viewActive = false;
-  manualAliasStopRequested.value = true;
-  manualAliasRun++;
   liveRefresh.stop();
   detailGate.deactivate();
   detailAbortController?.abort();
@@ -2377,36 +2280,6 @@ onBeforeUnmount(() => {
 
 .mobile-alias-group-select {
   min-width: 150px;
-}
-
-.manual-creation-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
-}
-
-.manual-creation-row p {
-  margin: 4px 0 0;
-}
-
-.manual-creation-row__actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-@media (max-width: 720px) {
-  .manual-creation-row {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .manual-creation-row__actions {
-    justify-content: flex-end;
-  }
 }
 
 @media (max-width: 720px) {

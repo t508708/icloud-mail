@@ -643,11 +643,53 @@ export async function createRandomAliases(accountId, payload, csrfToken) {
   return normalizeRandomAliasResult(data?.data || data || {});
 }
 
+function normalizeAliasCreationJob(raw = {}) {
+  const job = raw && Object.hasOwn(raw, "job") ? raw.job : raw;
+  return job ? {
+    ...job,
+    target: Number(job.target) || 0,
+    completed: Number(job.completed) || 0,
+    status: job.status || "",
+    last_error: job.last_error || "",
+    next_run_at: job.next_run_at || null,
+    entries: Array.isArray(job.entries) ? job.entries : [],
+  } : null;
+}
+
+export async function createAliasCreationJob(accountId, payload, csrfToken) {
+  const data = await apiRequest(`/accounts/${encodeURIComponent(accountId)}/aliases/creation-job`, { method: "POST", body: payload, csrfToken });
+  return normalizeAliasCreationJob(data?.data || data);
+}
+export async function getAliasCreationJob(accountId, csrfToken) {
+  const data = await apiRequest(`/accounts/${encodeURIComponent(accountId)}/aliases/creation-job`, { method: "GET", csrfToken });
+  return normalizeAliasCreationJob(data?.data || data);
+}
+export async function stopAliasCreationJob(accountId, csrfToken) {
+  const data = await apiRequest(`/accounts/${encodeURIComponent(accountId)}/aliases/creation-job/stop`, { method: "POST", body: {}, csrfToken });
+  return normalizeAliasCreationJob(data?.data || data);
+}
+
 export function deleteAccount(id, csrfToken) {
   return apiRequest(`/accounts/${encodeURIComponent(id)}`, {
     method: "DELETE",
     csrfToken,
   });
+}
+
+export async function getAppleAccountAuth(id, csrfToken) {
+  const data = await apiRequest(`/accounts/${encodeURIComponent(id)}/apple-account-auth`, { method: "GET", csrfToken });
+  return appleSessionResult(data?.data || data || {});
+}
+export async function loginAppleAccountAuth(id, payload, csrfToken) {
+  const data = await apiRequest(`/accounts/${encodeURIComponent(id)}/apple-account-auth`, { method: "POST", body: payload, csrfToken });
+  return appleSessionResult(data?.data || data || {});
+}
+export async function verifyAppleAccountAuth(id, payload, csrfToken) {
+  const data = await apiRequest(`/accounts/${encodeURIComponent(id)}/apple-account-auth/verify`, { method: "POST", body: payload, csrfToken });
+  return appleSessionResult(data?.data || data || {});
+}
+export function deleteAppleAccountAuth(id, csrfToken) {
+  return apiRequest(`/accounts/${encodeURIComponent(id)}/apple-account-auth`, { method: "DELETE", csrfToken });
 }
 
 export async function syncAccount(id, csrfToken) {

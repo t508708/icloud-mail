@@ -14,17 +14,25 @@
 
 ## 手动创建 Apple 隐藏邮箱
 
-在「主号管理 → 主号详情 → 自动创建隐私邮箱」填写数量 1-20，点击「立即创建」。
-每个请求实际创建一个 Apple HME 地址，前端串行执行并显示已完成地址；「停止后续创建」保留当前已发出的请求。
-Apple 未登录时先完成登录，再点击创建。遇到限流、网络错误或待确认结果，本轮立即停止且不自动重试。
+在「主号管理 → 主号详情 → 自动创建隐私邮箱」填写数量 1-100（默认 30），选择自动、Apple Account 或 iCloud Web 旧通道后提交后台任务。任务会在页面关闭后继续运行，并显示已完成地址；「停止后续创建」保留进行中的请求和部分进度。
+Apple 未登录时先完成登录，再点击创建。明确限流进入等待；网络错误或待确认结果则停止后续创建，先同步目录确认。
 
 - 手动创建跳过本项目每小时 5 次、至少间隔 5 分钟的自动调度，也不依赖自动开关或库存目标。
 - Apple 上游配额、主号启用状态、邮箱容量和结果确认仍生效。手动与自动共用账号锁。
-- 本次仍使用 iCloud Web 创建通道；Apple Account 新通道调研见 [创建速率调研](HME-LIMITS.md)。
+- 自动通道优先使用 Apple Account，限流时才回落 iCloud Web；明确选择的通道不会自动改变。Apple Account 需要独立登录和 2FA，且仍需旧 Web 登录以同步地址归属。
+- Apple 限流等待至少 61 分钟；任务总时限 24 小时。重启后 interrupted 任务不会自动重发，需人工确认。
 - 成功后从隐私邮箱列表复制完整凭据。若启用自动入池，新邮箱按原入池流程进入库存。
-- 关闭页面会停止后续请求；结果不明时先刷新/同步目录，避免重复提交。
+- 关闭页面不会停止任务；需点击「停止后续创建」。结果不明时先刷新/同步目录，避免重复提交。
 
-管理接口：`POST /admin/api/v1/accounts/ACCOUNT_ID/aliases/create-now`，JSON `{}`。
+后台任务接口（管理员 session Cookie + `X-CSRF-Token`）：
+
+- `POST /admin/api/v1/accounts/ACCOUNT_ID/aliases/creation-job`，JSON `{"count":30,"channel":"auto"}`，返回 `202 {"data":{"job":JOB}}`。
+- `GET` 同路径读取最新任务；没有任务时 `job=null`。
+- `POST` 同路径加 `/stop`，JSON `{}`，停止后续请求；进行中的请求保存结果后进入终态。
+- `GET/POST/DELETE /admin/api/v1/accounts/ACCOUNT_ID/apple-account-auth` 管理新通道会话；`POST .../verify` 提交 challenge_id 和六位 code。
+- 管理会话每 4 分钟尝试保活；会话失效后需重新登录，不自动保存或重放 Apple 密码。
+
+保留旧版单次管理接口：`POST /admin/api/v1/accounts/ACCOUNT_ID/aliases/create-now`，JSON `{}`。
 使用管理员 session Cookie 和 `X-CSRF-Token`，不是邮箱池项目 Key。
 成功返回 `201 {"data":{"alias":ALIAS_DTO}}`，包含完整凭据且 `Cache-Control: no-store`。
 同主号并发手动请求返回 `409 ALIAS_CREATION_BUSY`；Apple 限流返回 `429 APPLE_RATE_LIMITED`，可用时附带 `Retry-After`。

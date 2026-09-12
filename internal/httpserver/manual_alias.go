@@ -114,6 +114,6 @@ func classifyManualAliasError(err error) adminAPIAppleError {
 	case errors.Is(err, hmesync.ErrForwardingTargetMissing):
 		return adminAPIAppleError{Status: http.StatusConflict, Code: hmesync.CodeForwardingTargetMissing, Message: "请先在 Apple 配置隐藏邮箱的默认转发目标"}
 	default:
-		return classifyAdminAPIAppleError(err)
+		return classifyAccountAuthError(err)
 	}
 }

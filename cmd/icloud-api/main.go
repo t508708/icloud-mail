@@ -179,6 +179,9 @@ func run() error {
 	web.SetApplicationLogSource(applicationLogs)
 	web.SetSyncProgressProvider(manager.AccountProgress)
 	web.SetHMESyncService(hmeService)
+	if err := web.StartAliasCreationJobs(workerContext); err != nil {
+		return fmt.Errorf("初始化后台隐私邮箱创建任务: %w", err)
+	}
 	if err := web.StartAliasDeletionJobs(workerContext); err != nil {
 		return fmt.Errorf("初始化后台隐私邮箱删除任务: %w", err)
 	}
@@ -205,7 +208,11 @@ func run() error {
 	}
 
 	var background sync.WaitGroup
-	background.Add(5)
+	background.Add(6)
+	go func() {
+		defer background.Done()
+		web.RunAliasCreationJobs()
+	}()
 	go func() {
 		defer background.Done()
 		web.RunPoolMaintenance(workerContext)
