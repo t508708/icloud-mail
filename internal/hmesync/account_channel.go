@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -13,6 +15,17 @@ import (
 	"icloud-api/internal/domain"
 	"icloud-api/internal/store"
 )
+
+var aliasLabelPrefixes = [...]string{"晨光收件", "星河收件", "清风收件", "远山收件", "微澜收件"}
+
+func newAliasCreationMetadata() (label, note string, err error) {
+	randomBytes := make([]byte, 5)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "", "", err
+	}
+	prefix := aliasLabelPrefixes[int(randomBytes[0])%len(aliasLabelPrefixes)]
+	return prefix + "-" + strings.ToUpper(hex.EncodeToString(randomBytes[1:])), "", nil
+}
 
 const (
 	CodeAccountLoginRequired  = "APPLE_ACCOUNT_LOGIN_REQUIRED"
@@ -260,6 +273,10 @@ func (s *Service) createRemoteAliasWithChannel(ctx context.Context, id int64, we
 }
 
 func (s *Service) createRemoteAliasWithMode(ctx context.Context, id int64, web apple.Session, legacy AutoAliasClient, channel string, probe bool) (apple.Alias, apple.Session, error) {
+	label, note, err := newAliasCreationMetadata()
+	if err != nil {
+		return apple.Alias{}, web, wrapCryptoError(fmt.Errorf("generate alias creation metadata: %w", err))
+	}
 	s.operationMu.Lock()
 	if s.creationCooldowns == nil {
 		s.creationCooldowns = make(map[int64]map[string]time.Time)
@@ -299,14 +316,17 @@ func (s *Service) createRemoteAliasWithMode(ctx context.Context, id int64, web a
 				return alias, web, wrapError(CodeAccountMismatch, ErrAccountMismatch, nil)
 			}
 			var managed apple.AccountSession
-			alias, managed, err = client.CreateAccountAlias(ctx, *web.Account, autoCreateLabel, autoCreateNote)
+			alias, managed, err = client.CreateAccountAlias(ctx, *web.Account, label, note)
 			web.Account = &managed
 			if errors.Is(err, apple.ErrInvalidSession) {
 				// Keep Web authentication available for synchronization and OTP.
 				err = wrapError(CodeAccountSessionExpired, ErrUpstream, err)
 			}
 		} else {
-			alias, web, err = legacy.CreateAlias(ctx, web, autoCreateLabel, autoCreateNote)
+			alias, web, err = legacy.CreateAlias(ctx, web, label, note)
+		}
+		if strings.TrimSpace(alias.HME) != "" && strings.TrimSpace(alias.Label) == "" {
+			alias.Label = label
 		}
 		if probe || err == nil || strings.TrimSpace(alias.HME) != "" || !apple.IsRateLimited(err) {
 			return alias, web, err

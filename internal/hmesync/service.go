@@ -21,8 +21,6 @@ import (
 const (
 	defaultChallengeTTL         = 10 * time.Minute
 	defaultVerificationAttempts = 5
-	autoCreateLabel             = "自动创建"
-	autoCreateNote              = "icloud-api 自动创建"
 	autoCreatePersistTimeout    = 5 * time.Second
 	autoCreateRecoveryTimeout   = 10 * time.Second
 	aliasDeletePersistTimeout   = 5 * time.Second
@@ -1090,7 +1088,10 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 	}
 	label := strings.TrimSpace(created.Label)
 	if label == "" {
-		label = autoCreateLabel
+		label = strings.TrimSpace(address)
+		if at := strings.LastIndexByte(label, '@'); at >= 0 {
+			label = label[:at]
+		}
 	}
 	sessionForConfirmation := updated
 	if !hasAppleSessionState(sessionForConfirmation) {

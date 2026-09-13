@@ -309,6 +309,7 @@ func TestCreateAutoAliasAcceptsMinimalReserveResponseAfterPreflight(t *testing.T
 	now := time.Date(2026, 8, 8, 9, 0, 0, 0, time.UTC)
 	repo := newFakeRepository(domain.Account{ID: 3, Email: "Primary@icloud.com", Enabled: true}, now)
 	var listCalls atomic.Int32
+	var createdLabel string
 	client := &fakeAppleClient{
 		validate: func(_ context.Context, session apple.Session) (apple.Session, error) {
 			return session, nil
@@ -324,14 +325,15 @@ func TestCreateAutoAliasAcceptsMinimalReserveResponseAfterPreflight(t *testing.T
 					HME:            "New-Alias@icloud.com",
 					IsActive:       true,
 					ForwardToEmail: "primary@icloud.com",
-					Label:          autoCreateLabel,
-					Note:           autoCreateNote,
+					Label:          "示例收件",
+					Note:           "",
 				}}
 			}
 			return result, session, nil
 		},
 		create: func(_ context.Context, session apple.Session, label, note string) (apple.Alias, apple.Session, error) {
-			if label != autoCreateLabel || note != autoCreateNote {
+			createdLabel = label
+			if !strings.Contains(label, "-") || strings.Contains(label, "自动创建") || note != "" {
 				t.Fatalf("automatic alias metadata = %q/%q", label, note)
 			}
 			if session.SessionToken != "listed-session-token" {
@@ -348,7 +350,7 @@ func TestCreateAutoAliasAcceptsMinimalReserveResponseAfterPreflight(t *testing.T
 	if err != nil {
 		t.Fatalf("create automatic alias: %v", err)
 	}
-	if created.ID == 0 || created.Address != "new-alias@icloud.com" ||
+	if created.ID == 0 || created.Address != "new-alias@icloud.com" || created.Label != createdLabel ||
 		client.createCalls.Load() != 1 || listCalls.Load() != 2 || repo.creates.Load() != 1 {
 		t.Fatalf("created=%#v lists=%d reserves=%d writes=%d", created, listCalls.Load(), client.createCalls.Load(), repo.creates.Load())
 	}
@@ -453,6 +455,7 @@ func TestCreateAutoAliasRetriesConfirmationUntilReservedAliasAppears(t *testing.
 	now := time.Date(2026, 8, 8, 9, 0, 0, 0, time.UTC)
 	repo := newFakeRepository(domain.Account{ID: 3, Email: "primary@icloud.com", Enabled: true}, now)
 	var listCalls atomic.Int32
+	var createdLabel string
 	client := &fakeAppleClient{
 		validate: func(_ context.Context, session apple.Session) (apple.Session, error) {
 			return session, nil
@@ -485,15 +488,16 @@ func TestCreateAutoAliasRetriesConfirmationUntilReservedAliasAppears(t *testing.
 					HME:            "new-alias@icloud.com",
 					IsActive:       true,
 					ForwardToEmail: "primary@icloud.com",
-					Label:          autoCreateLabel,
-					Note:           autoCreateNote,
+					Label:          "示例收件",
+					Note:           "",
 				}}
 			default:
 				t.Fatalf("unexpected confirmation list call %d", call)
 			}
 			return result, session, nil
 		},
-		create: func(_ context.Context, session apple.Session, _, _ string) (apple.Alias, apple.Session, error) {
+		create: func(_ context.Context, session apple.Session, label, _ string) (apple.Alias, apple.Session, error) {
+			createdLabel = label
 			if session.SessionToken != "preflight-session-token" {
 				t.Fatalf("reserve session token = %q", session.SessionToken)
 			}
@@ -513,7 +517,7 @@ func TestCreateAutoAliasRetriesConfirmationUntilReservedAliasAppears(t *testing.
 	if err != nil {
 		t.Fatalf("create automatic alias after delayed confirmation: %v", err)
 	}
-	if created.ID == 0 || created.Address != "new-alias@icloud.com" ||
+	if created.ID == 0 || created.Address != "new-alias@icloud.com" || created.Label != createdLabel ||
 		listCalls.Load() != 4 || client.createCalls.Load() != 1 || repo.creates.Load() != 1 {
 		t.Fatalf("created=%#v lists=%d reserves=%d writes=%d", created, listCalls.Load(), client.createCalls.Load(), repo.creates.Load())
 	}
@@ -650,7 +654,7 @@ func TestCreateAutoAliasPersistsAndReconcilesPendingConfirmationWithoutAnotherRe
 					HME:            "new-alias@icloud.com",
 					IsActive:       true,
 					ForwardToEmail: "primary@icloud.com",
-					Label:          autoCreateLabel,
+					Label:          "示例收件",
 				}}
 			default:
 				t.Fatalf("unexpected list call %d", call)
@@ -730,8 +734,8 @@ func TestCreateAutoAliasConfirmsMissingReserveForwardFromAuthoritativeList(t *te
 					HME:            "new-alias@icloud.com",
 					IsActive:       true,
 					ForwardToEmail: "other@example.com",
-					Label:          autoCreateLabel,
-					Note:           autoCreateNote,
+					Label:          "示例收件",
+					Note:           "",
 				}}
 			}
 			return result, session, nil
@@ -761,6 +765,7 @@ func TestCreateAutoAliasPreservesRotatedSessionWhenReserveFails(t *testing.T) {
 	now := time.Date(2026, 8, 8, 9, 0, 0, 0, time.UTC)
 	repo := newFakeRepository(domain.Account{ID: 3, Email: "primary@icloud.com", Enabled: true}, now)
 	var listCalls atomic.Int32
+	var createdLabel string
 	client := &fakeAppleClient{
 		validate: func(_ context.Context, session apple.Session) (apple.Session, error) {
 			return session, nil
@@ -771,7 +776,8 @@ func TestCreateAutoAliasPreservesRotatedSessionWhenReserveFails(t *testing.T) {
 			}
 			return apple.ListResult{SelectedForwardTo: "primary@icloud.com"}, session, nil
 		},
-		create: func(_ context.Context, session apple.Session, _, _ string) (apple.Alias, apple.Session, error) {
+		create: func(_ context.Context, session apple.Session, label, _ string) (apple.Alias, apple.Session, error) {
+			createdLabel = label
 			session.SessionToken = "rotated-during-reserve"
 			return apple.Alias{HME: "new-alias@icloud.com"}, session, errors.New("ambiguous reserve failure")
 		},
@@ -795,7 +801,7 @@ func TestCreateAutoAliasPreservesRotatedSessionWhenReserveFails(t *testing.T) {
 		t.Fatalf("reserve failure calls: reserves=%d writes=%d", client.createCalls.Load(), repo.creates.Load())
 	}
 	pending, pendingErr := repo.GetPendingAutoAliasConfirmation(ctx, 3)
-	if pendingErr != nil || pending.Address != "new-alias@icloud.com" || pending.Label != autoCreateLabel {
+	if pendingErr != nil || pending.Address != "new-alias@icloud.com" || pending.Label != createdLabel {
 		t.Fatalf("ambiguous reserve pending alias = %#v, err=%v", pending, pendingErr)
 	}
 }
@@ -805,6 +811,7 @@ func TestCreateAutoAliasPersistsCandidateAfterCallerCancellation(t *testing.T) {
 	now := time.Date(2026, 8, 8, 9, 0, 0, 0, time.UTC)
 	repo := newFakeRepository(domain.Account{ID: 3, Email: "primary@icloud.com", Enabled: true}, now)
 	var listCalls atomic.Int32
+	var createdLabel string
 	client := &fakeAppleClient{
 		validate: func(_ context.Context, session apple.Session) (apple.Session, error) {
 			return session, nil
@@ -815,7 +822,8 @@ func TestCreateAutoAliasPersistsCandidateAfterCallerCancellation(t *testing.T) {
 			}
 			return apple.ListResult{}, session, callContext.Err()
 		},
-		create: func(_ context.Context, session apple.Session, _, _ string) (apple.Alias, apple.Session, error) {
+		create: func(_ context.Context, session apple.Session, label, _ string) (apple.Alias, apple.Session, error) {
+			createdLabel = label
 			session.SessionToken = "reserve-session-token"
 			cancel()
 			return apple.Alias{HME: "new-alias@icloud.com", IsActive: true}, session, nil
@@ -834,7 +842,7 @@ func TestCreateAutoAliasPersistsCandidateAfterCallerCancellation(t *testing.T) {
 			client.createCalls.Load(), repo.creates.Load(), repo.confirms.Load())
 	}
 	pending, pendingErr := repo.GetPendingAutoAliasConfirmation(context.Background(), 3)
-	if pendingErr != nil || pending.Address != "new-alias@icloud.com" || pending.Label != autoCreateLabel {
+	if pendingErr != nil || pending.Address != "new-alias@icloud.com" || pending.Label != createdLabel {
 		t.Fatalf("canceled reserve pending alias = %#v, err=%v", pending, pendingErr)
 	}
 	stored, decryptErr := service.decryptSession(repo.mustSession(t, 3))
