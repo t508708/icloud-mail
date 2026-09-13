@@ -190,6 +190,8 @@ func TestAccountVerifyCodePayloadAndRefresh(t *testing.T) {
 			return accountResp(200, `{"timeOutInterval":30}`), nil
 		case "/account/manage":
 			return accountResp(200, `{"apiKey":"k2"}`), nil
+		case "/account/manage/forwardemail":
+			return accountResp(200, `{}`), nil
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
 			return nil, nil

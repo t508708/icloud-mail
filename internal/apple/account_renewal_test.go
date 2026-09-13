@@ -27,6 +27,11 @@ func TestAccountCreationRefreshesBeforeIdleDeadline(t *testing.T) {
 			}
 			return accountResp(200, `{"apiKey":"renewed-key"}`), nil
 		case 3:
+			if r.URL.Path != "/account/manage/forwardemail" || r.Header.Get("X-Apple-Api-Key") != "renewed-key" {
+				t.Fatal("refresh did not touch the management resource")
+			}
+			return accountResp(200, `{}`), nil
+		case 4:
 			if r.Method != http.MethodPost || r.Header.Get("X-Apple-Api-Key") != "renewed-key" {
 				t.Fatal("creation did not use the renewed API key")
 			}
@@ -37,7 +42,7 @@ func TestAccountCreationRefreshesBeforeIdleDeadline(t *testing.T) {
 	})
 	now := time.Now()
 	alias, session, err := c.CreateAccountAlias(context.Background(), AccountSession{SCNT: "old", APIKey: "old", AuthenticatedAt: now.Add(-14 * time.Minute), ExpiresAt: now.Add(time.Minute)}, "label", "")
-	if err != nil || alias.HME != "renewed@icloud.com" || len(calls) != 4 || !session.ExpiresAt.After(now.Add(14*time.Minute)) || session.RefreshedAt.IsZero() || session.UpdatedAt.IsZero() {
+	if err != nil || alias.HME != "renewed@icloud.com" || len(calls) != 5 || !session.ExpiresAt.After(now.Add(14*time.Minute)) || session.RefreshedAt.IsZero() || session.UpdatedAt.IsZero() {
 		t.Fatalf("renewal flow failed: calls=%v error=%v", calls, err)
 	}
 }

@@ -300,6 +300,12 @@ func (c *Client) RefreshAccountSession(ctx context.Context, s AccountSession) (A
 			return operationError("account API key", ErrInvalidSession, r.status, nil)
 		}
 		s.APIKey = info.APIKey
+		// Touch the management resource after rotating the token/API key. This
+		// mirrors the reference keepalive flow and extends the idle management
+		// session instead of merely fetching a local TTL value.
+		if _, err := c.accountManagementCall(ctx, &s, http.MethodGet, "/account/manage/forwardemail", nil); err != nil {
+			return err
+		}
 		if s.AuthenticatedAt.IsZero() {
 			s.AuthenticatedAt = time.Now().UTC()
 		}

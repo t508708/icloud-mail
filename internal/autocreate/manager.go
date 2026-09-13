@@ -1001,6 +1001,8 @@ func safeAppleOperation(value string) string {
 		"create Hide My Email alias",
 		"account GET /account/manage/gs/ws/token",
 		"account GET /account/manage",
+		"account GET /account/manage/forwardemail",
+		"account refresh backoff",
 		"account POST /account/manage/email/private/add",
 		"account PUT /account/manage/email/private/add/complete",
 		"reserve alias":
