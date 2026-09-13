@@ -112,8 +112,8 @@ test("account detail exposes automatic alias creation with persistent credential
 test("account detail explains account-level suspension and automatic restoration", async () => {
   const source = await readFile(viewPath, "utf8");
   assert.match(source, /v-if="!account\.enabled" class="account-paused-notice"/);
-  assert.match(source, /下属邮箱显示为暂停并暂停分配，同时移出邮箱池可分配库存/);
-  assert.match(source, /按停用前快照恢复原启用及池成员状态/);
+  assert.match(source, /下属邮箱从隐藏邮箱列表和邮箱池入池候选中隐藏/);
+  assert.match(source, /恢复邮箱列表显示，并按停用前快照恢复原启用及池成员状态/);
   assert.match(source, /单独停用的邮箱仍保持停用/);
   assert.match(source, /邮箱与历史记录未删除/);
 });

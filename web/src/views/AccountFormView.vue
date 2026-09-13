@@ -145,7 +145,7 @@
           <div class="switch-field">
             <div>
               <strong>启用主号同步</strong>
-              <p>停用后下属邮箱显示为暂停并暂停分配，移出邮箱池可分配库存；重新启用按停用前状态恢复，不删除邮箱或领取历史。</p>
+              <p>停用后隐藏邮箱列表不显示下属邮箱，邮箱池入池候选也隐藏；重新启用后恢复显示及原池状态，不删除邮箱或领取历史。</p>
             </div>
             <el-switch
               v-model="form.enabled"
@@ -439,7 +439,7 @@ async function submit() {
 
     if (isEdit.value && storedEnabled.value && !form.enabled) {
       await ElMessageBox.confirm(
-        "停用会暂停此主号的收件连接；下属邮箱显示为暂停并暂停分配，同时从邮箱池可分配库存中移出。重新启用后，按停用前快照恢复原启用及池成员状态；原本单独停用的邮箱仍保持停用。不会删除邮箱、邮件或领取历史。",
+        "停用会暂停此主号的收件连接，并从隐藏邮箱列表和邮箱池入池候选中隐藏下属邮箱。重新启用后，恢复邮箱列表显示，并按停用前快照恢复原启用及池成员状态；原本单独停用的邮箱仍保持停用。不会删除邮箱、邮件或领取历史。",
         "确认停用主号",
         { type: "warning", confirmButtonText: "停用主号", cancelButtonText: "取消" },
       );
@@ -473,7 +473,7 @@ async function submit() {
     form.imapPassword = "";
     successMessage(
       isEdit.value && !form.enabled
-        ? "主号已停用；收件已暂停，下属邮箱显示为暂停并移出可分配库存，停用前状态及历史记录保留。"
+        ? "主号已停用；收件已暂停，下属邮箱已从隐藏邮箱列表和入池候选中隐藏，原状态及历史记录保留。"
         : isEdit.value
           ? "主号设置已保存。"
           : "主号已添加。",

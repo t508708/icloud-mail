@@ -6,7 +6,7 @@
     <SectionHeader
       id="accounts-section-title"
       title="邮箱主号"
-      description="隐私邮箱通过所属主号的 IMAP 收取邮件。停用主号会暂停收件；下属邮箱显示为暂停并暂停分配，同时移出邮箱池可分配库存。重新启用按停用前快照恢复原启用及池成员状态；邮箱和历史记录保留。"
+      description="隐私邮箱通过所属主号的 IMAP 收取邮件。停用主号会暂停收件，并从隐藏邮箱列表及邮箱池入池候选中隐藏下属邮箱。重新启用恢复邮箱列表显示，并按停用前快照恢复原启用及池成员状态；邮箱和历史记录保留。"
     >
       <template #actions>
         <el-tooltip content="刷新主号列表" placement="bottom">

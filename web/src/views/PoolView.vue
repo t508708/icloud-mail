@@ -383,7 +383,7 @@ grant_type=refresh_token&amp;client_id=CLIENT_ID&amp;refresh_token=REFRESH_TOKEN
         :close-on-press-escape="!enrollSubmitting"
       >
         <p>
-          选择确认可分配的邮箱加入池中。列表支持分页浏览全部邮箱，也可以搜索地址定位。
+          选择启用主号下已确认且凭据完整、当前可分配的邮箱加入池中。列表支持分页浏览，也可以搜索地址定位。
         </p>
         <RequestAlert v-if="error" :error="error" closable @close="error = null" />
         <p v-if="enrollProgress" class="pool-hint">{{ enrollProgress }}</p>
@@ -765,7 +765,7 @@ async function loadEnroll({ includeAccounts = false } = {}) {
   error.value = null;
   try {
     const [result, accountList] = await Promise.all([
-      getAliasPage("", { query: enrollSearch.value, limit: enrollPageSize, offset: (enrollPage.value - 1) * enrollPageSize, signal: scope.signal }),
+      getAliasPage("", { query: enrollSearch.value, enabled: true, limit: enrollPageSize, offset: (enrollPage.value - 1) * enrollPageSize, signal: scope.signal }),
       includeAccounts ? getAllAccounts({ signal: scope.signal }) : Promise.resolve(null),
     ]);
     if (!scope.current()) return;

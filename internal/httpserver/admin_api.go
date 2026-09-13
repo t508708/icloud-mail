@@ -1276,9 +1276,10 @@ func (s *Server) adminAPIAccountDetailPage(
 		return adminAPIAccountDetailDTO{}, err
 	}
 	page, err := s.store.ListAliasesPage(ctx, store.AliasListFilter{
-		AccountID: &id,
-		Limit:     limit,
-		Offset:    offset,
+		AccountID:           &id,
+		OnlyEnabledAccounts: true,
+		Limit:               limit,
+		Offset:              offset,
 	})
 	if err != nil {
 		return adminAPIAccountDetailDTO{}, err
@@ -1296,7 +1297,8 @@ func (s *Server) adminAPIAccountDetailPage(
 		return adminAPIAccountDetailDTO{}, err
 	}
 	accountDTO := s.adminAPIAccountFromDomain(account)
-	accountDTO.AliasCount = page.Total
+	// Parent suspension hides list entries, not their persisted ownership.
+	// Preserve the actual count for the account form's identity lock.
 	return adminAPIAccountDetailDTO{
 		Account:      accountDTO,
 		Aliases:      aliasDTOs,
@@ -1650,15 +1652,16 @@ func (s *Server) adminAPIListAliases(c *gin.Context) {
 		}
 	}
 	page, err := s.store.ListAliasesPage(c.Request.Context(), store.AliasListFilter{
-		AccountID:         accountID,
-		Enabled:           enabled,
-		GroupID:           groupID,
-		Ungrouped:         groupUngrouped,
-		WithLatestMail:    withLatestMail,
-		WithoutLatestMail: withoutLatestMail,
-		Query:             query,
-		Limit:             limit,
-		Offset:            offset,
+		AccountID:           accountID,
+		OnlyEnabledAccounts: true,
+		Enabled:             enabled,
+		GroupID:             groupID,
+		Ungrouped:           groupUngrouped,
+		WithLatestMail:      withLatestMail,
+		WithoutLatestMail:   withoutLatestMail,
+		Query:               query,
+		Limit:               limit,
+		Offset:              offset,
 	})
 	if err != nil {
 		s.writeAdminAPIInternalError(c, err)

@@ -163,7 +163,7 @@
 
         <div v-if="!account.enabled" class="account-paused-notice" role="status">
           <strong>主号已停用</strong>
-          <span>收件连接已暂停；下属邮箱显示为暂停并暂停分配，同时移出邮箱池可分配库存。重新启用后按停用前快照恢复原启用及池成员状态；单独停用的邮箱仍保持停用。邮箱与历史记录未删除。</span>
+          <span>收件连接已暂停；下属邮箱从隐藏邮箱列表和邮箱池入池候选中隐藏。重新启用后恢复邮箱列表显示，并按停用前快照恢复原启用及池成员状态；单独停用的邮箱仍保持停用。邮箱与历史记录未删除。</span>
         </div>
 
         <details class="settings-disclosure">

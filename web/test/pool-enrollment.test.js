@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { mergePoolPageSelection, poolAliasSelectable, submitPoolEnrollment } from "../src/utils/poolEnrollment.js";
+
+test("existing mailbox enrollment pages request server-filtered effective enabled aliases", async () => {
+  const source = await readFile(new URL("../src/views/PoolView.vue", import.meta.url), "utf8");
+  assert.match(source, /getAliasPage\("", \{ query: enrollSearch\.value, enabled: true, limit: enrollPageSize, offset: \(enrollPage\.value - 1\) \* enrollPageSize/);
+  assert.match(source, /enrollTotal\.value = result\.total/);
+  assert.match(source, /poolAliasSelectable\(row, enabledAccountIds\.value\)/);
+});
 
 test("page selection preserves other pages and supports unchecking current rows", () => {
   const first = [{ id: 1 }, { id: 2 }];

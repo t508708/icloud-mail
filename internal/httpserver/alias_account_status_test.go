@@ -94,9 +94,62 @@ func TestAliasListFollowsPrimaryStatusWithoutChangingIndividualSwitches(t *testi
 			if rows := list("true"); len(rows) != 0 {
 				t.Fatal("disabled primary still has effectively enabled aliases")
 			}
-			if rows := list("false"); len(rows) != 2 {
-				t.Fatal("disabled filter lost parent-paused aliases")
+			if rows := list("false"); len(rows) != 0 {
+				t.Fatal("disabled filter displayed aliases from a disabled primary")
+			}
+			if rows := list(""); len(rows) != 0 {
+				t.Fatal("unfiltered list displayed aliases from a disabled primary")
 			}
 		}
+		detail, err := env.server.adminAPIAccountDetail(ctx, account.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantVisible := 0
+		if enabled {
+			wantVisible = 2
+		}
+		if len(detail.Aliases) != wantVisible || detail.Pagination["total"] != wantVisible || detail.Account.AliasCount != 2 {
+			t.Fatalf("parent=%v detail items=%d total=%v owned=%d", enabled, len(detail.Aliases), detail.Pagination["total"], detail.Account.AliasCount)
+		}
+	}
+}
+
+func TestPoolEnrollmentBlocksStaleSelectionFromDisabledPrimary(t *testing.T) {
+	env := newAdminAPITestEnv(t)
+	ctx := context.Background()
+	first := adminAPITestCreateAccount(t, env, "enrollment-first@icloud.com")
+	second := adminAPITestCreateAccount(t, env, "enrollment-second@icloud.com")
+	firstAlias, _ := createV2AliasFixture(t, env, first.ID, "enrollment-available@icloud.com")
+	secondAlias, _ := createV2AliasFixture(t, env, second.ID, "enrollment-paused@icloud.com")
+	second.Enabled = false
+	if _, err := env.store.UpdateAccount(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf, _ := env.createSession(t, "enrollment-admin", "password")
+	body, err := json.Marshal(map[string]any{"alias_ids": []int64{firstAlias.ID, secondAlias.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func() int {
+		return env.request(t, http.MethodPost, "/admin/api/v1/pool/members", body, "application/json", []*http.Cookie{cookie}, csrf).Code
+	}
+	if code := request(); code != http.StatusConflict {
+		t.Fatalf("stale enrollment status=%d, want 409", code)
+	}
+	page, err := env.store.ListPoolMembers(ctx, "", "", 50, 0)
+	if err != nil || page.Total != 0 {
+		t.Fatalf("mixed invalid batch partially enrolled: total=%d err=%v", page.Total, err)
+	}
+	second.Enabled = true
+	if _, err := env.store.UpdateAccount(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	if code := request(); code != http.StatusOK {
+		t.Fatalf("reenabled enrollment status=%d, want 200", code)
+	}
+	page, err = env.store.ListPoolMembers(ctx, "", "", 50, 0)
+	if err != nil || page.Total != 2 {
+		t.Fatalf("reenabled enrollment total=%d err=%v", page.Total, err)
 	}
 }

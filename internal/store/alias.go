@@ -31,15 +31,16 @@ const aliasJoins = `
 	LEFT JOIN mail_groups mg ON mg.id = al.group_id`
 
 type AliasListFilter struct {
-	AccountID         *int64
-	Enabled           *bool
-	GroupID           *int64
-	Ungrouped         bool
-	WithLatestMail    bool
-	WithoutLatestMail bool
-	Query             string
-	Limit             int
-	Offset            int
+	AccountID           *int64
+	OnlyEnabledAccounts bool
+	Enabled             *bool
+	GroupID             *int64
+	Ungrouped           bool
+	WithLatestMail      bool
+	WithoutLatestMail   bool
+	Query               string
+	Limit               int
+	Offset              int
 }
 
 type AliasPage struct {
@@ -219,6 +220,9 @@ func (s *Store) ListAliasesPage(ctx context.Context, filter AliasListFilter) (Al
 
 	var predicates []string
 	var filterArgs []any
+	if filter.OnlyEnabledAccounts {
+		predicates = append(predicates, `EXISTS (SELECT 1 FROM accounts ac WHERE ac.id = al.account_id AND ac.enabled = TRUE)`)
+	}
 	if filter.AccountID != nil {
 		if *filter.AccountID < 1 {
 			return AliasPage{}, errors.New("list aliases page: account ID must be positive")
