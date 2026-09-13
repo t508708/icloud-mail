@@ -6,3 +6,11 @@
 - 分配任务时明确具体文件和职责，避免覆盖共享工作区中的改动；对于紧密依赖的小步骤，不为形式拆分任务。
 - 这是项目级持久偏好，后续会话沿用；用户当轮指令优先。
 - 不在项目记忆中写入任何令牌、密码或当前业务部署细节。
+
+## 构建与测试运维
+
+- 重任务统一通过 `flock .local/project-heavy.lock <command>` 排队；禁止主机 Go 全套测试与 Docker/Vite 构建同时运行。发起下一重任务前先等待前一个任务结束。
+- Go 默认使用 `GOMAXPROCS=2 GOMEMLIMIT=512MiB go test -p 1 -parallel 2`；Node 测试使用 `node --test --test-concurrency=2`。`GOMEMLIMIT` 是 Go 运行时软目标，不是进程或整机的硬内存上限。
+- 若 `MemAvailable < 2GiB` 或 `load1 > 8`，先等待，不启动重任务。
+- 子代理可并行进行只读审查；heavy 构建、测试和部署统一由 root 排队调度。
+- 规则仅约束本项目任务，不停止其他会话或服务。
