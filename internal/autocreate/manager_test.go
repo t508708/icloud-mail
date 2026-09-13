@@ -765,7 +765,7 @@ func TestActualAttemptGapIsEnforcedWhenClockPollsEarly(t *testing.T) {
 	manager := newManagerForTest(t, repo, clock, nil)
 	enableForTest(t, manager, 7)
 	// Poll one second before the per-account minimum interval elapses.
-	lastAttempt := now.Add(-10*time.Minute + time.Second)
+	lastAttempt := now.Add(-MinimumInterval + time.Second)
 	current := repo.schedules[7]
 	current.LastAttemptedAt = timePtr(lastAttempt)
 	current.NextRunAt = timePtr(now)

@@ -20,10 +20,12 @@ import (
 
 type manualAliasFake struct {
 	fakeHMESyncService
-	create func(context.Context, int64) (domain.Alias, error)
+	create  func(context.Context, int64) (domain.Alias, error)
+	channel string
 }
 
-func (f *manualAliasFake) CreateAutoAlias(ctx context.Context, id int64) (domain.Alias, error) {
+func (f *manualAliasFake) ProbeAliasWithChannel(ctx context.Context, id int64, channel string) (domain.Alias, error) {
+	f.channel = channel
 	return f.create(ctx, id)
 }
 
@@ -115,7 +117,7 @@ func TestManualAliasRateLimitAndBusyRelease(t *testing.T) {
 	}}
 	env.server.SetHMESyncService(fake)
 	first := manualAliasRequest(t, env, account.ID, cookie, csrf)
-	if first.Code != http.StatusTooManyRequests || first.Header().Get("Retry-After") != "86400" {
+	if first.Code != http.StatusTooManyRequests || first.Header().Get("Retry-After") != "7" {
 		t.Fatalf("rate response=%d retry=%q", first.Code, first.Header().Get("Retry-After"))
 	}
 	mu.Lock()
@@ -130,6 +132,31 @@ func TestManualAliasRateLimitAndBusyRelease(t *testing.T) {
 	mu.Unlock()
 	if got != 2 {
 		t.Fatalf("calls=%d", got)
+	}
+}
+
+func TestManualProbeChannelAndWaitingBatchAreIndependent(t *testing.T) {
+	env := newAdminAPITestEnv(t)
+	account := adminAPITestCreateAccount(t, env, "probe-batch@icloud.com")
+	alias, _ := createV2AliasFixture(t, env, account.ID, "probe-batch-created@icloud.com")
+	cookie, csrf, _ := env.createSession(t, "probe-batch-admin", "password")
+	calls := 0
+	fake := &manualAliasFake{create: func(context.Context, int64) (domain.Alias, error) { calls++; return alias, nil }}
+	env.server.SetHMESyncService(fake)
+	env.server.manualAliasesRunning = map[int64]bool{account.ID: true}
+	path := fmt.Sprintf("/admin/api/v1/accounts/%d/aliases/create-now", account.ID)
+	for _, channel := range []string{"auto", "apple_account", "icloud_web"} {
+		response := env.request(t, http.MethodPost, path, adminAPITestJSON(t, map[string]string{"channel": channel}), "application/json", []*http.Cookie{cookie}, csrf)
+		if response.Code != http.StatusCreated || fake.channel != channel {
+			t.Fatalf("probe channel=%s got=%s response=%d", channel, fake.channel, response.Code)
+		}
+		if !env.server.manualAliasesRunning[account.ID] {
+			t.Fatal("probe cleared batch ownership")
+		}
+	}
+	response := env.request(t, http.MethodPost, path, []byte(`{"channel":"invalid"}`), "application/json", []*http.Cookie{cookie}, csrf)
+	if response.Code != http.StatusBadRequest || calls != 3 {
+		t.Fatalf("invalid probe: %d calls=%d", response.Code, calls)
 	}
 }
 
@@ -156,7 +183,7 @@ func TestManualAliasBudgetWaitUsesLocal429AndRetryAfter(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Error.Code != "APPLE_CREATION_BUDGET_WAIT" || !strings.Contains(payload.Error.Message, "本地主号创建预算") {
+	if payload.Error.Code != "APPLE_CREATION_BUDGET_WAIT" || !strings.Contains(payload.Error.Message, "手动探测独立额度") {
 		t.Fatalf("budget response body = %s", response.Body.String())
 	}
 }

@@ -30,8 +30,8 @@ func startCreationJobTest(t *testing.T, env *adminAPITestEnv) {
 	if err := env.server.StartAliasCreationJobs(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if env.server.aliasCreationJobs.interval != 10*time.Minute {
-		t.Fatalf("production success interval=%v, want 10m", env.server.aliasCreationJobs.interval)
+	if env.server.aliasCreationJobs.interval != 2*time.Minute {
+		t.Fatalf("production success interval=%v, want 2m", env.server.aliasCreationJobs.interval)
 	}
 	env.server.aliasCreationJobs.interval = time.Millisecond
 	t.Cleanup(func() { cancel(); env.server.aliasCreationJobs.wg.Wait() })

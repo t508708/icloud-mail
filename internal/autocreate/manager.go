@@ -22,12 +22,12 @@ import (
 )
 
 const (
-	// CreationsPerCycle is this project's conservative hourly ceiling, not an
+	// CreationsPerCycle is this project's configured hourly ceiling, not an
 	// Apple-published quota or guarantee.
-	CreationsPerCycle = 5
+	CreationsPerCycle = domain.AppleCreationHourlyLimit
 
 	// MinimumInterval is the smallest permitted interval between attempts.
-	MinimumInterval = 10 * time.Minute
+	MinimumInterval = domain.AppleCreationMinInterval
 
 	// CycleDuration is the duration covered by one generated plan.
 	CycleDuration = time.Hour
@@ -261,7 +261,7 @@ func (m *Manager) UpgradeCadence(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
-	return upgrader.UpgradeAliasCreationCadence(ctx, "conservative-5-per-hour-v2", m.now(), m.newPlan)
+	return upgrader.UpgradeAliasCreationCadence(ctx, "25-per-hour-independent-probes-v3", m.now(), m.newPlan)
 }
 
 // GetSchedule returns a persisted schedule. An absent row means the feature
@@ -825,8 +825,8 @@ func (m *Manager) newPlanStartingAt(first time.Time) ([]time.Time, error) {
 	return planned, nil
 }
 
-// generatePlan spreads five deadlines across an hour. Gaps are randomized
-// in seconds, at least ten minutes, and total exactly one hour.
+// generatePlan spreads the configured deadlines across an hour. Randomized
+// gaps respect MinimumInterval and total exactly one hour.
 func generatePlan(anchor time.Time, random RandomSource) ([]time.Time, error) {
 	if random == nil {
 		return nil, errors.New("random source is required")

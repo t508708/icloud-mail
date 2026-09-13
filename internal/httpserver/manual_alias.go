@@ -18,7 +18,7 @@ import (
 
 // Optional for embedders; the production HME service already implements this.
 type manualAliasCreator interface {
-	CreateAutoAlias(context.Context, int64) (domain.Alias, error)
+	ProbeAliasWithChannel(context.Context, int64, string) (domain.Alias, error)
 }
 
 func (s *Server) adminAPICreateAppleAlias(c *gin.Context) {
@@ -26,8 +26,17 @@ func (s *Server) adminAPICreateAppleAlias(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var input struct{}
+	var input struct {
+		Channel string `json:"channel"`
+	}
 	if !decodeAdminAPIJSON(c, &input) {
+		return
+	}
+	if input.Channel == "" {
+		input.Channel = "auto"
+	}
+	if input.Channel != "auto" && input.Channel != "apple_account" && input.Channel != "icloud_web" {
+		writeAdminAPIError(c, http.StatusBadRequest, "VALIDATION_FAILED", "请选择有效的创建通道")
 		return
 	}
 	account, err := s.store.GetAccount(c.Request.Context(), accountID)
@@ -50,19 +59,19 @@ func (s *Server) adminAPICreateAppleAlias(c *gin.Context) {
 	}
 	// Reject concurrent manual clicks instead of queuing another remote reserve.
 	s.manualAliasMu.Lock()
-	if s.manualAliasesRunning[accountID] {
+	if s.manualProbesRunning[accountID] {
 		s.manualAliasMu.Unlock()
 		writeAdminAPIError(c, http.StatusConflict, "ALIAS_CREATION_BUSY", "这个主号正在手动创建，请等待当前操作完成")
 		return
 	}
-	if s.manualAliasesRunning == nil {
-		s.manualAliasesRunning = make(map[int64]bool)
+	if s.manualProbesRunning == nil {
+		s.manualProbesRunning = make(map[int64]bool)
 	}
-	s.manualAliasesRunning[accountID] = true
+	s.manualProbesRunning[accountID] = true
 	s.manualAliasMu.Unlock()
 	defer func() {
 		s.manualAliasMu.Lock()
-		delete(s.manualAliasesRunning, accountID)
+		delete(s.manualProbesRunning, accountID)
 		s.manualAliasMu.Unlock()
 	}()
 
@@ -70,9 +79,12 @@ func (s *Server) adminAPICreateAppleAlias(c *gin.Context) {
 	// locks and persists uncertain reserve results for later confirmation.
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
 	defer cancel()
-	alias, err := creator.CreateAutoAlias(ctx, accountID)
+	alias, err := creator.ProbeAliasWithChannel(ctx, accountID, input.Channel)
 	if err != nil {
 		apiErr := classifyManualAliasError(err)
+		if isAppleCreationBudgetWait(err) {
+			apiErr.Message = "手动探测独立额度正在等待恢复，不影响后台自动计划"
+		}
 		if delay := manualAliasRetryDelay(err); delay > 0 {
 			c.Header("Retry-After", strconv.FormatInt(int64((delay+time.Second-1)/time.Second), 10))
 		}
@@ -135,7 +147,7 @@ func manualAliasRetryDelay(err error) time.Duration {
 		}
 	}
 	if errors.Is(err, hmesync.ErrRateLimited) || apple.IsRateLimited(err) {
-		return max(24*time.Hour, apple.RetryDelay(err))
+		return apple.RetryDelay(err)
 	}
 	return apple.RetryDelay(err)
 }

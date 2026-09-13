@@ -1,26 +1,28 @@
 <template>
   <div class="creation-job-panel">
     <h2 id="batch-creation-title" class="creation-job-panel__title">批量创建隐私邮箱</h2>
-    <span class="creation-job-panel__budget-short">5 次/小时 · 20 次/日</span>
+    <span class="creation-job-panel__budget-short">滚动 1 小时 25 次 · 间隔至少 2 分钟</span>
     <div class="creation-job-panel__apple">
       <el-tag :type="appleAuthenticated ? 'success' : 'info'" title="新通道登录状态">新通道：{{ appleAuthenticated ? '已登录' : '未登录' }}</el-tag>
-      <el-button v-if="!appleAuthenticated" :disabled="active || !webAuthenticated || appleLoading" @click="openLogin">登录 Apple Account</el-button>
-      <el-button v-else :disabled="active || appleLoading" @click="clearApple">退出新通道</el-button>
+      <el-button v-if="!appleAuthenticated" :disabled="active || probing || !webAuthenticated || appleLoading" @click="openLogin">登录 Apple Account</el-button>
+      <el-button v-else :disabled="active || probing || appleLoading" @click="clearApple">退出新通道</el-button>
     </div>
     <div class="creation-job-panel__controls">
       <el-input-number v-model="count" :min="1" :max="100" :controls="false" aria-label="创建数量" :disabled="active || starting" />
-      <el-select v-model="channel" aria-label="创建通道" :disabled="active || starting">
+      <el-select v-model="channel" aria-label="创建通道" :disabled="job?.status === 'running' || starting || probing">
         <el-option label="自动（初始选择通道）" value="auto" />
         <el-option label="Apple Account 新通道" value="apple_account" />
         <el-option label="iCloud Web 旧通道" value="icloud_web" />
       </el-select>
+      <el-button :loading="probing" :disabled="probing || starting || job?.status === 'running' || !ready || !accountEnabled || !webAuthenticated || appleLoading" @click="probe">手动探测 1 个</el-button>
       <el-button v-if="active" :loading="stopping" @click="stop">停止后续创建</el-button>
-      <el-button v-else type="primary" :loading="starting" :disabled="!ready || !accountEnabled || !webAuthenticated || appleLoading" @click="start">开始批量创建</el-button>
+      <el-button v-else type="primary" :loading="starting" :disabled="probing || !ready || !accountEnabled || !webAuthenticated || appleLoading" @click="start">开始批量创建</el-button>
       <el-button v-if="!ready" :loading="loading" @click="load">重新读取状态</el-button>
     </div>
+    <RequestAlert v-if="probeError" :error="probeError" :message="probeErrorMessage(probeError)" :type="probeError.code === 'APPLE_RATE_LIMITED' || probeError.code === 'APPLE_CREATION_BUDGET_WAIT' ? 'info' : 'error'" closable @close="probeError = null" />
     <details class="creation-job-panel__budget-details">
       <summary>创建节奏与等待说明</summary>
-      <p>每主号手动与自动创建共用本地预算：滚动 1 小时最多 5 次、24 小时最多 20 次，尝试至少间隔 10 分钟；失败及待确认尝试也计数。自动只选择本轮初始通道，不因限流切换。Apple 明确限流后暂停至少 24 小时。本地上限不是 Apple 官方配额保证。100 次至少需要 5 天预算窗口；任务生命周期为 7 天。</p>
+      <p>后台批量与自动创建共享本地预算：滚动 1 小时最多 25 次，尝试至少间隔 2 分钟；手动单次探测使用独立同等额度，不消耗后台额度，也不受后台 Apple 24 小时冷却阻挡，且不修改后台冷却或计划。失败及待确认尝试也计数。自动只选择本轮初始通道，不因限流切换。本地上限不是 Apple 官方配额保证；任务生命周期为 7 天。</p>
     </details>
     <RequestAlert v-if="error && !appleVisible" :error="error" closable @close="error = null" />
     <div v-if="job && active" class="creation-job-panel__status" aria-live="polite">
@@ -52,7 +54,8 @@
 
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { createAliasCreationJob, getAliasCreationJob, stopAliasCreationJob, getAppleAccountAuth, loginAppleAccountAuth, verifyAppleAccountAuth, deleteAppleAccountAuth } from "../api/admin.js";
+import { createAliasCreationJob, createAliasNow, getAliasCreationJob, stopAliasCreationJob, getAppleAccountAuth, loginAppleAccountAuth, verifyAppleAccountAuth, deleteAppleAccountAuth } from "../api/admin.js";
+import { ElMessage } from "element-plus";
 import RequestAlert from "./RequestAlert.vue";
 import { formatTime } from "../utils/format.js";
 
@@ -60,6 +63,7 @@ const props = defineProps({ accountId: { type: [Number, String], required: true 
 const emit = defineEmits(["busy", "change"]);
 const count = ref(5), channel = ref("auto"), job = ref(null);
 const starting = ref(false), stopping = ref(false), loading = ref(false), ready = ref(false), error = ref(null);
+const probing = ref(false), probeError = ref(null);
 const appleVisible = ref(false), appleLoading = ref(false), appleStep = ref("login"), appleSession = ref(null);
 const appleId = ref(""), applePassword = ref(""), region = ref("global"), code = ref(""), challengeId = ref("");
 let timer, alive = true, generation = 0, jobRequest = 0, sessionRequest = 0;
@@ -79,6 +83,12 @@ function jobErrorMessage(value) {
   if (isAppleRateLimited(value)) return "Apple 返回限流；该通道暂停至少 24 小时，不会自动切换通道。";
   return value;
 }
+function probeErrorMessage(error) {
+  const message = String(error?.message || error || "");
+  if (error?.code === "APPLE_CREATION_BUDGET_WAIT") return "手动探测独立额度正在等待恢复；后台额度与计划保持不变。";
+  if (error?.code === "APPLE_RATE_LIMITED") return "本次手动探测仍被 Apple 限流；后台冷却与计划保持不变，本次不自动重试。";
+  return message;
+}
 function isLocalBudgetWait(value) {
   const message = String(value || "");
   return message.toUpperCase().includes("APPLE_CREATION_BUDGET_WAIT") || message.includes("本地主号创建预算已用尽");
@@ -87,7 +97,7 @@ function isAppleRateLimited(value) {
   const message = String(value || "");
   return message.toUpperCase().includes("APPLE_RATE_LIMITED") || message.includes("Apple 请求被限流") || message.includes("Apple 请求过于频繁") || message.includes("Apple 返回了限流");
 }
-watch(() => active.value || starting.value || appleLoading.value, busy => emit("busy", busy));
+watch(() => active.value || starting.value || probing.value || appleLoading.value, busy => emit("busy", busy));
 watch(() => `${job.value?.id}:${job.value?.completed}:${job.value?.status}`, () => {
   if (!active.value) stopping.value = false;
   if (job.value) emit("change", job.value);
@@ -114,7 +124,7 @@ async function load() {
   finally { if (current()) { loading.value = false; schedule(); } }
 }
 async function start() {
-  if (starting.value || active.value || !ready.value) return;
+  if (starting.value || probing.value || active.value || !ready.value) return;
   const n = Number(count.value);
   if (!Number.isInteger(n) || n < 1 || n > 100) { error.value = new Error("数量应为 1-100 的整数"); return; }
   if (channel.value === "apple_account" && !appleAuthenticated.value) { openLogin(); return; }
@@ -122,6 +132,21 @@ async function start() {
   try { const next = await createAliasCreationJob(props.accountId, { count: n, channel: channel.value }, props.csrfToken); if (current()) job.value = next; }
   catch (e) { if (current()) { error.value = e; await poll(); } }
   finally { if (current()) { starting.value = false; schedule(); } }
+}
+async function probe() {
+  if (probing.value || starting.value || !ready.value || job.value?.status === "running" || !props.accountEnabled || !props.webAuthenticated || appleLoading.value) return;
+  if (channel.value === "apple_account" && !appleAuthenticated.value) { openLogin(); return; }
+  const current = guard(); probing.value = true; probeError.value = null;
+  try {
+    await createAliasNow(props.accountId, props.csrfToken, channel.value);
+    if (!current()) return; emit("change", { account_id: props.accountId }); ElMessage.success("手动探测成功，邮箱已加入列表");
+  } catch (e) {
+    if (current()) {
+      probeError.value = e;
+      if (e?.code === "APPLE_ALIAS_CONFIRMATION_PENDING" || e?.code === "ALIAS_CREATED_DETAILS_PENDING") emit("change", { account_id: props.accountId });
+    }
+  }
+  finally { if (current()) probing.value = false; }
 }
 async function stop() {
   if (!active.value || stopping.value) return;
@@ -163,6 +188,7 @@ async function clearApple() {
 watch(() => props.accountId, () => {
   generation++; clearTimeout(timer); job.value = null; ready.value = false; appleSession.value = null;
   starting.value = false; stopping.value = false; appleLoading.value = false; appleVisible.value = false;
+  probing.value = false; probeError.value = null;
   applePassword.value = ""; code.value = ""; error.value = null; load();
 }, { immediate: true });
 watch(() => props.webAuthenticated, () => load());

@@ -350,6 +350,16 @@ export function normalizeAutoCreation(raw = {}) {
     Number.isSafeInteger(recentCreatedCountRaw) && recentCreatedCountRaw >= 0
       ? recentCreatedCountRaw
       : null;
+  const todayCreatedCountRaw = firstDefined(
+    value,
+    "today_created_count",
+    "todayCreatedCount",
+    "TodayCreatedCount",
+  );
+  const todayCreatedCount =
+    Number.isSafeInteger(todayCreatedCountRaw) && todayCreatedCountRaw >= 0
+      ? todayCreatedCountRaw
+      : null;
   return {
     enabled: Boolean(firstDefined(value, "enabled", "Enabled")),
     status: firstDefined(value, "status", "Status") || "",
@@ -358,8 +368,11 @@ export function normalizeAutoCreation(raw = {}) {
     plannedAt,
     plannedTimes,
     recentCreatedCount,
+    todayCreatedCount,
     recentCreatedSince:
       firstDefined(value, "recent_created_since", "recentCreatedSince", "RecentCreatedSince") || null,
+    todayCreatedSince:
+      firstDefined(value, "today_created_since", "todayCreatedSince", "TodayCreatedSince") || null,
     lastAttemptedAt:
       firstDefined(
         value,
@@ -929,10 +942,10 @@ export async function createAlias(accountId, payload, csrfToken) {
   );
 }
 
-export async function createAliasNow(accountId, csrfToken) {
+export async function createAliasNow(accountId, csrfToken, channel = "auto") {
   const data = await apiRequest(
     `/accounts/${encodeURIComponent(accountId)}/aliases/create-now`,
-    { method: "POST", body: {}, csrfToken },
+    { method: "POST", body: { channel }, csrfToken },
   );
   return normalizeAlias(data?.alias || data || {});
 }

@@ -9,7 +9,7 @@ import (
 	"icloud-api/internal/domain"
 )
 
-func TestScheduleUsesFiveSlotsAcrossOneHour(t *testing.T) {
+func TestScheduleUsesTwentyFiveSlotsAcrossOneHour(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	repo := newFakeRepository()
 	m, err := New(repo, func(context.Context, int64) (domain.Alias, error) { return domain.Alias{}, nil }, slog.Default(), WithClock(func() time.Time { return now }), WithRandom(fixedRandom(0)))
@@ -20,7 +20,7 @@ func TestScheduleUsesFiveSlotsAcrossOneHour(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(s.PlannedAt) != 5 {
+	if len(s.PlannedAt) != 25 {
 		t.Fatalf("slots=%d", len(s.PlannedAt))
 	}
 	if span := s.PlannedAt[len(s.PlannedAt)-1].Sub(now); span != time.Hour {
@@ -28,14 +28,14 @@ func TestScheduleUsesFiveSlotsAcrossOneHour(t *testing.T) {
 	}
 	previous := now
 	for i, deadline := range s.PlannedAt {
-		if gap := deadline.Sub(previous); gap < 10*time.Minute {
+		if gap := deadline.Sub(previous); gap < 2*time.Minute {
 			t.Fatalf("gap[%d]=%v", i, gap)
 		}
 		previous = deadline
 	}
 }
 
-func TestMultipleAccountsEachHaveIndependentFiveSlotPlans(t *testing.T) {
+func TestMultipleAccountsEachHaveIndependentTwentyFiveSlotPlans(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	repo := newFakeRepository()
 	m, err := New(repo, func(context.Context, int64) (domain.Alias, error) { return domain.Alias{}, nil }, slog.Default(), WithClock(func() time.Time { return now }), WithRandom(fixedRandom(0)))
@@ -47,7 +47,7 @@ func TestMultipleAccountsEachHaveIndependentFiveSlotPlans(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		if len(s.PlannedAt) != 5 {
+		if len(s.PlannedAt) != 25 {
 			t.Fatalf("account %d slots=%d", id, len(s.PlannedAt))
 		}
 	}

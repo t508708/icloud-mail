@@ -59,18 +59,18 @@ func TestAppleCreationBudgetRollingHourlyDailyAndMinInterval(t *testing.T) {
 	if err := db.ClaimAppleCreationAttempt(ctx, account.ID, start); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.ClaimAppleCreationAttempt(ctx, account.ID, start.Add(5*time.Minute)); !isAppleBudgetWait(err) {
+	if err := db.ClaimAppleCreationAttempt(ctx, account.ID, start.Add(store.AppleCreationMinInterval-time.Second)); !isAppleBudgetWait(err) {
 		t.Fatalf("claim inside minimum interval = %v, want budget wait", err)
 	}
 	for attempt := 1; attempt < store.AppleCreationHourlyLimit; attempt++ {
-		if err := db.ClaimAppleCreationAttempt(ctx, account.ID, start.Add(time.Duration(attempt)*10*time.Minute)); err != nil {
+		if err := db.ClaimAppleCreationAttempt(ctx, account.ID, start.Add(time.Duration(attempt)*store.AppleCreationMinInterval)); err != nil {
 			t.Fatalf("hourly attempt %d: %v", attempt+1, err)
 		}
 	}
-	hourlyWaitAt := start.Add(50 * time.Minute)
+	hourlyWaitAt := start.Add(time.Duration(store.AppleCreationHourlyLimit) * store.AppleCreationMinInterval)
 	err := db.ClaimAppleCreationAttempt(ctx, account.ID, hourlyWaitAt)
 	if !isAppleBudgetWait(err) || !budgetUntil(err).Equal(start.Add(time.Hour)) {
-		t.Fatalf("sixth rolling-hour claim = %v, until=%v; want wait until %v", err, budgetUntil(err), start.Add(time.Hour))
+		t.Fatalf("rolling-hour overflow claim = %v, until=%v; want wait until %v", err, budgetUntil(err), start.Add(time.Hour))
 	}
 	var hourlyBudgetErr *store.AppleCreationBudgetError
 	if !errors.As(err, &hourlyBudgetErr) {
@@ -84,16 +84,18 @@ func TestAppleCreationBudgetRollingHourlyDailyAndMinInterval(t *testing.T) {
 	}
 
 	dailyAccount := createAccount(t, ctx, db, "Daily budget", "daily-budget@icloud.com")
+	dailyStep := 24 * time.Hour / time.Duration(store.AppleCreationDailyLimit)
 	for attempt := 0; attempt < store.AppleCreationDailyLimit; attempt++ {
-		at := start.Add(time.Duration(attempt) * time.Hour)
+		at := start.Add(time.Duration(attempt) * dailyStep)
 		if err := db.ClaimAppleCreationAttempt(ctx, dailyAccount.ID, at); err != nil {
 			t.Fatalf("daily attempt %d: %v", attempt+1, err)
 		}
 	}
 	dailyWaitUntil := start.Add(24 * time.Hour)
-	err = db.ClaimAppleCreationAttempt(ctx, dailyAccount.ID, start.Add(20*time.Hour))
+	lastDailyAttempt := start.Add(time.Duration(store.AppleCreationDailyLimit-1) * dailyStep)
+	err = db.ClaimAppleCreationAttempt(ctx, dailyAccount.ID, lastDailyAttempt.Add(store.AppleCreationMinInterval))
 	if !isAppleBudgetWait(err) || !budgetUntil(err).Equal(dailyWaitUntil) {
-		t.Fatalf("21st rolling-day claim = %v, until=%v; want wait until %v", err, budgetUntil(err), dailyWaitUntil)
+		t.Fatalf("rolling-day overflow claim = %v, until=%v; want wait until %v", err, budgetUntil(err), dailyWaitUntil)
 	}
 	if err := db.ClaimAppleCreationAttempt(ctx, dailyAccount.ID, dailyWaitUntil); err != nil {
 		t.Fatalf("claim after oldest daily attempt expired: %v", err)
@@ -108,7 +110,7 @@ func TestAppleCreationBudgetIsAccountScopedAndDisabledAccountConsumesNothing(t *
 	second := createAccount(t, ctx, db, "Budget two", "budget-two@icloud.com")
 	now := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
 	for i := 0; i < store.AppleCreationHourlyLimit; i++ {
-		if err := db.ClaimAppleCreationAttempt(ctx, first.ID, now.Add(time.Duration(i)*10*time.Minute)); err != nil {
+		if err := db.ClaimAppleCreationAttempt(ctx, first.ID, now.Add(time.Duration(i)*store.AppleCreationMinInterval)); err != nil {
 			t.Fatalf("claim first-account attempt %d: %v", i+1, err)
 		}
 	}
@@ -165,7 +167,7 @@ func TestAppleCreationBudgetOverfullHistoryWaitsForEnoughExpirations(t *testing.
 		}
 	}
 	err := db.ClaimAppleCreationAttempt(ctx, account.ID, now)
-	want := now.Add(24*time.Hour - 20*time.Minute)
+	want := now.Add(time.Hour - time.Duration(store.AppleCreationHourlyLimit)*time.Minute)
 	if !isAppleBudgetWait(err) || !budgetUntil(err).Equal(want) {
 		t.Fatalf("overfull history deadline=%v, want %v", budgetUntil(err), want)
 	}

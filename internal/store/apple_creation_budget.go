@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"icloud-api/internal/domain"
 )
 
 const (
-	AppleCreationHourlyLimit = 5
-	AppleCreationDailyLimit  = 20
-	AppleCreationMinInterval = 10 * time.Minute
+	AppleCreationHourlyLimit = domain.AppleCreationHourlyLimit
+	AppleCreationDailyLimit  = domain.AppleCreationDailyLimit
+	AppleCreationMinInterval = domain.AppleCreationMinInterval
 
 	appleCreationHourWindow = time.Hour
 	appleCreationDayWindow  = 24 * time.Hour
@@ -45,6 +47,10 @@ func (e *AppleCreationBudgetError) RetryDelay() time.Duration {
 
 func (s *Store) migrateAppleCreationBudget(ctx context.Context, tx *sql.Tx) error {
 	for _, statement := range []string{
+		`CREATE TABLE IF NOT EXISTS apple_creation_probe_attempts (
+			account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+			attempted_at BIGINT NOT NULL,
+			PRIMARY KEY (account_id, attempted_at))`,
 		`CREATE TABLE IF NOT EXISTS apple_creation_attempts (
 			account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
 			attempted_at BIGINT NOT NULL,
@@ -88,6 +94,16 @@ func (s *Store) migrateAppleCreationBudget(ctx context.Context, tx *sql.Tx) erro
 // ClaimAppleCreationAttempt atomically checks and consumes one account's
 // shared Apple alias-creation budget. Failed upstream attempts remain charged.
 func (s *Store) ClaimAppleCreationAttempt(ctx context.Context, accountID int64, now time.Time) error {
+	return s.claimAppleCreationAttempt(ctx, accountID, now, false)
+}
+
+// Manual probes have their own attempt ledger and do not consume, clear or
+// extend the background creation budget and Apple cooldown.
+func (s *Store) ClaimAppleCreationProbe(ctx context.Context, accountID int64, now time.Time) error {
+	return s.claimAppleCreationAttempt(ctx, accountID, now, true)
+}
+
+func (s *Store) claimAppleCreationAttempt(ctx context.Context, accountID int64, now time.Time, probe bool) error {
 	if accountID < 1 || now.IsZero() {
 		return errors.New("claim Apple creation attempt: account ID and time are required")
 	}
@@ -108,19 +124,24 @@ func (s *Store) ClaimAppleCreationAttempt(ctx context.Context, accountID int64, 
 		return ErrAccountDisabled
 	}
 
+	// Table names are fixed internal identifiers, never request input.
+	attemptTable := "apple_creation_attempts"
 	var cooldownUntil int64
-	err = s.txQueryRowContext(ctx, tx,
-		`SELECT until_at FROM apple_creation_cooldowns WHERE account_id = ?`, accountID,
-	).Scan(&cooldownUntil)
-	hasCooldown := err == nil
-	if err != nil && err != sql.ErrNoRows {
-		return fmt.Errorf("read Apple creation cooldown: %w", err)
+	if probe {
+		attemptTable = "apple_creation_probe_attempts"
+	} else {
+		err = s.txQueryRowContext(ctx, tx,
+			`SELECT until_at FROM apple_creation_cooldowns WHERE account_id = ?`, accountID,
+		).Scan(&cooldownUntil)
+		if err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("read Apple creation cooldown: %w", err)
+		}
 	}
 	var hourlyCount, dailyCount int
 	var oldestHourly, oldestDaily, latestAttempt sql.NullInt64
 	if err := s.txQueryRowContext(ctx, tx, `
 		SELECT COUNT(*), MIN(attempted_at), MAX(attempted_at)
-		FROM (SELECT attempted_at FROM apple_creation_attempts
+		FROM (SELECT attempted_at FROM `+attemptTable+`
 		WHERE account_id = ? AND attempted_at > ?
 		ORDER BY attempted_at DESC LIMIT ?) budget_window`,
 		accountID, timestamp(now.Add(-appleCreationHourWindow)), AppleCreationHourlyLimit,
@@ -129,7 +150,7 @@ func (s *Store) ClaimAppleCreationAttempt(ctx context.Context, accountID int64, 
 	}
 	if err := s.txQueryRowContext(ctx, tx, `
 		SELECT COUNT(*), MIN(attempted_at)
-		FROM (SELECT attempted_at FROM apple_creation_attempts
+		FROM (SELECT attempted_at FROM `+attemptTable+`
 		WHERE account_id = ? AND attempted_at > ?
 		ORDER BY attempted_at DESC LIMIT ?) budget_window`,
 		accountID, timestamp(now.Add(-appleCreationDayWindow)), AppleCreationDailyLimit,
@@ -138,7 +159,7 @@ func (s *Store) ClaimAppleCreationAttempt(ctx context.Context, accountID int64, 
 	}
 
 	var waitUntil time.Time
-	if hasCooldown && cooldownUntil > timestamp(now) {
+	if cooldownUntil > timestamp(now) {
 		waitUntil = timeFromTimestamp(cooldownUntil)
 	}
 	if hourlyCount >= AppleCreationHourlyLimit && oldestHourly.Valid {
@@ -160,13 +181,13 @@ func (s *Store) ClaimAppleCreationAttempt(ctx context.Context, accountID int64, 
 	}
 
 	if _, err := s.txExecContext(ctx, tx,
-		`DELETE FROM apple_creation_attempts WHERE account_id = ? AND attempted_at <= ?`,
+		`DELETE FROM `+attemptTable+` WHERE account_id = ? AND attempted_at <= ?`,
 		accountID, timestamp(now.Add(-appleCreationDayWindow)),
 	); err != nil {
 		return fmt.Errorf("expire Apple creation attempts: %w", err)
 	}
 	if _, err := s.txExecContext(ctx, tx, `
-		INSERT INTO apple_creation_attempts(account_id, attempted_at) VALUES (?, ?)`,
+		INSERT INTO `+attemptTable+`(account_id, attempted_at) VALUES (?, ?)`,
 		accountID, timestamp(now)); err != nil {
 		return fmt.Errorf("record Apple creation attempt: %w", err)
 	}

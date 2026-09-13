@@ -521,6 +521,16 @@ func (s *Service) CreateAutoAlias(ctx context.Context, accountID int64) (created
 // CreateAliasWithChannel shares the same publication and reconciliation path
 // for both Apple creation APIs. Only the remote reservation step differs.
 func (s *Service) CreateAliasWithChannel(ctx context.Context, accountID int64, channel string) (createdAlias domain.Alias, resultErr error) {
+	return s.createAliasWithChannel(ctx, accountID, channel, false)
+}
+
+// ProbeAliasWithChannel runs one user-triggered attempt without changing the
+// background cooldown or schedule. Publication and account gates are identical.
+func (s *Service) ProbeAliasWithChannel(ctx context.Context, accountID int64, channel string) (domain.Alias, error) {
+	return s.createAliasWithChannel(ctx, accountID, channel, true)
+}
+
+func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, channel string, probe bool) (createdAlias domain.Alias, resultErr error) {
 	if channel != "auto" && channel != "apple_account" && channel != "icloud_web" {
 		return domain.Alias{}, errors.New("invalid alias creation channel")
 	}
@@ -678,9 +688,17 @@ func (s *Service) CreateAliasWithChannel(ctx context.Context, accountID int64, c
 		return domain.Alias{}, expireAutoSession(wrapError(CodeSessionExpired, ErrSessionExpired,
 			errors.New("stored Apple session omitted the account identifier")))
 	}
-	// Claim before the first upstream request. All entry points and channels
-	// share this durable attempt budget, including failed confirmation attempts.
-	if budget, ok := s.repo.(appleCreationBudgetRepository); ok {
+	// Claim before the first upstream request. Manual probes use a separate
+	// ledger; background jobs share a budget across channels and schedulers.
+	if probe {
+		budget, ok := s.repo.(appleCreationProbeRepository)
+		if !ok {
+			return domain.Alias{}, errors.New("manual probe persistence is unavailable")
+		}
+		if err := budget.ClaimAppleCreationProbe(ctx, accountID, s.now()); err != nil {
+			return domain.Alias{}, err
+		}
+	} else if budget, ok := s.repo.(appleCreationBudgetRepository); ok {
 		if err := budget.ClaimAppleCreationAttempt(ctx, accountID, s.now()); err != nil {
 			if errors.Is(err, store.ErrAccountDisabled) {
 				return domain.Alias{}, wrapError(CodeAccountDisabled, ErrAccountDisabled, err)
@@ -1016,7 +1034,7 @@ func (s *Service) CreateAliasWithChannel(ctx context.Context, accountID int64, c
 	}
 
 	reportProgress(domain.AliasCreationPhaseReserving, autoCreateReservingPercent, 0)
-	created, updated, createErr := s.createRemoteAliasWithChannel(ctx, accountID, listedSession, autoClient, channel)
+	created, updated, createErr := s.createRemoteAliasWithMode(ctx, accountID, listedSession, autoClient, channel, probe)
 	var mappedCreateErr error
 	if createErr != nil {
 		mappedCreateErr = createErr

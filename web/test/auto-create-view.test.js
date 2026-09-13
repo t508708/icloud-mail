@@ -48,6 +48,11 @@ test("account detail exposes automatic alias creation with persistent credential
   assert.match(source, /resumeAutoCreationAfterAuth/);
   assert.match(source, /autoCreation\.plannedTimes\?\.length/);
   assert.match(source, /autoCreation\.plannedAt/);
+  assert.match(source, /近 1 小时成功/);
+  assert.match(source, /今日成功/);
+  assert.match(source, /今日按服务时区/);
+  assert.match(source, /return "限流冷却中"/);
+  assert.doesNotMatch(source, /最近成功 \$\{item\.recentCreatedCount\} 个后限流/);
   assert.doesNotMatch(source, /getAliasAutoCreationKeys/);
   assert.doesNotMatch(source, /clearAliasAutoCreationKeys/);
   assert.doesNotMatch(source, /pendingAutoKeys|batchSecrets|OneTimeSecret/);

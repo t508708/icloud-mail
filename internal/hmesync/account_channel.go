@@ -251,6 +251,10 @@ func (s *Service) ClearAccountAuth(ctx context.Context, id int64) error {
 // Called under the account operation lock. Both APIs share the cooldown;
 // a throttled or uncertain completion never changes channels.
 func (s *Service) createRemoteAliasWithChannel(ctx context.Context, id int64, web apple.Session, legacy AutoAliasClient, channel string) (apple.Alias, apple.Session, error) {
+	return s.createRemoteAliasWithMode(ctx, id, web, legacy, channel, false)
+}
+
+func (s *Service) createRemoteAliasWithMode(ctx context.Context, id int64, web apple.Session, legacy AutoAliasClient, channel string, probe bool) (apple.Alias, apple.Session, error) {
 	s.operationMu.Lock()
 	if s.creationCooldowns == nil {
 		s.creationCooldowns = make(map[int64]map[string]time.Time)
@@ -273,7 +277,7 @@ func (s *Service) createRemoteAliasWithChannel(ctx context.Context, id int64, we
 		if webUntil := cooldowns["icloud_web"]; webUntil.After(until) {
 			until = webUntil
 		}
-		if s.now().Before(until) {
+		if !probe && s.now().Before(until) {
 			if earliest.IsZero() || until.Before(earliest) {
 				earliest = until
 			}
@@ -299,7 +303,7 @@ func (s *Service) createRemoteAliasWithChannel(ctx context.Context, id int64, we
 		} else {
 			alias, web, err = legacy.CreateAlias(ctx, web, autoCreateLabel, autoCreateNote)
 		}
-		if err == nil || strings.TrimSpace(alias.HME) != "" || !apple.IsRateLimited(err) {
+		if probe || err == nil || strings.TrimSpace(alias.HME) != "" || !apple.IsRateLimited(err) {
 			return alias, web, err
 		}
 		until = s.now().Add(max(24*time.Hour, apple.RetryDelay(err)))

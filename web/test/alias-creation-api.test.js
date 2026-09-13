@@ -9,6 +9,7 @@ import {
   loginAppleAccountAuth,
   verifyAppleAccountAuth,
   deleteAppleAccountAuth,
+  createAliasNow,
 } from "../src/api/admin.js";
 
 function response(data, status = 200) {
@@ -27,6 +28,13 @@ test("alias creation job API preserves null and normalizes job fields", async ()
   assert.equal(job.target, 30); assert.equal(job.completed, 2); assert.equal(job.entries[0].alias_id, 9);
   assert.match(requests[1].url, /accounts\/a%2Fb\/aliases\/creation-job$/);
   assert.equal(requests[1].options.headers.get("X-CSRF-Token"), "csrf");
+});
+
+test("single alias probe sends csrf and channel once", async () => {
+  let calls = 0;
+  globalThis.fetch = async (url, options) => { calls += 1; assert.match(url, /create-now$/); assert.deepEqual(JSON.parse(options.body), { channel: "apple_account" }); assert.equal(options.headers.get("X-CSRF-Token"), "csrf"); return response({ alias: { id: 1, address: "a@icloud.com" } }, 201); };
+  const alias = await createAliasNow("a/b", "csrf", "apple_account");
+  assert.equal(alias.id, 1); assert.equal(calls, 1);
 });
 
 test("Apple Account API sends credentials and normalizes session result", async () => {

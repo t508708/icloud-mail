@@ -293,8 +293,10 @@
               </div>
               <div class="auto-creation-panel__status-line">
                 <span>最近尝试 {{ formatTime(autoCreation.lastAttemptedAt, { seconds: true }) }}</span>
-                <span v-if="autoCreation.recentCreatedCount !== null">
-                  最近成功 {{ autoCreation.recentCreatedCount }} 个
+                <span v-if="autoCreation.recentCreatedCount !== null || autoCreation.todayCreatedCount !== null" title="已确认创建；手动、批量、自动创建汇总；今日按服务时区">
+                  <span v-if="autoCreation.recentCreatedCount !== null">近 1 小时成功 {{ autoCreation.recentCreatedCount }} 个</span>
+                  <span v-if="autoCreation.recentCreatedCount !== null && autoCreation.todayCreatedCount !== null"> · </span>
+                  <span v-if="autoCreation.todayCreatedCount !== null">今日成功 {{ autoCreation.todayCreatedCount }} 个</span>
                 </span>
               </div>
             </div>
@@ -314,7 +316,7 @@
           <details class="settings-disclosure">
             <summary>计划详情</summary>
             <p>
-              每主号共享本地预算：滚动 1 小时最多 5 次、24 小时最多 20 次，尝试至少间隔 10 分钟；失败和待确认尝试也计数，手动与自动创建共用。自动只选择本轮初始通道，限流后不会切换通道。Apple 明确限流后暂停至少 24 小时。这是本项目的保守上限，不代表 Apple 官方配额保证；一次多件请使用上方批量任务。
+              后台批量与自动创建共享本地预算：滚动 1 小时最多 25 次，尝试至少间隔 2 分钟；手动探测使用独立同等额度，不消耗后台额度，也不受后台 Apple 24 小时冷却阻挡，且不修改后台冷却或计划。失败和待确认尝试也计数。自动只选择本轮初始通道，限流后不会切换通道。Apple 明确限流后暂停至少 24 小时。这是本项目的保守上限，不代表 Apple 官方配额保证；一次多件请使用上方批量任务。
             </p>
             <dl class="auto-creation-metrics">
             <div>
@@ -343,9 +345,13 @@
               <dt>最近尝试</dt>
               <dd>{{ formatTime(autoCreation.lastAttemptedAt, { seconds: true }) }}</dd>
             </div>
-            <div>
-              <dt>近 1 小时创建</dt>
+            <div title="已确认创建；手动、批量、自动创建汇总；今日按服务时区">
+              <dt>近 1 小时成功</dt>
               <dd>{{ autoCreation.recentCreatedCount === null ? '—' : `${autoCreation.recentCreatedCount} 个` }}</dd>
+            </div>
+            <div title="已确认创建；手动、批量、自动创建汇总；今日按服务时区">
+              <dt>今日成功</dt>
+              <dd>{{ autoCreation.todayCreatedCount === null ? '—' : `${autoCreation.todayCreatedCount} 个` }}</dd>
             </div>
             </dl>
           </details>
@@ -1277,7 +1283,7 @@ function autoCreationStatusLabel(item) {
   if (account.value && !account.value.enabled) return "主号已停用";
   if (!item?.enabled) return "已关闭";
   if (isAutoCreationRateLimited(item)) {
-    return item.recentCreatedCount == null ? "限流冷却中" : `最近成功 ${item.recentCreatedCount} 个后限流`;
+    return "限流冷却中";
   }
   switch (normalizedAutoCreationStatus(item)) {
     case "running":

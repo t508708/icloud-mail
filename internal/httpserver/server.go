@@ -48,6 +48,7 @@ type Server struct {
 	poolMu               sync.Mutex
 	manualAliasMu        sync.Mutex
 	manualAliasesRunning map[int64]bool
+	manualProbesRunning  map[int64]bool
 	aliasCreationJobs    aliasCreationJobRuntime
 	aliasDeletionJobs    aliasDeletionJobRuntime
 	// beforeCredentialRotationLock is a deterministic test seam. Production

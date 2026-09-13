@@ -27,7 +27,7 @@ type aliasCreationJobRuntime struct {
 }
 
 const (
-	aliasCreationJobInterval = 10 * time.Minute
+	aliasCreationJobInterval = domain.AppleCreationMinInterval
 	aliasCreationJobLifetime = 7 * 24 * time.Hour
 )
 

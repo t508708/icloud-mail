@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"icloud-api/internal/domain"
@@ -59,7 +60,9 @@ func (s *Store) UpgradeAliasCreationCadence(ctx context.Context, version string,
 		}
 		// A failed previous attempt can carry a server Retry-After. Do not
 		// erase that deadline merely because local frequency has increased.
-		if schedule.LastError != "" && schedule.NextRunAt != nil && schedule.NextRunAt.After(anchor) {
+		localBudgetWait := strings.Contains(schedule.LastError, "APPLE_CREATION_BUDGET_WAIT") ||
+			strings.Contains(schedule.LastError, "本地主号创建预算已用尽")
+		if schedule.LastError != "" && !localBudgetWait && schedule.NextRunAt != nil && schedule.NextRunAt.After(anchor) {
 			anchor = *schedule.NextRunAt
 		}
 		planned, err := plan(anchor)

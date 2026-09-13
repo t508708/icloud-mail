@@ -213,6 +213,8 @@ type adminAPIAutoCreationDTO struct {
 	LastAliasAddress   string   `json:"last_alias_address"`
 	RecentCreatedCount int      `json:"recent_created_count"`
 	RecentCreatedSince string   `json:"recent_created_since"`
+	TodayCreatedCount  int      `json:"today_created_count"`
+	TodayCreatedSince  string   `json:"today_created_since"`
 	LastError          string   `json:"last_error"`
 	PendingKeyCount    int      `json:"pending_key_count"`
 	PendingKeyTotal    int      `json:"pending_auto_created_key_count"`
@@ -1328,16 +1330,29 @@ func (s *Server) adminAPIAutoCreation(ctx context.Context, accountID int64, appl
 	if err != nil {
 		return nil, err
 	}
-	now := s.now().UTC()
-	since := now.Add(-time.Hour)
-	recent, err := s.store.CountRecentAliasCreations(ctx, accountID, since, now)
+	recent, recentSince, today, todaySince, err := s.adminAPIAutoCreationCounts(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
 	result := adminAPIAutoCreationFromSchedule(schedule, appleStatus, pending)
 	result.RecentCreatedCount = recent
-	result.RecentCreatedSince = adminAPITime(since)
+	result.RecentCreatedSince = adminAPITime(recentSince)
+	result.TodayCreatedCount = today
+	result.TodayCreatedSince = adminAPITime(todaySince)
 	return result, nil
+}
+
+func (s *Server) adminAPIAutoCreationCounts(ctx context.Context, accountID int64) (int, time.Time, int, time.Time, error) {
+	now := s.now().UTC()
+	recentSince := now.Add(-time.Hour)
+	localNow := now.In(time.Local)
+	todaySince := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, time.Local).UTC()
+	recent, err := s.store.CountRecentAliasCreations(ctx, accountID, recentSince, now)
+	if err != nil {
+		return 0, recentSince, 0, todaySince, err
+	}
+	today, err := s.store.CountRecentAliasCreations(ctx, accountID, todaySince, now)
+	return recent, recentSince, today, todaySince, err
 }
 
 func (s *Server) adminAPICreateAlias(basePath string) gin.HandlerFunc {
@@ -1495,9 +1510,10 @@ func (s *Server) adminAPISetAliasAutoCreation(c *gin.Context) {
 		return
 	}
 	dto := adminAPIAutoCreationFromSchedule(schedule, appleStatus, pending)
-	now := time.Now().UTC()
-	dto.RecentCreatedSince = adminAPITime(now.Add(-time.Hour))
-	dto.RecentCreatedCount, err = s.store.CountRecentAliasCreations(c.Request.Context(), accountID, now.Add(-time.Hour), now)
+	recent, recentSince, today, todaySince, countErr := s.adminAPIAutoCreationCounts(c.Request.Context(), accountID)
+	dto.RecentCreatedCount, dto.RecentCreatedSince = recent, adminAPITime(recentSince)
+	dto.TodayCreatedCount, dto.TodayCreatedSince = today, adminAPITime(todaySince)
+	err = countErr
 	if err != nil {
 		s.writeAdminAPIInternalError(c, err)
 		return

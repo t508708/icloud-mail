@@ -100,3 +100,36 @@ func TestUpgradeAliasCreationCadencePlannerRollback(t *testing.T) {
 		t.Fatal("planner was not retried")
 	}
 }
+
+func TestUpgradeAliasCreationCadenceRechecksOnlyLocalBudgetWait(t *testing.T) {
+	for _, message := range []string{"APPLE_CREATION_BUDGET_WAIT", "本地主号创建预算已用尽，冷却后将自动继续", "APPLE_RATE_LIMITED"} {
+		t.Run(message, func(t *testing.T) {
+			s := openAliasDeletionJobTestStore(t, ":memory:")
+			ctx := context.Background()
+			a, err := s.CreateAccount(ctx, domain.Account{Name: "cadence", Email: "cadence@icloud.com", IMAPHost: "imap", IMAPPort: 993, Enabled: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC()
+			until := now.Add(24 * time.Hour)
+			if err := s.EnableAliasCreation(ctx, a.ID, []time.Time{until}, now); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.RecordAliasCreationFailure(ctx, a.ID, now, message); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.UpgradeAliasCreationCadence(ctx, "25-test", now, func(anchor time.Time) ([]time.Time, error) {
+				want := now
+				if message == "APPLE_RATE_LIMITED" {
+					want = until
+				}
+				if !anchor.Equal(want) {
+					t.Fatalf("anchor=%v want=%v", anchor, want)
+				}
+				return []time.Time{anchor.Add(2 * time.Minute)}, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
