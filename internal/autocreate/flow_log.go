@@ -723,6 +723,7 @@ func isAllowedAliasCreationErrorCode(code string) bool {
 		"APPLE_VERIFICATION_INVALID",
 		"APPLE_FLOW_EXPIRED",
 		"APPLE_ACCOUNT_ACTION_REQUIRED",
+		"APPLE_HME_AUTH_FAILED",
 		"APPLE_RATE_LIMITED",
 		"APPLE_CREATION_BUDGET_WAIT",
 		"APPLE_UPSTREAM_ERROR",
@@ -756,7 +757,7 @@ func aliasCreationErrorClass(code string) string {
 		return "crypto"
 	case code == "CONTEXT_CANCELED" || code == "CONTEXT_DEADLINE_EXCEEDED":
 		return "context"
-	case code == "APPLE_ACCOUNT_ACTION_REQUIRED" || code == "APPLE_ACCOUNT_MISMATCH" || code == "IMAP_AUTHENTICATION_PAUSED" ||
+	case code == "APPLE_ACCOUNT_ACTION_REQUIRED" || code == "APPLE_HME_AUTH_FAILED" || code == "APPLE_ACCOUNT_MISMATCH" || code == "IMAP_AUTHENTICATION_PAUSED" ||
 		code == "APPLE_FORWARDING_TARGET_MISSING" ||
 		code == "ACCOUNT_CHANGED" || code == "ALIAS_OWNERSHIP_CONFLICT" || code == "ACCOUNT_DISABLED":
 		return "account_state"
@@ -858,6 +859,8 @@ func aliasCreationErrorReason(code string) string {
 		return "Apple 登录验证流程已过期，请重新登录 Apple 账户"
 	case "APPLE_ACCOUNT_ACTION_REQUIRED":
 		return "Apple 账户需要完成条款确认或其他账户操作"
+	case "APPLE_HME_AUTH_FAILED":
+		return "Apple 账户已通过验证，但隐藏邮箱目录未接受此会话；登录状态已保留，自动创建已暂停，请检查 iCloud 网页的隐藏邮箱服务"
 	case "APPLE_RATE_LIMITED":
 		return "Apple 请求被限流，当前周期剩余计划槽已跳过，冷却后会继续执行"
 	case "APPLE_CREATION_BUDGET_WAIT":

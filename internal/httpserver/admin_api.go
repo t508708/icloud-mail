@@ -68,6 +68,7 @@ func (s *Server) registerAdminAPIRoutes(api *gin.RouterGroup) {
 	protected.PUT("/accounts/:id", s.adminAPIUpdateAccount)
 	protected.DELETE("/accounts/:id", s.adminAPIDeleteAccount)
 	protected.POST("/accounts/:id/sync", s.adminAPISyncAccount)
+	protected.PUT("/accounts/:id/mail-transport", s.adminAPISetMailTransport)
 	protected.POST("/accounts/:id/apple-auth", s.adminAPIStartAppleAuth)
 	protected.POST("/accounts/:id/apple-auth/verify", s.adminAPIVerifyAppleAuth)
 	protected.DELETE("/accounts/:id/apple-auth", s.adminAPIClearAppleAuth)
@@ -194,12 +195,13 @@ type adminAPIAuditLogDTO struct {
 }
 
 type adminAPIAccountDetailDTO struct {
-	Account      adminAPIAccountDTO       `json:"account"`
-	Aliases      []adminAPIAliasDTO       `json:"aliases"`
-	Pagination   gin.H                    `json:"pagination"`
-	AppleSession *adminAPIAppleSessionDTO `json:"apple_session"`
-	AutoCreation *adminAPIAutoCreationDTO `json:"auto_creation"`
-	SyncPending  bool                     `json:"sync_pending,omitempty"`
+	MailTransport string                   `json:"mail_transport"`
+	Account       adminAPIAccountDTO       `json:"account"`
+	Aliases       []adminAPIAliasDTO       `json:"aliases"`
+	Pagination    gin.H                    `json:"pagination"`
+	AppleSession  *adminAPIAppleSessionDTO `json:"apple_session"`
+	AutoCreation  *adminAPIAutoCreationDTO `json:"auto_creation"`
+	SyncPending   bool                     `json:"sync_pending,omitempty"`
 }
 
 type adminAPIAutoCreationDTO struct {
@@ -1229,6 +1231,15 @@ func (s *Server) adminAPISyncAccount(c *gin.Context) {
 		writeAdminAPIError(c, http.StatusConflict, "ACCOUNT_DISABLED", "主号已停用，请先启用主号后再同步邮件")
 		return
 	}
+	transport, err := s.store.GetAccountMailTransport(c.Request.Context(), id)
+	if err != nil {
+		s.writeAdminAPIStoreReadError(c, err)
+		return
+	}
+	if transport == store.MailTransportWebmail {
+		writeAdminAPIError(c, http.StatusConflict, "MAIL_ON_DEMAND", "当前使用网页按需收件，请访问目标邮箱的取件地址或 API")
+		return
+	}
 	if domain.IsIMAPAuthenticationFailure(account.LastSyncError) {
 		writeAdminAPIError(c, http.StatusConflict, "IMAP_AUTHENTICATION_PAUSED", domain.ErrIMAPAuthenticationPaused.Error())
 		return
@@ -1299,14 +1310,19 @@ func (s *Server) adminAPIAccountDetailPage(
 		return adminAPIAccountDetailDTO{}, err
 	}
 	accountDTO := s.adminAPIAccountFromDomain(account)
+	transport, err := s.store.GetAccountMailTransport(ctx, id)
+	if err != nil {
+		return adminAPIAccountDetailDTO{}, err
+	}
 	// Parent suspension hides list entries, not their persisted ownership.
 	// Preserve the actual count for the account form's identity lock.
 	return adminAPIAccountDetailDTO{
-		Account:      accountDTO,
-		Aliases:      aliasDTOs,
-		Pagination:   adminAPIPagination(limit, offset, page.Total),
-		AppleSession: appleSession,
-		AutoCreation: autoCreation,
+		MailTransport: transport,
+		Account:       accountDTO,
+		Aliases:       aliasDTOs,
+		Pagination:    adminAPIPagination(limit, offset, page.Total),
+		AppleSession:  appleSession,
+		AutoCreation:  autoCreation,
 	}, nil
 }
 

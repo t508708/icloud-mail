@@ -10,6 +10,7 @@ export const auditActionLabels = {
   delete: "删除",
   sync: "同步主号",
   sync_hme_aliases: "同步隐藏邮箱目录",
+  set_mail_transport: "切换邮件接收通道",
   rotate_key: "轮换 API Key",
   rotate_credentials: "轮换整套凭证",
   rotate_all_credentials: "轮换全部凭证",

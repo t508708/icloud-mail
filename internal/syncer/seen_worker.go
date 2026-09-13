@@ -341,6 +341,13 @@ func (w *SeenWorker) processAccount(ctx context.Context, work *seenAccountBatch)
 		if !account.Enabled {
 			return errors.New("account is disabled")
 		}
+		transport, err := accountMailTransport(operationCtx, w.repo, account.ID)
+		if err != nil {
+			return err
+		}
+		if transport == "webmail" {
+			return ErrSyncDeferred
+		}
 		if domain.IsIMAPAuthenticationFailure(account.LastSyncError) {
 			return domain.ErrIMAPAuthenticationPaused
 		}

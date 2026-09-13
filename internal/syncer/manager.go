@@ -92,6 +92,7 @@ type Manager struct {
 	repo                 Repository
 	cipher               CredentialCipher
 	fetcher              MailFetcher
+	webMailFetcher       WebMailFetcher
 	logger               *slog.Logger
 	interval             time.Duration
 	syncTimeout          time.Duration
@@ -1162,6 +1163,13 @@ func (m *Manager) syncAccountLocked(
 	trigger domain.MailboxSyncTrigger,
 	flow syncFlowSnapshot,
 ) (syncErr error) {
+	transport, err := accountMailTransport(ctx, m.repo, accountID)
+	if err != nil {
+		return err
+	}
+	if transport == "webmail" {
+		return ErrSyncDeferred
+	}
 	failedOperation := "check_context"
 	sensitiveValues := make([]string, 0, 4)
 	defer func() {

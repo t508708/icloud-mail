@@ -68,6 +68,29 @@ func (s *Store) ApplyAliasMailboxSync(
 	result domain.MailboxSyncResult,
 	syncedAt time.Time,
 ) error {
+	return s.applyAliasMailboxSync(ctx, expectedAccountVersion, alias, result, syncedAt, false)
+}
+
+// ApplyAliasWebMailboxSync publishes a bounded webmail observation without
+// advancing the IMAP cursor. The caller's LastUID is only an observation key.
+func (s *Store) ApplyAliasWebMailboxSync(
+	ctx context.Context,
+	expectedAccountVersion time.Time,
+	alias domain.Alias,
+	result domain.MailboxSyncResult,
+	syncedAt time.Time,
+) error {
+	return s.applyAliasMailboxSync(ctx, expectedAccountVersion, alias, result, syncedAt, true)
+}
+
+func (s *Store) applyAliasMailboxSync(
+	ctx context.Context,
+	expectedAccountVersion time.Time,
+	alias domain.Alias,
+	result domain.MailboxSyncResult,
+	syncedAt time.Time,
+	webmail bool,
+) error {
 	defer s.cleanupArchiveInputs(result.ArchivedMessages)
 	if expectedAccountVersion.IsZero() {
 		return fmt.Errorf("apply alias mailbox sync: expected account version is required")
@@ -77,6 +100,13 @@ func (s *Store) ApplyAliasMailboxSync(
 	}
 	unlockArchive := s.lockMailArchiveAccount(alias.AccountID)
 	defer unlockArchive()
+	if webmail {
+		messages, err := s.preserveExistingWebmailArchive(ctx, result.ArchivedMessages)
+		if err != nil {
+			return err
+		}
+		result.ArchivedMessages = messages
+	}
 	stagedArchive, err := s.stageArchiveMessages(result.ArchivedMessages)
 	if err != nil {
 		return fmt.Errorf("stage alias mailbox archive: %w", err)
@@ -124,48 +154,55 @@ func (s *Store) ApplyAliasMailboxSync(
 
 	var currentUIDValidity, currentLastUID, currentUpdatedAt int64
 	currentStateExists := false
-	err = s.txQueryRowContext(ctx, tx, `
+	if !webmail {
+		err = s.txQueryRowContext(ctx, tx, `
 		SELECT uid_validity, last_uid, updated_at
 		FROM alias_imap_sync_states WHERE alias_id = ?`, alias.ID,
-	).Scan(&currentUIDValidity, &currentLastUID, &currentUpdatedAt)
-	switch {
-	case err == nil:
-		currentStateExists = true
-		currentObservedAt := timeFromTimestamp(currentUpdatedAt)
-		sameGeneration := currentUIDValidity == int64(result.State.UIDValidity)
-		if sameGeneration {
-			if currentLastUID > int64(result.State.LastUID) {
-				return ErrAliasMailboxSyncStale
+		).Scan(&currentUIDValidity, &currentLastUID, &currentUpdatedAt)
+		switch {
+		case err == nil:
+			currentStateExists = true
+			currentObservedAt := timeFromTimestamp(currentUpdatedAt)
+			sameGeneration := currentUIDValidity == int64(result.State.UIDValidity)
+			if sameGeneration {
+				if currentLastUID > int64(result.State.LastUID) {
+					return ErrAliasMailboxSyncStale
+				}
+				if observedAt.IsZero() || observedAt.Before(currentObservedAt) {
+					observedAt = currentObservedAt
+				}
+			} else {
+				if !result.Reset {
+					return ErrAliasMailboxSyncStale
+				}
+				if observedAt.IsZero() {
+					observedAt = syncedAt
+				}
+				// UIDVALIDITY is opaque, so freshness rather than its numeric value
+				// determines whether a different generation may replace this cursor.
+				if !observedAt.After(currentObservedAt) {
+					return ErrAliasMailboxSyncStale
+				}
 			}
-			if observedAt.IsZero() || observedAt.Before(currentObservedAt) {
-				observedAt = currentObservedAt
-			}
-		} else {
+		case err == sql.ErrNoRows:
 			if !result.Reset {
 				return ErrAliasMailboxSyncStale
 			}
 			if observedAt.IsZero() {
 				observedAt = syncedAt
 			}
-			// UIDVALIDITY is opaque, so freshness rather than its numeric value
-			// determines whether a different generation may replace this cursor.
-			if !observedAt.After(currentObservedAt) {
-				return ErrAliasMailboxSyncStale
-			}
+		default:
+			return fmt.Errorf("read alias IMAP sync state before publish: %w", err)
 		}
-	case err == sql.ErrNoRows:
-		if !result.Reset {
-			return ErrAliasMailboxSyncStale
-		}
-		if observedAt.IsZero() {
-			observedAt = syncedAt
-		}
-	default:
-		return fmt.Errorf("read alias IMAP sync state before publish: %w", err)
 	}
 
 	if err := s.persistArchivedMessagesTx(ctx, tx, result.ArchivedMessages, stagedArchive, syncedAt); err != nil {
 		return fmt.Errorf("persist alias mailbox archive: %w", err)
+	}
+	if webmail {
+		if _, err := s.txExecContext(ctx, tx, `DELETE FROM latest_messages WHERE alias_id = ? AND uid_validity <> ?`, alias.ID, int64(result.State.UIDValidity)); err != nil {
+			return fmt.Errorf("reset stale webmail legacy snapshot: %w", err)
+		}
 	}
 	if result.Reset {
 		query := `DELETE FROM latest_messages WHERE alias_id = ?`
@@ -185,16 +222,18 @@ func (s *Store) ApplyAliasMailboxSync(
 	if err := s.persistLegacyLatestMessagesTx(ctx, tx, alias.AccountID, legacyResult, syncedAt, false); err != nil {
 		return fmt.Errorf("persist alias legacy mailbox snapshot: %w", err)
 	}
-	if _, err := s.txExecContext(ctx, tx, `
+	if !webmail {
+		if _, err := s.txExecContext(ctx, tx, `
 		INSERT INTO alias_imap_sync_states(alias_id, uid_validity, last_uid, updated_at)
 		VALUES(?, ?, ?, ?)
 		ON CONFLICT(alias_id) DO UPDATE SET
 			uid_validity = excluded.uid_validity,
 			last_uid = excluded.last_uid,
 			updated_at = excluded.updated_at`,
-		alias.ID, int64(result.State.UIDValidity), int64(result.State.LastUID), timestamp(observedAt),
-	); err != nil {
-		return fmt.Errorf("upsert alias IMAP sync state: %w", err)
+			alias.ID, int64(result.State.UIDValidity), int64(result.State.LastUID), timestamp(observedAt),
+		); err != nil {
+			return fmt.Errorf("upsert alias IMAP sync state: %w", err)
+		}
 	}
 	syncStatus := domain.SyncStatusOK
 	if result.HasMore {
@@ -232,4 +271,29 @@ func (s *Store) ApplyAliasMailboxSync(
 		return fmt.Errorf("enforce alias mailbox archive limit: %w", err)
 	}
 	return nil
+}
+
+// preserveExistingWebmailArchive prevents a bounded web observation from
+// replacing a complete IMAP MIME file for the same account/UID generation.
+// The archive lock serializes this check with filesystem staging.
+func (s *Store) preserveExistingWebmailArchive(ctx context.Context, messages []domain.ArchivedMessage) ([]domain.ArchivedMessage, error) {
+	messages = append([]domain.ArchivedMessage(nil), messages...)
+	for i := range messages {
+		message := &messages[i]
+		var state string
+		var bodyTruncated bool
+		err := s.queryRowContext(ctx, `SELECT content_state, body_truncated FROM archived_messages WHERE account_id = ? AND uid_validity = ? AND upstream_uid = ?`, message.AccountID, int64(message.UIDValidity), int64(message.UID)).Scan(&state, &bodyTruncated)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, fmt.Errorf("check existing web mail archive: %w", err)
+		}
+		if err == nil && state == archiveContentAvailable {
+			message.RawMIME = nil
+			message.RawMIMEPath = ""
+			message.RawSize = 0
+			message.RawSHA256 = ""
+			message.ContentState = archiveContentAvailable
+			message.BodyTruncated = bodyTruncated
+		}
+	}
+	return messages, nil
 }

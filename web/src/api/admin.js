@@ -145,6 +145,7 @@ export function normalizeAccount(raw = {}) {
       firstDefined(raw, "imap_username", "imapUsername", "IMAPUsername") ||
       "",
     enabled: Boolean(firstDefined(raw, "enabled", "Enabled")),
+    mailTransport: firstDefined(raw, "mail_transport", "mailTransport") === "webmail" ? "webmail" : "imap",
     lastSyncStatus:
       firstDefined(raw, "last_sync_status", "lastSyncStatus", "LastSyncStatus") ||
       "pending",
@@ -553,6 +554,9 @@ export async function getAccount(id, options = {}) {
 function normalizeAccountDetail(data = {}, options = {}) {
   const accountRaw = data?.account || data || {};
   const account = normalizeAccount(accountRaw);
+  if (firstDefined(data, "mail_transport", "mailTransport") !== undefined) {
+    account.mailTransport = firstDefined(data, "mail_transport", "mailTransport") === "webmail" ? "webmail" : "imap";
+  }
   const aliasPage = normalizeListPage(
     data,
     normalizeAlias,
@@ -616,6 +620,15 @@ export async function updateAccount(id, payload, csrfToken) {
     csrfToken,
   });
   return normalizeAccount(data?.account || data || {});
+}
+
+export async function updateAccountMailTransport(id, transport, csrfToken) {
+  const data = await apiRequest(`/accounts/${encodeURIComponent(id)}/mail-transport`, {
+    method: "PUT",
+    body: { transport },
+    csrfToken,
+  });
+  return data?.transport === "webmail" ? "webmail" : "imap";
 }
 
 export function normalizeMailGroup(raw = {}) {

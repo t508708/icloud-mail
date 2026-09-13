@@ -31,6 +31,7 @@ type AccountSession struct {
 	APIKey          string             `json:"api_key,omitempty"`
 	SessionToken    string             `json:"session_token,omitempty"`
 	SessionID       string             `json:"session_id,omitempty"`
+	TrustToken      string             `json:"trust_token,omitempty"`
 	AuthAttributes  string             `json:"auth_attributes,omitempty"`
 	FrameID         string             `json:"frame_id,omitempty"`
 	AuthenticatedAt time.Time          `json:"authenticated_at,omitempty"`
@@ -159,7 +160,7 @@ func (c *Client) accountCall(ctx context.Context, s *AccountSession, method, raw
 		}
 	}
 	s.Cookies = jar.Export()
-	for key, target := range map[string]*string{"scnt": &s.SCNT, "X-Apple-ID-Session-Id": &s.SessionID, "X-Apple-Session-Token": &s.SessionToken, "X-Apple-Auth-Attributes": &s.AuthAttributes} {
+	for key, target := range map[string]*string{"scnt": &s.SCNT, "X-Apple-ID-Session-Id": &s.SessionID, "X-Apple-Session-Token": &s.SessionToken, "X-Apple-Auth-Attributes": &s.AuthAttributes, "X-Apple-TwoSV-Trust-Token": &s.TrustToken} {
 		if value := r.header.Get(key); value != "" {
 			*target = value
 		}
@@ -299,8 +300,9 @@ func (c *Client) SignInAccount(ctx context.Context, appleID, password string, re
 		return s, false, ErrInvalidConfig
 	}
 	// The reference uses global account management for both mail regions.
-	if previous != nil && strings.EqualFold(previous.AppleID, s.AppleID) {
+	if previous != nil && strings.EqualFold(previous.AppleID, s.AppleID) && previous.Region == region {
 		s.Cookies = append([]PersistentCookie(nil), previous.Cookies...)
+		s.TrustToken = previous.TrustToken
 	}
 	frame, err := c.newUUID()
 	if err != nil {
@@ -389,7 +391,11 @@ func (c *Client) SignInAccount(ctx context.Context, appleID, password string, re
 	}
 	h = accountHeaders(s, true)
 	h.Set("X-Apple-HC", hc)
-	r, err = c.accountCall(ctx, &s, http.MethodPost, accountAuth+"/signin/complete?isRememberMeEnabled=true", map[string]any{"accountName": s.AppleID, "m1": base64.StdEncoding.EncodeToString(srp.m1), "m2": base64.StdEncoding.EncodeToString(srp.m2), "c": init.C, "rememberMe": true}, h, true)
+	trustTokens := []string{}
+	if s.TrustToken != "" {
+		trustTokens = append(trustTokens, s.TrustToken)
+	}
+	r, err = c.accountCall(ctx, &s, http.MethodPost, accountAuth+"/signin/complete?isRememberMeEnabled=true", map[string]any{"accountName": s.AppleID, "m1": base64.StdEncoding.EncodeToString(srp.m1), "m2": base64.StdEncoding.EncodeToString(srp.m2), "c": init.C, "rememberMe": true, "trustTokens": trustTokens}, h, true)
 	if err != nil {
 		if r.status == 401 || r.status == 403 {
 			return s, false, accountResponseError(r, ErrAuthentication)
@@ -429,7 +435,10 @@ func (c *Client) VerifyAccountCode(ctx context.Context, s AccountSession, code s
 		}
 		return s, err
 	}
-	_, _ = c.accountCall(ctx, &s, http.MethodGet, accountAuth+"/2sv/trust", nil, accountHeaders(s, true), false)
+	response, trustErr := c.accountCall(ctx, &s, http.MethodGet, accountAuth+"/2sv/trust", nil, accountHeaders(s, true), false)
+	if trustErr != nil {
+		return s, &Error{Op: "trust Apple Account session", Kind: ErrService, StatusCode: response.status, Retryable: response.status >= 500}
+	}
 	return c.RefreshAccountSession(ctx, s)
 }
 

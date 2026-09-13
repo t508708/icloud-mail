@@ -121,7 +121,7 @@
               />
             </el-form-item>
           </div>
-          <p class="field-help">默认使用 imap.mail.me.com:993（TLS）。</p>
+          <p class="field-help">iCloud 默认使用 imap.mail.me.com:993。固定启用 TLS 1.2 或更高版本并校验证书，不自动切换端口。</p>
         </el-form-item>
 
         <el-form-item
@@ -139,6 +139,7 @@
           <p class="field-help">
             {{ usesGenericIMAPPassword ? "第三方/自定义邮箱的 IMAP 密码只会加密保存，后续不会回显。" : "Apple App 专用密码只会加密保存，后续不会回显。" }}
           </p>
+          <p v-if="appPasswordShapeUnusual" class="field-help" role="status">当前输入与常见 App 专用密码格式不同。请确认使用此 Apple 账户生成的 16 位字母专用密码，可保留分组连字符；Apple 登录密码用于下方连接登录。</p>
         </el-form-item>
 
         <el-form-item v-if="isEdit" class="form-span account-enabled-field">
@@ -233,6 +234,7 @@ const receiveRule = computed(() => mailboxReceiveRule(form));
 const usesGenericIMAPPassword = computed(
   () => isCustomMailbox.value || receiveRule.value === "icloud-forwarded",
 );
+const appPasswordShapeUnusual = computed(() => !usesGenericIMAPPassword.value && Boolean(form.imapPassword.trim()) && !/^(?:[a-z]{16}|[a-z]{4}(?:-[a-z]{4}){3})$/i.test(form.imapPassword.trim()));
 const receiveRuleLabel = computed(() => {
   switch (receiveRule.value) {
     case "custom":

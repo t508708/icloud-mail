@@ -98,9 +98,12 @@ func (s *Store) ConsumeLatestMessage(
 
 	if _, err := s.txExecContext(ctx, tx, `
 		INSERT INTO imap_seen_tasks(account_id, uid_validity, uid, created_at)
-		VALUES(?, ?, ?, ?)
+		SELECT ?, ?, ?, ?
+		WHERE NOT EXISTS (
+			SELECT 1 FROM account_mail_transports WHERE account_id = ? AND transport = 'webmail'
+		)
 		ON CONFLICT(account_id, uid_validity, uid) DO NOTHING`,
-		accountID, int64(uidValidity), int64(uid), timestamp(consumedAt),
+		accountID, int64(uidValidity), int64(uid), timestamp(consumedAt), accountID,
 	); err != nil {
 		return false, fmt.Errorf("enqueue IMAP seen task: %w", err)
 	}

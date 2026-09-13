@@ -101,7 +101,12 @@ func (m *Manager) syncAliasDemand(ctx context.Context, aliasID int64) error {
 		if !account.Enabled || !current.Enabled || current.AccountID != account.ID {
 			return store.ErrAccountDisabled
 		}
-		if domain.IsIMAPAuthenticationFailure(account.LastSyncError) {
+		transport, err := accountMailTransport(ctx, m.repo, account.ID)
+		if err != nil {
+			return err
+		}
+		useWebMail := transport == store.MailTransportWebmail
+		if !useWebMail && domain.IsIMAPAuthenticationFailure(account.LastSyncError) {
 			return domain.ErrIMAPAuthenticationPaused
 		}
 		if err := m.waitForFetchInterval(ctx, account.ID); err != nil {
@@ -126,29 +131,46 @@ func (m *Manager) syncAliasDemand(ctx context.Context, aliasID int64) error {
 		if err != nil {
 			return err
 		}
-		password, err := m.cipher.Decrypt(account.PasswordCiphertext)
-		if err != nil {
-			return fmt.Errorf("decrypt demand mailbox credentials: %w", err)
+		m.logger.Debug("取件请求触发单邮箱获取", "account_id", account.ID, "alias_id", aliasID, "operation", "alias_demand_sync", "transport", transport)
+		var result domain.MailboxSyncResult
+		if useWebMail {
+			if m.webMailFetcher == nil {
+				return errors.New("web mail receiver unavailable")
+			}
+			result, err = m.webMailFetcher(ctx, account, current, knownAliases)
+		} else {
+			password, decryptErr := m.cipher.Decrypt(account.PasswordCiphertext)
+			if decryptErr != nil {
+				return fmt.Errorf("decrypt demand mailbox credentials: %w", decryptErr)
+			}
+			result, err = fetcher.FetchAliasIncremental(ctx, account, password, current, knownAliases, previous, positions)
+			password = ""
 		}
-		m.logger.Debug("取件请求触发单邮箱获取", "account_id", account.ID, "alias_id", aliasID, "operation", "alias_demand_sync")
-		result, err := fetcher.FetchAliasIncremental(ctx, account, password, current, knownAliases, previous, positions)
-		password = ""
 		if err != nil {
-			if domain.IsIMAPAuthenticationFailure(err.Error()) {
+			if useWebMail || domain.IsIMAPAuthenticationFailure(err.Error()) {
 				failures := newFailureRecorder(m, ctx, account.ID, account.UpdatedAt)
 				defer failures.close()
 				failures.record(err)
 			}
-			m.logger.Warn("单邮箱按需获取未完成", "account_id", account.ID, "alias_id", aliasID, "operation", "alias_demand_sync", "authentication_paused", domain.IsIMAPAuthenticationFailure(err.Error()))
+			m.logger.Warn("单邮箱按需获取未完成", "account_id", account.ID, "alias_id", aliasID, "operation", "alias_demand_sync", "transport", transport, "authentication_paused", domain.IsIMAPAuthenticationFailure(err.Error()))
 			return err
 		}
-		if err := repo.ApplyAliasMailboxSync(ctx, account.UpdatedAt, current, result, time.Now().UTC()); err != nil {
+		if useWebMail {
+			webRepo, ok := m.repo.(webMailRepository)
+			if !ok {
+				return errors.New("web mail persistence unavailable")
+			}
+			err = webRepo.ApplyAliasWebMailboxSync(ctx, account.UpdatedAt, current, result, time.Now().UTC())
+		} else {
+			err = repo.ApplyAliasMailboxSync(ctx, account.UpdatedAt, current, result, time.Now().UTC())
+		}
+		if err != nil {
 			if errors.Is(err, store.ErrAliasMailboxSyncStale) {
 				return ErrSyncDeferred
 			}
 			return err
 		}
-		m.logger.Debug("单邮箱按需获取完成", "account_id", account.ID, "alias_id", aliasID, "operation", "alias_demand_sync", "message_count", len(result.ArchivedMessages), "has_more", result.HasMore)
+		m.logger.Debug("单邮箱按需获取完成", "account_id", account.ID, "alias_id", aliasID, "operation", "alias_demand_sync", "transport", transport, "message_count", len(result.ArchivedMessages), "has_more", result.HasMore)
 		return nil
 	})
 }

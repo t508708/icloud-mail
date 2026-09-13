@@ -41,7 +41,7 @@ test("account list and detail share server-driven sync progress", async () => {
   assert.match(detailSource, /:loading="syncLoading \|\| syncActive"/);
   assert.match(
     detailSource,
-    /if \(syncLoading\.value \|\| syncActive\.value \|\| randomAliasLoading\.value\) return/,
+    /if \([^\n]*syncLoading\.value \|\| syncActive\.value \|\| randomAliasLoading\.value[^\n]*\) return/,
   );
   assert.ok(
     (listSource.match(/<SyncStatus :item=/g) || []).length >= 2,

@@ -75,7 +75,7 @@ test("account detail exposes automatic alias creation with persistent credential
   const formatAutoCreationError = autoCreationErrorFormatter(source);
   assert.equal(
     formatAutoCreationError("APPLE_SESSION_EXPIRED"),
-    "Apple 登录已过期，请点击“同步隐私邮箱”并重新登录后重试",
+    "目录登录已过期，请点击“同步地址目录”并重新登录后重试",
   );
   assert.equal(
     formatAutoCreationError("APPLE_RATE_LIMITED"),
@@ -85,7 +85,7 @@ test("account detail exposes automatic alias creation with persistent credential
     formatAutoCreationError("APPLE_CREATION_BUDGET_WAIT"),
     /本项目的主号共享创建预算正在等待恢复.*不表示 Apple 返回了限流/,
   );
-  assert.match(source, /自动收件连接已暂停.*App 专用密码.*邮箱服务状态/s);
+  assert.match(source, /邮件正文与验证码读取已暂停.*配置收件凭据.*App 专用密码/s);
   const authFailureBody = functionBody(source, "function isIMAPAuthenticationFailure");
   const isIMAPAuthenticationFailure = Function(
     `"use strict"; return function (value) ${authFailureBody}`,

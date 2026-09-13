@@ -12,6 +12,7 @@ const (
 	CodeLoginRequired               = "APPLE_LOGIN_REQUIRED"
 	CodeSessionExpired              = "APPLE_SESSION_EXPIRED"
 	CodeHMEUnavailable              = "APPLE_HME_UNAVAILABLE"
+	CodeHMEAuthentication           = "APPLE_HME_AUTH_FAILED"
 	CodeCredentialsInvalid          = "APPLE_CREDENTIALS_INVALID"
 	CodeVerificationInvalid         = "APPLE_VERIFICATION_INVALID"
 	CodeFlowExpired                 = "APPLE_FLOW_EXPIRED"
@@ -218,6 +219,8 @@ func mapAppleError(err error, duringVerification bool) error {
 	switch {
 	case errors.Is(err, apple.ErrHMEUnavailable):
 		return wrapError(CodeHMEUnavailable, ErrHMEUnavailable, err)
+	case errors.Is(err, apple.ErrHMEAuthentication):
+		return wrapError(CodeHMEAuthentication, ErrAccountActionRequired, err)
 	case errors.Is(err, apple.ErrInvalidSession):
 		return wrapError(CodeSessionExpired, ErrSessionExpired, err)
 	case errors.Is(err, apple.ErrAuthentication) && duringVerification:

@@ -203,6 +203,7 @@ func TestAccountVerifyCodePayloadAndRefresh(t *testing.T) {
 
 func TestAccountSignInSRPChallenge(t *testing.T) {
 	paths := map[string]int{}
+	wantTrust := ""
 	c := accountClient(t, func(r *http.Request) (*http.Response, error) {
 		paths[r.URL.Path]++
 		switch r.URL.Path {
@@ -236,6 +237,10 @@ func TestAccountSignInSRPChallenge(t *testing.T) {
 			if v["m1"] == nil || v["m2"] == nil || v["password"] != nil {
 				t.Fatalf("bad signin payload: %#v", v)
 			}
+			tokens, ok := v["trustTokens"].([]any)
+			if !ok || v["rememberMe"] != true || (wantTrust == "" && len(tokens) != 0) || (wantTrust != "" && (len(tokens) != 1 || tokens[0] != wantTrust)) {
+				t.Fatal("browser trust was omitted or reused across accounts")
+			}
 			return accountResp(409, `{}`), nil
 		case "/appleauth/auth":
 			return accountResp(200, `{}`), nil
@@ -244,9 +249,21 @@ func TestAccountSignInSRPChallenge(t *testing.T) {
 			return accountResp(404, `{}`), nil
 		}
 	})
-	previous := &AccountSession{AppleID: "other@example.com", Cookies: []PersistentCookie{{Name: "old", Value: "x", Domain: "appleid.apple.com", Path: "/"}}}
+	previous := &AccountSession{AppleID: "other@example.com", TrustToken: "other-account-trust", Cookies: []PersistentCookie{{Name: "old", Value: "x", Domain: "appleid.apple.com", Path: "/"}}}
 	s, pending, err := c.SignInAccount(context.Background(), "user@example.com", "pass", RegionGlobal, previous)
 	if err != nil || !pending || s.AppleID != "user@example.com" || len(s.Cookies) != 0 {
 		t.Fatalf("session=%+v pending=%v err=%v", s, pending, err)
+	}
+	wantTrust = "same-account-trust"
+	previous = &AccountSession{AppleID: "user@example.com", Region: RegionGlobal, TrustToken: wantTrust}
+	s, pending, err = c.SignInAccount(context.Background(), "user@example.com", "pass", RegionGlobal, previous)
+	if err != nil || !pending || s.TrustToken != wantTrust {
+		t.Fatal("same-account browser trust not retained")
+	}
+	wantTrust = ""
+	previous = &AccountSession{AppleID: "user@example.com", Region: RegionChina, TrustToken: "other-region-trust", Cookies: []PersistentCookie{{Name: "old", Value: "x", Domain: "appleid.apple.com", Path: "/"}}}
+	s, pending, err = c.SignInAccount(context.Background(), "user@example.com", "pass", RegionGlobal, previous)
+	if err != nil || !pending || s.TrustToken != "" || len(s.Cookies) != 0 {
+		t.Fatalf("cross-region browser trust was reused: session=%+v pending=%v err=%v", s, pending, err)
 	}
 }

@@ -145,6 +145,13 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("初始化隐私邮箱同步服务: %w", err)
 	}
+	manager.SetWebMailFetcher(func(ctx context.Context, account domain.Account, alias domain.Alias, known []domain.Alias) (domain.MailboxSyncResult, error) {
+		remote, err := hmeService.ReadAliasWebMailLocked(ctx, account, alias)
+		if err != nil {
+			return domain.MailboxSyncResult{}, err
+		}
+		return fetcher.ArchiveWebMail(ctx, account, alias, known, remote)
+	})
 	autoManager, err := autocreate.New(
 		db,
 		func(ctx context.Context, accountID int64) (domain.Alias, error) {

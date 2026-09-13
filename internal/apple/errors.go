@@ -16,15 +16,16 @@ const (
 )
 
 var (
-	ErrInvalidConfig    = errors.New("invalid Apple client configuration")
-	ErrInvalidSession   = errors.New("invalid or expired Apple session")
-	ErrHMEUnavailable   = errors.New("Hide My Email service is not available for this session")
-	ErrAuthentication   = errors.New("Apple authentication failed")
-	ErrTwoFactorCode    = errors.New("invalid Apple two-factor code")
-	ErrTermsRequired    = errors.New("Apple account action required")
-	ErrResponseTooLarge = errors.New("Apple response exceeds configured limit")
-	ErrInvalidResponse  = errors.New("invalid Apple response")
-	ErrService          = errors.New("Apple service returned an error")
+	ErrInvalidConfig     = errors.New("invalid Apple client configuration")
+	ErrInvalidSession    = errors.New("invalid or expired Apple session")
+	ErrHMEUnavailable    = errors.New("Hide My Email service is not available for this session")
+	ErrHMEAuthentication = errors.New("Hide My Email directory did not accept the web session")
+	ErrAuthentication    = errors.New("Apple authentication failed")
+	ErrTwoFactorCode     = errors.New("invalid Apple two-factor code")
+	ErrTermsRequired     = errors.New("Apple account action required")
+	ErrResponseTooLarge  = errors.New("Apple response exceeds configured limit")
+	ErrInvalidResponse   = errors.New("invalid Apple response")
+	ErrService           = errors.New("Apple service returned an error")
 )
 
 // Error is the typed error returned for transport, HTTP, protocol and service
@@ -40,6 +41,19 @@ type Error struct {
 	// the operation. Zero means no positive delay is available.
 	RetryAfter time.Duration
 	Err        error
+	WebSession *WebSessionDiagnostics
+}
+
+// WebSessionDiagnostics contains presence flags only, never cookie values,
+// account identifiers, endpoint query strings or upstream response bodies.
+type WebSessionDiagnostics struct {
+	Region          Region `json:"region"`
+	ServiceRegion   Region `json:"service_region"`
+	MatchingCookies int    `json:"matching_cookies"`
+	WebAuthPresent  bool   `json:"web_auth_present"`
+	WebUserPresent  bool   `json:"web_user_present"`
+	HMEActive       bool   `json:"hme_active"`
+	HMEAvailable    bool   `json:"hme_available"`
 }
 
 func (e *Error) Error() string {

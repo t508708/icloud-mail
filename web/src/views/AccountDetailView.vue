@@ -134,29 +134,25 @@
       <section class="section-block" aria-labelledby="connection-title">
         <SectionHeader
           id="connection-title"
-          title="IMAP 邮件同步"
-          :description="`${account.imapUsername} · ${formatIMAPEndpoint(account)}`"
+          title="邮件接收"
+          description="按需获取邮件正文与验证码；访问取件地址或取件 API 时才读取对应邮箱，不随地址目录同步拉取邮件。"
         >
           <template #actions>
-            <el-button
-              :icon="Refresh"
-              :loading="syncLoading || syncActive"
-              :disabled="!account.enabled || syncActive || randomAliasLoading || manualAliasLoading"
-              @click="syncNow"
-            >
-              {{ syncActive ? "同步处理中" : "同步邮件" }}
-            </el-button>
-            <el-button :icon="EditPen" :disabled="manualAliasLoading" @click="editAccount">编辑</el-button>
+            <el-radio-group v-if="canUseWebMail" :model-value="account.mailTransport" :disabled="!account.enabled || syncActive || mailTransportLoading || detailMutationPending()" aria-label="邮件接收通道" @change="changeMailTransport">
+              <el-radio-button value="imap">IMAP</el-radio-button><el-radio-button value="webmail">iCloud 网页收件</el-radio-button>
+            </el-radio-group>
+            <el-button :icon="EditPen" :disabled="manualAliasLoading" @click="editAccount">配置收件凭据</el-button>
           </template>
         </SectionHeader>
 
         <div class="section-status-row">
           <div>
-            <span class="section-status-row__label">状态</span>
-            <SyncStatus :item="account" />
+            <span class="section-status-row__label">收件状态</span>
+            <span v-if="account.enabled && account.mailTransport === 'webmail' && isIMAPAuthenticationFailure(account.lastSyncError)">网页收件待首次取件</span>
+            <SyncStatus v-else :item="account" />
           </div>
           <div>
-            <span class="section-status-row__label">最近同步</span>
+            <span class="section-status-row__label">最近邮件同步</span>
             <strong>{{ formatTime(account.lastSyncedAt, { seconds: true }) }}</strong>
           </div>
         </div>
@@ -167,8 +163,12 @@
         </div>
 
         <details class="settings-disclosure">
-          <summary>连接详情</summary>
+          <summary>收件连接与高级操作</summary>
           <dl class="detail-grid">
+          <div>
+            <dt>IMAP 收件连接</dt>
+            <dd>{{ account.imapUsername }} · {{ formatIMAPEndpoint(account) }}</dd>
+          </div>
           <div>
             <dt>收件规则</dt>
             <dd>{{ receiveRuleLabel }}</dd>
@@ -190,12 +190,24 @@
             <dd>{{ account.name || "-" }}</dd>
           </div>
           </dl>
+          <p v-if="account.mailTransport === 'webmail'" class="field-help">按需访问取件地址/API，使用 iCloud Web 目录登录态；不会使用 Apple Account 新建连接，也不会后台轮询。</p>
+          <p v-else class="field-help">IMAP 是邮件读取协议，不是 Apple 隐私邮箱的新旧创建通道。</p>
+          <el-button
+            v-if="account.mailTransport !== 'webmail'"
+            :icon="Refresh"
+            :loading="syncLoading || syncActive"
+            :disabled="!account.enabled || syncActive || randomAliasLoading || manualAliasLoading || isIMAPAuthenticationFailure(account.lastSyncError)"
+            @click="syncNow"
+          >
+            {{ syncActive ? "邮件同步处理中" : "手动同步主号邮件" }}
+          </el-button>
         </details>
 
-        <div v-if="account.lastSyncError" class="inline-error" role="status">
-          <strong>最近错误</strong>
+        <div v-if="account.mailTransport === 'webmail' && isIMAPAuthenticationFailure(account.lastSyncError)" class="field-help">网页收件待首次取件；上次 IMAP 认证记录已保留在高级详情中。</div>
+        <div v-if="account.lastSyncError && !(account.mailTransport === 'webmail' && isIMAPAuthenticationFailure(account.lastSyncError))" class="inline-error" role="status">
+          <strong>{{ isIMAPAuthenticationFailure(account.lastSyncError) ? '收件认证未通过' : '最近收件异常' }}</strong>
           <p v-if="isIMAPAuthenticationFailure(account.lastSyncError)">
-            自动收件连接已暂停；更新 Apple App 专用密码并检查邮箱服务状态后，再恢复收件同步。
+            邮件正文与验证码读取已暂停，地址目录同步不代表收件恢复。请在“配置收件凭据”中更新收件密码；iCloud IMAP 使用 App 专用密码，与 Apple 登录密码和新建连接会话不同。
           </p>
           <div class="inline-error__content">
             <span>{{ account.lastSyncError }}</span>
@@ -205,6 +217,9 @@
             />
           </div>
         </div>
+        <details v-if="account.mailTransport === 'webmail' && isIMAPAuthenticationFailure(account.lastSyncError)" class="settings-disclosure">
+          <summary>上次 IMAP 认证记录</summary><div class="inline-error__content"><span>{{ account.lastSyncError }}</span><SyncErrorLogDialog :log="account.lastSyncErrorLog || account.lastSyncError" :account-id="account.id" /></div>
+        </details>
       </section>
 
       <section class="section-block" aria-labelledby="aliases-title">
@@ -213,7 +228,7 @@
           title="隐私邮箱"
           :description="isCustomMailbox
             ? '按邮箱后缀生成或手动登记地址；每个地址使用独立的完整凭证包。'
-            : '从 Apple 拉取 Hide My Email 地址目录；每个本地地址使用独立的完整凭证包。'"
+            : '仅同步隐藏邮箱地址、备注与启停状态，不下载邮件正文或验证码。取码由上方的按需收件处理。'"
         >
           <template #actions>
             <el-button
@@ -224,7 +239,7 @@
               :disabled="appleAliasControlsDisabled || appleDisconnectLoading"
               @click="syncAliasesFromApple"
             >
-              同步隐私邮箱
+              同步地址目录
             </el-button>
           </template>
         </SectionHeader>
@@ -913,6 +928,7 @@ import {
   syncAccountAliases,
   verifyAppleSession,
   startAliasDeletionJob,
+  updateAccountMailTransport,
 } from "../api/admin.js";
 import EmptyState from "../components/EmptyState.vue";
 import AliasCreationPanel from "../components/AliasCreationPanel.vue";
@@ -962,6 +978,7 @@ const route = useRoute();
 const router = useRouter();
 const auth = useAuth();
 const account = ref(null);
+const mailTransportLoading = ref(false);
 const aliases = ref([]);
 const currentPage = ref(1);
 const pageSize = ref(DEFAULT_PAGE_SIZE);
@@ -1051,6 +1068,7 @@ const aliasDrag = createCheckboxDragSelection({
 const isCustomMailbox = computed(
   () => account.value?.mailboxType === "custom",
 );
+const canUseWebMail = computed(() => !isCustomMailbox.value && mailboxReceiveRule(account.value || {}) !== "icloud-forwarded");
 const visibleAliasColumns = computed(() => isCustomMailbox.value
   ? aliasColumns.filter((column) => column.key !== "selection")
   : aliasColumns,
@@ -1171,9 +1189,11 @@ const AUTO_CREATION_ERROR_MESSAGES = Object.freeze({
   APPLE_CREATION_BUDGET_WAIT:
     "本项目的主号共享创建预算正在等待恢复；这是本地节流，不表示 Apple 返回了限流。",
   APPLE_LOGIN_REQUIRED:
-    "Apple 账户尚未登录，请点击“同步隐私邮箱”并完成登录后重试",
+    "目录连接尚未登录，请点击“同步地址目录”并完成登录后重试",
   APPLE_SESSION_EXPIRED:
-    "Apple 登录已过期，请点击“同步隐私邮箱”并重新登录后重试",
+    "目录登录已过期，请点击“同步地址目录”并重新登录后重试",
+  APPLE_HME_AUTH_FAILED:
+    "账户验证已通过，但隐藏邮箱目录未接受此会话；登录状态已保留，请检查对应区域的 iCloud 网页隐藏邮箱服务",
   APPLE_CREDENTIALS_INVALID:
     "Apple 登录凭据无效，请退出 Apple 登录并重新登录后重试",
   APPLE_VERIFICATION_INVALID:
@@ -1497,6 +1517,7 @@ function replaceAlias(updated) {
 
 function detailMutationPending() {
   return (
+    mailTransportLoading.value ||
     batchDeleteConfirming.value ||
     deletionState.value.blocked ||
     syncLoading.value ||
@@ -1658,7 +1679,7 @@ async function loadDetail({ silent = false } = {}) {
       detail.account.mailboxType === "custom"
         ? `@${detail.account.emailSuffix}`
         : detail.account.email,
-      "管理 IMAP 连接、同步状态和所属隐私邮箱",
+      "管理按需收件凭据与隐私邮箱地址目录",
     );
     return true;
   } catch (error) {
@@ -1742,7 +1763,7 @@ const liveRefresh = createLiveRefresh(() => loadDetail({ silent: true }), {
 });
 
 async function syncNow() {
-  if (syncLoading.value || syncActive.value || randomAliasLoading.value) return;
+  if (!account.value?.enabled || account.value.mailTransport === "webmail" || syncLoading.value || syncActive.value || randomAliasLoading.value || manualAliasLoading.value || isIMAPAuthenticationFailure(account.value.lastSyncError)) return;
   beginDetailMutation();
   const accountId = account.value.id;
   syncLoading.value = true;
@@ -1766,6 +1787,31 @@ async function syncNow() {
     await loadDetail();
   } finally {
     syncLoading.value = false;
+  }
+}
+
+async function changeMailTransport(transport) {
+  if (!canUseWebMail.value || mailTransportLoading.value || !account.value?.enabled || syncActive.value || detailMutationPending() || account.value.mailTransport === transport) return;
+  if (transport === "webmail" && !appleSessionAuthenticated.value) {
+    openAppleLogin();
+    return;
+  }
+  const accountId = account.value.id;
+  const previous = account.value.mailTransport;
+  beginDetailMutation();
+  mailTransportLoading.value = true;
+  account.value.mailTransport = transport;
+  try {
+    const next = await updateAccountMailTransport(accountId, transport, auth.state.csrfToken);
+    if (!isCurrentAccount(accountId)) return;
+    account.value.mailTransport = next;
+    await loadDetail();
+  } catch (error) {
+    if (!isCurrentAccount(accountId)) return;
+    account.value.mailTransport = previous;
+    showRequestError(error, "收件通道切换失败。");
+  } finally {
+    mailTransportLoading.value = false;
   }
 }
 
@@ -2049,7 +2095,7 @@ async function performAliasesSync({ afterAuthentication = false } = {}) {
       ? `，新增 ${result.summary.createdCount} 个，可通过列表中的复制操作导出完整凭证`
       : "，没有新增地址";
     successMessage(
-      `隐私邮箱同步完成，Apple 共 ${result.summary.total} 个地址${createdNotice}${capacityNotice}。`,
+      `地址目录同步完成，Apple 共 ${result.summary.total} 个地址${createdNotice}${capacityNotice}；本次未读取邮件。`,
     );
   } catch (error) {
     if (!isCurrentAccount(accountId)) return;

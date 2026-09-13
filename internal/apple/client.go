@@ -331,7 +331,15 @@ func (c *Client) ListAliases(ctx context.Context, session Session) (list ListRes
 	if err != nil {
 		return list, result, err
 	}
-	defer op.persist(&result)
+	defer func() {
+		if errors.Is(err, ErrHMEAuthentication) {
+			// An unaccepted directory response must not replace a checkpoint
+			// that was just authenticated by the account service.
+			result = session
+			return
+		}
+		op.persist(&result)
+	}()
 	if result.DSID == "" {
 		return list, result, operationError("list Hide My Email aliases", ErrInvalidSession, 0, nil)
 	}
@@ -345,12 +353,15 @@ func (c *Client) ListAliases(ctx context.Context, session Session) (list ListRes
 	headers := op.serviceHeaders()
 	headers.Set("Accept", "*/*")
 	headers.Set("Content-Type", "text/plain")
+	diagnostics := op.webSessionDiagnostics(requestURL)
 	response, err := op.request(ctx, "list Hide My Email aliases", http.MethodGet, requestURL, nil, headers)
 	if err != nil {
 		return list, result, err
 	}
 	if response.status == http.StatusUnauthorized || response.status == http.StatusForbidden || response.status == 450 {
-		return list, result, responseError("list Hide My Email aliases", ErrInvalidSession, response)
+		failure := response.operationError("list Hide My Email aliases", ErrHMEAuthentication, nil)
+		failure.WebSession = &diagnostics
+		return list, result, failure
 	}
 	if response.status == http.StatusPreconditionFailed {
 		return list, result, responseError("list Hide My Email aliases", ErrTermsRequired, response)
@@ -418,6 +429,30 @@ func (c *Client) ListAliases(ctx context.Context, session Session) (list ListRes
 		}
 	}
 	return list, result, nil
+}
+
+func (op *operation) webSessionDiagnostics(rawURL string) WebSessionDiagnostics {
+	diagnostic := WebSessionDiagnostics{Region: op.session.Region, HMEActive: op.session.HideMyEmailActive, HMEAvailable: op.session.HideMyEmailFeatureAvailable}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return diagnostic
+	}
+	if strings.HasSuffix(u.Hostname(), ".icloud.com.cn") {
+		diagnostic.ServiceRegion = RegionChina
+	} else if strings.HasSuffix(u.Hostname(), ".icloud.com") {
+		diagnostic.ServiceRegion = RegionGlobal
+	}
+	cookies := op.jar.Cookies(u)
+	diagnostic.MatchingCookies = len(cookies)
+	for _, cookie := range cookies {
+		switch strings.ToUpper(cookie.Name) {
+		case "X-APPLE-WEBAUTH-TOKEN":
+			diagnostic.WebAuthPresent = cookie.Value != ""
+		case "X-APPLE-WEBAUTH-USER":
+			diagnostic.WebUserPresent = cookie.Value != ""
+		}
+	}
+	return diagnostic
 }
 
 // UpdateForwardTo sets the account-wide Hide My Email forwarding target. The

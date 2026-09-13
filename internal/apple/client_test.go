@@ -1350,7 +1350,7 @@ func TestListAliasesPreservesServiceErrors(t *testing.T) {
 			name:        "non-2xx invalid session code",
 			status:      http.StatusUnauthorized,
 			body:        `{"error":{"errorCode":"SESSION_EXPIRED"}}`,
-			kind:        ErrInvalidSession,
+			kind:        ErrHMEAuthentication,
 			serviceCode: "SESSION_EXPIRED",
 		},
 		{

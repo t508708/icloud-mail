@@ -345,6 +345,11 @@ func (s *Service) SyncAliases(ctx context.Context, accountID int64) (SyncResult,
 	list, updated, err := s.client.ListAliases(ctx, validated)
 	if err != nil {
 		mapped := mapAppleError(err, false)
+		if errors.Is(err, apple.ErrHMEAuthentication) {
+			if checkpointErr := s.preserveValidatedDirectorySession(ctx, account, record, session, validated, false); checkpointErr != nil {
+				return SyncResult{}, errors.Join(wrapPersistenceError(checkpointErr), mapped)
+			}
+		}
 		if errors.Is(mapped, ErrSessionExpired) {
 			s.expireSession(ctx, accountID)
 		}
@@ -497,7 +502,7 @@ func (s *Service) checkpointAliasDeletionSession(ctx context.Context, accountID 
 func (s *Service) expireAliasDeletionSession(ctx context.Context, accountID int64, sessionErr error) error {
 	persistContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), aliasDeletePersistTimeout)
 	defer cancel()
-	err := s.deleteWebSessionPreservingAccount(persistContext, accountID)
+	err := s.expireWebSessionPreservingTrust(persistContext, accountID)
 	if errors.Is(err, store.ErrNotFound) {
 		err = nil
 	}
@@ -631,10 +636,10 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 		if releaseAccount != nil {
 			// The production locker is deliberately non-reentrant. The account
 			// lock already protects this deletion across the remote operation.
-			deleteErr = s.deleteWebSessionPreservingAccount(cleanupContext, accountID)
+			deleteErr = s.expireWebSessionPreservingTrust(cleanupContext, accountID)
 		} else {
 			deleteErr = s.locker.WithAccountLock(cleanupContext, accountID, func() error {
-				err := s.deleteWebSessionPreservingAccount(cleanupContext, accountID)
+				err := s.expireWebSessionPreservingTrust(cleanupContext, accountID)
 				if errors.Is(err, store.ErrNotFound) {
 					return nil
 				}
@@ -764,6 +769,11 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 	settings, listedSession, err := s.client.ListAliases(ctx, validated)
 	if err != nil {
 		mapped := mapAppleError(err, false)
+		if errors.Is(err, apple.ErrHMEAuthentication) {
+			if checkpointErr := s.preserveValidatedDirectorySession(ctx, account, record, session, validated, releaseAccount != nil); checkpointErr != nil {
+				return domain.Alias{}, errors.Join(wrapPersistenceError(checkpointErr), mapped)
+			}
+		}
 		if errors.Is(mapped, ErrSessionExpired) {
 			mapped = expireAutoSession(mapped)
 		}
@@ -1415,6 +1425,25 @@ func (s *Service) persistSession(ctx context.Context, accountID int64, expected 
 	return saved, err
 }
 
+// Keep only the successfully validated checkpoint, not the directory failure's
+// headers. A directory authorization failure is independent of account login.
+func (s *Service) preserveValidatedDirectorySession(ctx context.Context, account domain.Account, record domain.AppleWebSession, previous, validated apple.Session, accountLocked bool) error {
+	if !sameEmail(validated.AppleID, record.AppleID) {
+		return wrapError(CodeAccountMismatch, ErrAccountMismatch, nil)
+	}
+	if err := validateSessionDSID(previous.DSID, validated); err != nil {
+		return err
+	}
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), autoCreatePersistTimeout)
+	defer cancel()
+	if accountLocked {
+		_, err := s.saveSession(persistCtx, account.ID, validated)
+		return err
+	}
+	_, err := s.persistSession(persistCtx, account.ID, identityOf(account), validated)
+	return err
+}
+
 func (s *Service) removeSessionForIdentity(ctx context.Context, accountID int64, expected accountIdentity) error {
 	return s.locker.WithAccountLock(ctx, accountID, func() error {
 		current, err := s.repo.GetAccount(ctx, accountID)
@@ -1424,7 +1453,7 @@ func (s *Service) removeSessionForIdentity(ctx context.Context, accountID int64,
 		if !sameIdentity(identityOf(current), expected) {
 			return wrapError(CodeAccountChanged, ErrAccountChanged, nil)
 		}
-		err = s.deleteWebSessionPreservingAccount(ctx, accountID)
+		err = s.expireWebSessionPreservingTrust(ctx, accountID)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
@@ -1519,7 +1548,7 @@ func (s *Service) previousSession(ctx context.Context, accountID int64, appleID 
 
 func (s *Service) expireSession(ctx context.Context, accountID int64) {
 	_ = s.locker.WithAccountLock(ctx, accountID, func() error {
-		err := s.deleteWebSessionPreservingAccount(ctx, accountID)
+		err := s.expireWebSessionPreservingTrust(ctx, accountID)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
