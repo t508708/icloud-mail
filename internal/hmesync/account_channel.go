@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"icloud-api/internal/apple"
+	"icloud-api/internal/domain"
 	"icloud-api/internal/store"
 )
 
@@ -77,6 +78,9 @@ func (s *Service) KeepAliveAccountSession(ctx context.Context, id int64) error {
 	account, err := s.repo.GetAccount(ctx, id)
 	if err != nil || !account.Enabled {
 		return err
+	}
+	if domain.IsIMAPAuthenticationFailure(account.LastSyncError) {
+		return domain.ErrIMAPAuthenticationPaused
 	}
 	_, web, err := s.loadSession(ctx, id)
 	if errors.Is(err, ErrLoginRequired) {
@@ -244,8 +248,8 @@ func (s *Service) ClearAccountAuth(ctx context.Context, id int64) error {
 	return err
 }
 
-// Called under the account operation lock. Cooldowns are independent for the
-// two APIs; a candidate with an uncertain completion never changes channels.
+// Called under the account operation lock. Both APIs share the cooldown;
+// a throttled or uncertain completion never changes channels.
 func (s *Service) createRemoteAliasWithChannel(ctx context.Context, id int64, web apple.Session, legacy AutoAliasClient, channel string) (apple.Alias, apple.Session, error) {
 	s.operationMu.Lock()
 	if s.creationCooldowns == nil {
@@ -260,12 +264,16 @@ func (s *Service) createRemoteAliasWithChannel(ctx context.Context, id int64, we
 	if channel == "auto" {
 		channels = []string{"icloud_web"}
 		if web.Account != nil && web.Account.APIKey != "" {
-			channels = []string{"apple_account", "icloud_web"}
+			channels = []string{"apple_account"}
 		}
 	}
 	var earliest time.Time
 	for _, selected := range channels {
-		if until := cooldowns[selected]; s.now().Before(until) {
+		until := cooldowns["apple_account"]
+		if webUntil := cooldowns["icloud_web"]; webUntil.After(until) {
+			until = webUntil
+		}
+		if s.now().Before(until) {
 			if earliest.IsZero() || until.Before(earliest) {
 				earliest = until
 			}
@@ -294,8 +302,9 @@ func (s *Service) createRemoteAliasWithChannel(ctx context.Context, id int64, we
 		if err == nil || strings.TrimSpace(alias.HME) != "" || !apple.IsRateLimited(err) {
 			return alias, web, err
 		}
-		until := s.now().Add(max(61*time.Minute, apple.RetryDelay(err)))
-		cooldowns[selected] = until
+		until = s.now().Add(max(24*time.Hour, apple.RetryDelay(err)))
+		cooldowns["apple_account"] = until
+		cooldowns["icloud_web"] = until
 		if earliest.IsZero() || until.Before(earliest) {
 			earliest = until
 		}

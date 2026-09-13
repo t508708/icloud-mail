@@ -65,7 +65,7 @@ func (c *accountTestClient) CreateAccountAlias(ctx context.Context, s apple.Acco
 	return c.accountCreate(ctx, s)
 }
 
-func TestAccountChannelsOnlyFallbackOnDefiniteRateLimit(t *testing.T) {
+func TestAccountChannelsShareLongCooldownAndNeverFallbackOnRateLimit(t *testing.T) {
 	for _, uncertain := range []bool{false, true} {
 		t.Run(map[bool]string{false: "rate", true: "uncertain"}[uncertain], func(t *testing.T) {
 			now := time.Now()
@@ -91,18 +91,46 @@ func TestAccountChannelsOnlyFallbackOnDefiniteRateLimit(t *testing.T) {
 					t.Fatalf("uncertain result replayed: %v %v", alias, err)
 				}
 			} else {
-				if err != nil || alias.HME != "old@icloud.com" || oldCalls != 1 {
-					t.Fatalf("fallback: %v %v", alias, err)
+				if err == nil || alias.HME != "" || oldCalls != 0 {
+					t.Fatalf("rate limit fell back: %v %v", alias, err)
 				}
 				_, _, _ = service.createRemoteAliasWithChannel(context.Background(), 1, returned, client, "auto")
-				if managedCalls != 1 || oldCalls != 2 {
-					t.Fatalf("cooldown ignored: %d %d", managedCalls, oldCalls)
+				if managedCalls != 1 || oldCalls != 0 {
+					t.Fatalf("shared cooldown ignored: %d %d", managedCalls, oldCalls)
 				}
 			}
 			if returned.Account.SCNT != "rotated" {
 				t.Fatal("management checkpoint lost")
 			}
 		})
+	}
+}
+
+func TestExplicitChannelsRespectSharedCooldown(t *testing.T) {
+	now := time.Now()
+	client := &accountTestClient{}
+	managedCalls, webCalls := 0, 0
+	client.accountCreate = func(context.Context, apple.AccountSession) (apple.Alias, apple.AccountSession, error) {
+		managedCalls++
+		return apple.Alias{}, apple.AccountSession{}, &apple.Error{Kind: apple.ErrService, StatusCode: http.StatusTooManyRequests, RetryAfter: 48 * time.Hour}
+	}
+	client.create = func(context.Context, apple.Session, string, string) (apple.Alias, apple.Session, error) {
+		webCalls++
+		return apple.Alias{}, apple.Session{}, nil
+	}
+	service := &Service{client: client, now: func() time.Time { return now }}
+	web := apple.Session{AppleID: "owner@icloud.com", Account: &apple.AccountSession{AppleID: "owner@icloud.com", APIKey: "key"}}
+	if _, _, err := service.createRemoteAliasWithChannel(context.Background(), 1, web, client, "apple_account"); err == nil {
+		t.Fatal("expected Apple Account rate limit")
+	}
+	if _, _, err := service.createRemoteAliasWithChannel(context.Background(), 1, web, client, "icloud_web"); err == nil {
+		t.Fatal("expected shared cooldown on explicit Web channel")
+	}
+	if managedCalls != 1 || webCalls != 0 {
+		t.Fatalf("cooldown allowed request: account=%d web=%d", managedCalls, webCalls)
+	}
+	if service.creationCooldowns[1]["apple_account"].Before(now.Add(48*time.Hour)) || service.creationCooldowns[1]["icloud_web"].Before(now.Add(48*time.Hour)) {
+		t.Fatal("shared cooldown did not honor longer Retry-After")
 	}
 }
 

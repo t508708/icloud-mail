@@ -30,6 +30,9 @@ func startCreationJobTest(t *testing.T, env *adminAPITestEnv) {
 	if err := env.server.StartAliasCreationJobs(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if env.server.aliasCreationJobs.interval != 10*time.Minute {
+		t.Fatalf("production success interval=%v, want 10m", env.server.aliasCreationJobs.interval)
+	}
 	env.server.aliasCreationJobs.interval = time.Millisecond
 	t.Cleanup(func() { cancel(); env.server.aliasCreationJobs.wg.Wait() })
 }
@@ -133,7 +136,7 @@ func TestAliasCreationJobRateWaitCanStop(t *testing.T) {
 		t.Fatalf("start: %d", response.Code)
 	}
 	j := waitCreationJob(t, env.store, account.ID, "waiting")
-	if j.NextRunAt == nil || time.Until(*j.NextRunAt) < time.Hour {
+	if j.NextRunAt == nil || time.Until(*j.NextRunAt) < 24*time.Hour-time.Second {
 		t.Fatalf("cooldown: %+v", j)
 	}
 	response = env.request(t, http.MethodPost, path+"/stop", []byte(`{}`), "application/json", []*http.Cookie{cookie}, csrf)
@@ -143,6 +146,55 @@ func TestAliasCreationJobRateWaitCanStop(t *testing.T) {
 	j = waitCreationJob(t, env.store, account.ID, "stopped")
 	if j.Completed != 0 || f.calls.Load() != 1 || j.NextRunAt != nil {
 		t.Fatalf("job=%+v calls=%d", j, f.calls.Load())
+	}
+}
+
+func TestAliasCreationJobLocalBudgetWaitIsNotFailureAndCanStop(t *testing.T) {
+	env := newAdminAPITestEnv(t)
+	account := adminAPITestCreateAccount(t, env, "budget-job@icloud.com")
+	cookie, csrf, _ := env.createSession(t, "budget-job-admin", "password")
+	f := &creationJobFake{create: func(context.Context, int64, string) (domain.Alias, error) {
+		now := time.Now()
+		return domain.Alias{}, &store.AppleCreationBudgetError{Now: now, Until: now.Add(time.Hour)}
+	}}
+	env.server.SetHMESyncService(f)
+	startCreationJobTest(t, env)
+	path := fmt.Sprintf("/admin/api/v1/accounts/%d/aliases/creation-job", account.ID)
+	response := env.request(t, http.MethodPost, path, []byte(`{"count":3,"channel":"auto"}`), "application/json", []*http.Cookie{cookie}, csrf)
+	if response.Code != 202 {
+		t.Fatalf("start: %d", response.Code)
+	}
+	j := waitCreationJob(t, env.store, account.ID, "waiting")
+	if j.NextRunAt == nil || time.Until(*j.NextRunAt) < time.Hour-time.Second || j.LastError != "本地主号创建预算已用尽，请等待提示时间后重试" || j.Completed != 0 {
+		t.Fatalf("budget wait checkpoint = %+v", j)
+	}
+	response = env.request(t, http.MethodPost, path+"/stop", []byte(`{}`), "application/json", []*http.Cookie{cookie}, csrf)
+	if response.Code != 200 {
+		t.Fatalf("stop: %d", response.Code)
+	}
+	j = waitCreationJob(t, env.store, account.ID, "stopped")
+	if f.calls.Load() != 1 || j.Completed != 0 {
+		t.Fatalf("budget wait retried or completed: calls=%d job=%+v", f.calls.Load(), j)
+	}
+}
+
+func TestAliasCreationJobStopsForIMAPAuthenticationPause(t *testing.T) {
+	env := newAdminAPITestEnv(t)
+	account := adminAPITestCreateAccount(t, env, "imap-paused-job@icloud.com")
+	cookie, csrf, _ := env.createSession(t, "imap-paused-job-admin", "password")
+	f := &creationJobFake{create: func(context.Context, int64, string) (domain.Alias, error) {
+		return domain.Alias{}, domain.ErrIMAPAuthenticationPaused
+	}}
+	env.server.SetHMESyncService(f)
+	startCreationJobTest(t, env)
+	path := fmt.Sprintf("/admin/api/v1/accounts/%d/aliases/creation-job", account.ID)
+	response := env.request(t, http.MethodPost, path, []byte(`{"count":3,"channel":"auto"}`), "application/json", []*http.Cookie{cookie}, csrf)
+	if response.Code != 202 {
+		t.Fatalf("start: %d", response.Code)
+	}
+	j := waitCreationJob(t, env.store, account.ID, "failed")
+	if f.calls.Load() != 1 || j.NextRunAt != nil || j.LastError != domain.ErrIMAPAuthenticationPaused.Error() {
+		t.Fatalf("IMAP pause was retried or hidden: calls=%d job=%+v", f.calls.Load(), j)
 	}
 }
 

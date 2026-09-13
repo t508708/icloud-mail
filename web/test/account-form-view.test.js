@@ -47,6 +47,20 @@ test("account form exposes editable IMAP host and port with iCloud defaults", as
   assert.doesNotMatch(source, /model-value="imap\.mail\.me\.com:993（TLS）"\s+readonly/);
 });
 
+test("disabling a primary account requires confirmation and preserves its aliases and history", async () => {
+  const source = await readFile(viewPath, "utf8");
+  assert.match(source, /显示为暂停并暂停分配/);
+  assert.match(source, /storedEnabled\.value && !form\.enabled/);
+  assert.match(source, /ElMessageBox\.confirm\([\s\S]*?确认停用主号/);
+  assert.match(source, /按停用前快照恢复原启用及池成员状态/);
+  assert.match(source, /原本单独停用的邮箱仍保持停用/);
+  assert.match(source, /不会删除邮箱、邮件或领取历史/);
+  assert.match(source, /confirmationCancelled\(error\)/);
+  assert.match(source, /if \(!viewActive \|\| submittedRouteKey !== routeKey\(\)\) return;[\s\S]*?const imapEndpoint/);
+  assert.match(source, /submittedAccountId = String\(route\.params\.id \|\| ""\)/);
+  assert.match(source, /主号已停用；收件已暂停，下属邮箱显示为暂停并移出可分配库存/);
+});
+
 test("account normalizer keeps custom IMAP endpoint and defaults missing values", () => {
   const custom = normalizeAccount({
     imap_host: "mail.example.test",

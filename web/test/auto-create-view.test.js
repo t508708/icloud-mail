@@ -27,10 +27,18 @@ function autoCreationErrorFormatter(source) {
   assert.ok(messagesMatch, "missing automatic creation error messages");
   const messages = Function(`"use strict"; return (${messagesMatch[1]});`)();
   const body = functionBody(source, "function autoCreationErrorMessage");
+  const localBody = functionBody(source, "function isLocalCreationBudgetWait");
+  const appleBody = functionBody(source, "function isAppleRateLimited");
   return Function(
     "AUTO_CREATION_ERROR_MESSAGES",
+    "isLocalCreationBudgetWait",
+    "isAppleRateLimited",
     `"use strict"; return function (value) ${body}`,
-  )(messages);
+  )(
+    messages,
+    Function(`"use strict"; return function (value) ${localBody}`)(),
+    Function(`"use strict"; return function (value) ${appleBody}`)(),
+  );
 }
 
 test("account detail exposes automatic alias creation with persistent credential handling", async () => {
@@ -66,8 +74,31 @@ test("account detail exposes automatic alias creation with persistent credential
   );
   assert.equal(
     formatAutoCreationError("APPLE_RATE_LIMITED"),
-    "Apple 请求过于频繁，自动创建已进入冷却，冷却后会继续执行",
+    "Apple 返回了限流；该创建计划已暂停至少 24 小时，不会自动切换到另一通道。",
   );
+  assert.match(
+    formatAutoCreationError("APPLE_CREATION_BUDGET_WAIT"),
+    /本项目的主号共享创建预算正在等待恢复.*不表示 Apple 返回了限流/,
+  );
+  assert.match(source, /自动收件连接已暂停.*App 专用密码.*邮箱服务状态/s);
+  const authFailureBody = functionBody(source, "function isIMAPAuthenticationFailure");
+  const isIMAPAuthenticationFailure = Function(
+    `"use strict"; return function (value) ${authFailureBody}`,
+  )();
+  assert.equal(isIMAPAuthenticationFailure("login IMAP account: AUTHENTICATIONFAILED"), true);
+  assert.equal(isIMAPAuthenticationFailure("IMAP_AUTHENTICATION_PAUSED"), true);
+  assert.equal(isIMAPAuthenticationFailure("IMAP connection timeout"), false);
+  const localBudgetBody = functionBody(source, "function isLocalCreationBudgetWait");
+  const isLocalCreationBudgetWait = Function(
+    `"use strict"; return function (value) ${localBudgetBody}`,
+  )();
+  const appleRateBody = functionBody(source, "function isAppleRateLimited");
+  const isAppleRateLimited = Function(
+    `"use strict"; return function (value) ${appleRateBody}`,
+  )();
+  assert.equal(isLocalCreationBudgetWait("本地主号创建预算已用尽，冷却后将自动继续"), true);
+  assert.equal(isAppleRateLimited("Apple 请求被限流，当前周期剩余计划槽已跳过，冷却后会继续执行"), true);
+  assert.equal(isAppleRateLimited("本地主号创建预算已用尽，请等待提示时间后重试"), false);
   assert.equal(
     formatAutoCreationError("APPLE_ALIAS_CONFIRMATION_PENDING"),
     "Apple 创建结果尚未完成目录确认；后续计划会继续确认，确认前不会重复创建",
@@ -76,6 +107,15 @@ test("account detail exposes automatic alias creation with persistent credential
     formatAutoCreationError(" unknown upstream detail "),
     " unknown upstream detail ",
   );
+});
+
+test("account detail explains account-level suspension and automatic restoration", async () => {
+  const source = await readFile(viewPath, "utf8");
+  assert.match(source, /v-if="!account\.enabled" class="account-paused-notice"/);
+  assert.match(source, /下属邮箱显示为暂停并暂停分配，同时移出邮箱池可分配库存/);
+  assert.match(source, /按停用前快照恢复原启用及池成员状态/);
+  assert.match(source, /单独停用的邮箱仍保持停用/);
+  assert.match(source, /邮箱与历史记录未删除/);
 });
 
 test("batch creation panel is directly below the privacy-mail directory", async () => {

@@ -73,7 +73,7 @@ func (s *Server) adminAPICreateAppleAlias(c *gin.Context) {
 	alias, err := creator.CreateAutoAlias(ctx, accountID)
 	if err != nil {
 		apiErr := classifyManualAliasError(err)
-		if delay := apple.RetryDelay(err); delay > 0 {
+		if delay := manualAliasRetryDelay(err); delay > 0 {
 			c.Header("Retry-After", strconv.FormatInt(int64((delay+time.Second-1)/time.Second), 10))
 		}
 		s.adminAPIFinishAppleFailure(c, mustSession(c), accountID, "alias_create_manual", apiErr)
@@ -105,6 +105,10 @@ func (s *Server) adminAPICreateAppleAlias(c *gin.Context) {
 
 func classifyManualAliasError(err error) adminAPIAppleError {
 	switch {
+	case isAppleCreationBudgetWait(err):
+		return adminAPIAppleError{Status: http.StatusTooManyRequests, Code: "APPLE_CREATION_BUDGET_WAIT", Message: "本地主号创建预算已用尽，请等待提示时间后重试"}
+	case errors.Is(err, domain.ErrIMAPAuthenticationPaused):
+		return adminAPIAppleError{Status: http.StatusConflict, Code: "IMAP_AUTHENTICATION_PAUSED", Message: domain.ErrIMAPAuthenticationPaused.Error()}
 	case errors.Is(err, store.ErrAliasLimit):
 		return adminAPIAppleError{Status: http.StatusConflict, Code: "ALIAS_LIMIT_REACHED", Message: "该主号已达到本地邮箱容量上限"}
 	case errors.Is(err, hmesync.ErrAccountDisabled):
@@ -116,4 +120,22 @@ func classifyManualAliasError(err error) adminAPIAppleError {
 	default:
 		return classifyAccountAuthError(err)
 	}
+}
+
+func isAppleCreationBudgetWait(err error) bool {
+	var coded interface{ DiagnosticCode() string }
+	return errors.As(err, &coded) && coded.DiagnosticCode() == "APPLE_CREATION_BUDGET_WAIT"
+}
+
+func manualAliasRetryDelay(err error) time.Duration {
+	if isAppleCreationBudgetWait(err) {
+		var retry interface{ RetryDelay() time.Duration }
+		if errors.As(err, &retry) && retry != nil {
+			return retry.RetryDelay()
+		}
+	}
+	if errors.Is(err, hmesync.ErrRateLimited) || apple.IsRateLimited(err) {
+		return max(24*time.Hour, apple.RetryDelay(err))
+	}
+	return apple.RetryDelay(err)
 }

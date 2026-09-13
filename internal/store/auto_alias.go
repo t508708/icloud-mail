@@ -168,10 +168,6 @@ func (s *Store) createAutoAliasCandidate(
 		}
 	}
 	if alias.Enabled {
-		if _, err := s.txExecContext(ctx, tx,
-			`DELETE FROM imap_sync_states WHERE account_id = ?`, alias.AccountID); err != nil {
-			return domain.Alias{}, domain.AppleWebSession{}, fmt.Errorf("reset IMAP cursor after automatic alias creation: %w", err)
-		}
 		if _, err := s.bumpAccountVersionTx(ctx, tx, alias.AccountID, accountVersion); err != nil {
 			return domain.Alias{}, domain.AppleWebSession{}, fmt.Errorf("advance account version after automatic alias creation: %w", err)
 		}
@@ -294,10 +290,6 @@ func (s *Store) ConfirmPendingAutoAlias(
 	}
 	if err := requireAffected(result, "pending automatic alias"); err != nil {
 		return domain.Alias{}, domain.AppleWebSession{}, err
-	}
-	if _, err := s.txExecContext(ctx, tx,
-		`DELETE FROM imap_sync_states WHERE account_id = ?`, session.AccountID); err != nil {
-		return domain.Alias{}, domain.AppleWebSession{}, fmt.Errorf("reset IMAP cursor after automatic alias confirmation: %w", err)
 	}
 	if _, err := s.bumpAccountVersionTx(ctx, tx, session.AccountID, accountVersion); err != nil {
 		return domain.Alias{}, domain.AppleWebSession{}, fmt.Errorf("advance account version after automatic alias confirmation: %w", err)

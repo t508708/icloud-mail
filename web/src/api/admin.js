@@ -192,6 +192,13 @@ function normalizeSyncProgress(raw) {
 }
 
 export function normalizeAlias(raw = {}) {
+  const enabled = Boolean(firstDefined(raw, "enabled", "Enabled"));
+  const configuredEnabled = Boolean(
+    firstDefined(raw, "configured_enabled", "configuredEnabled", "ConfiguredEnabled") ?? enabled,
+  );
+  const accountEnabled = Boolean(
+    firstDefined(raw, "account_enabled", "accountEnabled", "AccountEnabled") ?? true,
+  );
   const lastSyncError =
     firstDefined(raw, "last_sync_error", "lastSyncError", "LastSyncError") ||
     "";
@@ -265,7 +272,9 @@ export function normalizeAlias(raw = {}) {
           "CredentialVersion",
         ),
       ) || 0,
-    enabled: Boolean(firstDefined(raw, "enabled", "Enabled")),
+    enabled,
+    configuredEnabled,
+    accountEnabled,
     lastSyncStatus:
       firstDefined(raw, "last_sync_status", "lastSyncStatus", "LastSyncStatus") ||
       "pending",

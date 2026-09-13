@@ -23,7 +23,7 @@ const aliasColumns = `
 	(SELECT MAX(m.internal_date)
 	 FROM alias_messages am
 	 JOIN archived_messages m ON m.id = am.message_id
-	 WHERE am.alias_id = al.id)`
+	 WHERE am.alias_id = al.id), NOT ac.enabled`
 
 const aliasJoins = `
 	FROM aliases al
@@ -128,11 +128,8 @@ func (s *Store) CreateAlias(ctx context.Context, alias domain.Alias) (domain.Ali
 		}
 	}
 	if alias.Enabled {
-		if _, err := s.txExecContext(ctx, tx,
-			`DELETE FROM imap_sync_states WHERE account_id = ?`, alias.AccountID,
-		); err != nil {
-			return domain.Alias{}, fmt.Errorf("reset IMAP cursor after alias creation: %w", err)
-		}
+		// Alias membership does not change the mailbox UID stream. Preserve its
+		// cursor so a new alias starts at the current position instead of rescanning history.
 		if _, err := s.bumpAccountVersionTx(ctx, tx, alias.AccountID, accountVersion); err != nil {
 			return domain.Alias{}, fmt.Errorf("advance account version after alias creation: %w", err)
 		}
@@ -230,7 +227,7 @@ func (s *Store) ListAliasesPage(ctx context.Context, filter AliasListFilter) (Al
 		filterArgs = append(filterArgs, *filter.AccountID)
 	}
 	if filter.Enabled != nil {
-		predicates = append(predicates, `al.enabled = ?`)
+		predicates = append(predicates, `(al.enabled AND EXISTS (SELECT 1 FROM accounts ac WHERE ac.id = al.account_id AND ac.enabled = TRUE)) = ?`)
 		filterArgs = append(filterArgs, *filter.Enabled)
 	}
 	if filter.GroupID != nil {
@@ -602,13 +599,6 @@ func (s *Store) updateAliasState(
 		return err
 	}
 
-	if reenabled {
-		if _, err := s.txExecContext(ctx, tx,
-			`DELETE FROM imap_sync_states WHERE account_id = ?`, accountID,
-		); err != nil {
-			return fmt.Errorf("reset IMAP cursor after alias re-enable: %w", err)
-		}
-	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
@@ -658,7 +648,7 @@ func scanAlias(scanner rowScanner) (domain.Alias, error) {
 		&alias.CredentialVersion, &mailboxUIDValidity, &mailboxUIDNext,
 		&enabled, &alias.LastSyncStatus,
 		&alias.LastSyncError, &lastSyncedAt, &lastAccessedAt,
-		&createdAt, &updatedAt, &latestReceivedAt,
+		&createdAt, &updatedAt, &latestReceivedAt, &alias.AccountDisabled,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {

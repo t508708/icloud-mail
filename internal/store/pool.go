@@ -99,6 +99,8 @@ func (s *Store) migratePool(ctx context.Context, tx *sql.Tx) error {
 		 enroll_after BIGINT NOT NULL DEFAULT 0)`,
 		`CREATE TABLE IF NOT EXISTS pool_members (alias_id BIGINT PRIMARY KEY REFERENCES aliases(id) ON DELETE CASCADE,
 		 state TEXT NOT NULL CHECK(state IN ('available','leased','used','paused')), updated_at BIGINT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS pool_suspended_members (alias_id BIGINT PRIMARY KEY REFERENCES aliases(id) ON DELETE CASCADE,
+		 state TEXT NOT NULL CHECK(state IN ('available','leased','used','paused')), updated_at BIGINT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS pool_requests (client_id TEXT NOT NULL REFERENCES pool_clients(id),
 		 request_id TEXT NOT NULL, fingerprint TEXT NOT NULL, created_at BIGINT NOT NULL,
 		 PRIMARY KEY(client_id, request_id))`,
@@ -115,6 +117,17 @@ func (s *Store) migratePool(ctx context.Context, tx *sql.Tx) error {
 			return fmt.Errorf("migrate mailbox pool: %w", err)
 		}
 	}
+	if _, err := s.txExecContext(ctx, tx, `INSERT INTO pool_suspended_members(alias_id,state,updated_at)
+		SELECT m.alias_id,m.state,m.updated_at FROM pool_members m
+		JOIN aliases al ON al.id=m.alias_id JOIN accounts a ON a.id=al.account_id
+		WHERE a.enabled=FALSE ON CONFLICT(alias_id) DO NOTHING`); err != nil {
+		return fmt.Errorf("snapshot disabled-account pool members: %w", err)
+	}
+	if _, err := s.txExecContext(ctx, tx, `DELETE FROM pool_members WHERE alias_id IN (
+		SELECT m.alias_id FROM pool_members m JOIN aliases al ON al.id=m.alias_id
+		JOIN accounts a ON a.id=al.account_id WHERE a.enabled=FALSE)`); err != nil {
+		return fmt.Errorf("remove disabled-account pool members: %w", err)
+	}
 	return nil
 }
 
@@ -125,11 +138,16 @@ func (s *Store) poolTx(ctx context.Context) (*sql.Tx, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.txExecContext(ctx, tx, `UPDATE pool_lock SET revision = revision + 1 WHERE id = 1`); err != nil {
+	if err := s.lockPoolTx(ctx, tx); err != nil {
 		_ = tx.Rollback()
 		return nil, err
 	}
 	return tx, nil
+}
+
+func (s *Store) lockPoolTx(ctx context.Context, tx *sql.Tx) error {
+	_, err := s.txExecContext(ctx, tx, `UPDATE pool_lock SET revision = revision + 1 WHERE id = 1`)
+	return err
 }
 
 func (s *Store) CreatePoolClient(ctx context.Context, project string) (PoolClient, string, error) {
@@ -538,6 +556,10 @@ func (s *Store) ActPoolLease(ctx context.Context, id, clientID, action string, t
 	if _, err = s.lockAccountVersionForUpdate(ctx, tx, accountID); err != nil {
 		return v, err
 	}
+	var accountEnabled bool
+	if err = s.txQueryRowContext(ctx, tx, `SELECT enabled FROM accounts WHERE id=?`, accountID).Scan(&accountEnabled); err != nil {
+		return v, err
+	}
 	alias, err := s.getAliasByIDTx(ctx, tx, v.AliasID)
 	if err != nil {
 		return v, err
@@ -563,8 +585,14 @@ func (s *Store) ActPoolLease(ctx context.Context, id, clientID, action string, t
 	if _, err = s.txExecContext(ctx, tx, `UPDATE pool_leases SET state=?,expires_at=?,updated_at=? WHERE id=?`, v.State, timestamp(v.ExpiresAt), timestamp(now), v.ID); err != nil {
 		return v, err
 	}
-	if _, err = s.txExecContext(ctx, tx, `UPDATE pool_members SET state=?,updated_at=? WHERE alias_id=?`, memberState, timestamp(now), v.AliasID); err != nil {
-		return v, err
+	if accountEnabled {
+		if _, err = s.txExecContext(ctx, tx, `UPDATE pool_members SET state=?,updated_at=? WHERE alias_id=?`, memberState, timestamp(now), v.AliasID); err != nil {
+			return v, err
+		}
+	} else {
+		if _, err = s.txExecContext(ctx, tx, `UPDATE pool_suspended_members SET state=?,updated_at=? WHERE alias_id=?`, memberState, timestamp(now), v.AliasID); err != nil {
+			return v, err
+		}
 	}
 	return v, tx.Commit()
 }

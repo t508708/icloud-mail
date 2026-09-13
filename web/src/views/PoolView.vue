@@ -260,8 +260,7 @@
           <p class="pool-hint">
             开启自动入池后，新创建或新同步的邮箱会进入库存；已有邮箱在「邮箱库存」中手动选择加入。空闲目标为
             0
-            时持续按原计划创建；达到正数目标时跳过创建，领取后自动恢复。定时创建每小时安排
-            每主号 40 次尝试，最短 60 秒、平均约 90 秒，优先 Apple Account、限流后切换 iCloud Web；最多 3 个主号并行，同一主号串行确认，Apple 冷却 61 分钟仍生效。
+            时按计划创建；达到正数目标时跳过创建，领取后自动恢复。每主号手动与自动创建共用本地预算：滚动 1 小时最多 5 次、24 小时最多 20 次，至少间隔 10 分钟。自动只选择初始通道，不因限流切换；Apple 明确限流后暂停至少 24 小时。本地上限不代表 Apple 官方配额保证。
           </p>
           <el-table
             :data="accounts"
@@ -307,7 +306,7 @@
                       : "已关闭"
                   }}</small>
                 </div>
-                <small v-if="row.creation_status === 'cooldown'" class="pool-cooldown">限流冷却中，到时自动继续</small>
+                <small v-if="row.creation_status === 'cooldown'" class="pool-cooldown">创建暂停中；请在主号详情查看是本地预算等待还是 Apple 限流</small>
                 <small v-else-if="row.last_error" class="pool-error">{{
                   row.last_error
                 }}</small></template

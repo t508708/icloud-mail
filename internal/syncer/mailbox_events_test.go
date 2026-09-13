@@ -207,6 +207,94 @@ func TestMailboxEventsInvalidCipherDoesNotConnect(t *testing.T) {
 	}
 }
 
+func TestMailboxEventsPausesAuthenticationFailureUntilCredentialChanges(t *testing.T) {
+	repo := newFakeRepo(
+		domain.Account{ID: 1, Enabled: true, PasswordCiphertext: "bad"},
+		domain.Account{ID: 2, Enabled: true, PasswordCiphertext: "good"},
+	)
+	var watches, syncs [3]atomic.Int32
+	m := eventTestManager(repo, func(ctx context.Context, account domain.Account, _ string, _ func()) error {
+		watches[account.ID].Add(1)
+		if account.ID == 1 {
+			return errors.New("AUTHENTICATIONFAILED")
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}, func(_ context.Context, id int64) error {
+		syncs[id].Add(1)
+		return errors.New("AUTHENTICATIONFAILED")
+	})
+	runEventTest(t, m)
+	eventually := func() { eventEventually(t, func() bool { return syncs[1].Load() == 1 && watches[2].Load() == 1 }) }
+	eventually()
+	time.Sleep(60 * time.Millisecond)
+	if watches[1].Load() != 1 || syncs[1].Load() != 1 {
+		t.Fatalf("auth account retried: watches=%d syncs=%d", watches[1].Load(), syncs[1].Load())
+	}
+	if watches[2].Load() != 1 {
+		t.Fatal("unrelated account watcher did not continue")
+	}
+	repo.mu.Lock()
+	repo.accounts[0].PasswordCiphertext = "new"
+	repo.accounts[0].LastSyncError = ""
+	repo.mu.Unlock()
+	eventEventually(t, func() bool { return watches[1].Load() == 2 })
+}
+
+func TestMailboxEventsSkipsPersistedAuthenticationFailures(t *testing.T) {
+	repo := newFakeRepo(domain.Account{ID: 1, Enabled: true, LastSyncError: "IMAP AUTHENTICATIONFAILED"}, domain.Account{ID: 2, Enabled: true})
+	var watches [3]atomic.Int32
+	m := eventTestManager(repo, func(ctx context.Context, account domain.Account, _ string, _ func()) error {
+		watches[account.ID].Add(1)
+		<-ctx.Done()
+		return ctx.Err()
+	}, func(context.Context, int64) error { return nil })
+	runEventTest(t, m)
+	eventEventually(t, func() bool { return watches[2].Load() == 1 })
+	time.Sleep(40 * time.Millisecond)
+	if watches[1].Load() != 0 {
+		t.Fatal("persisted authentication failure started watcher")
+	}
+}
+
+func TestMailboxEventsStopsWatcherWhenAuthenticationFailureIsPersisted(t *testing.T) {
+	repo := newFakeRepo(domain.Account{ID: 1, Enabled: true})
+	watches := make(chan eventWatchCall, 2)
+	m := eventTestManager(repo, captureEventWatches(watches), func(context.Context, int64) error { return nil })
+	runEventTest(t, m)
+	w := eventReceive(t, watches)
+	w.notify()
+	eventEventually(t, func() bool { return m.Healthy(1) })
+	repo.mu.Lock()
+	repo.accounts[0].LastSyncError = "IMAP AUTHENTICATIONFAILED"
+	repo.mu.Unlock()
+	eventReceive(t, w.stopped)
+	eventEventually(t, func() bool { return !m.Healthy(1) })
+	select {
+	case unexpected := <-watches:
+		t.Fatalf("paused account watcher restarted: %#v", unexpected)
+	case <-time.After(40 * time.Millisecond):
+	}
+}
+
+func TestMailboxEventsDefersNoProgressWithoutRetryOrHealthyState(t *testing.T) {
+	repo := newFakeRepo(domain.Account{ID: 1, Enabled: true})
+	watches := make(chan eventWatchCall, 2)
+	var syncs atomic.Int32
+	m := eventTestManager(repo, captureEventWatches(watches), func(context.Context, int64) error {
+		syncs.Add(1)
+		return ErrSyncDeferred
+	})
+	runEventTest(t, m)
+	w := eventReceive(t, watches)
+	w.notify()
+	eventEventually(t, func() bool { return syncs.Load() == 1 })
+	time.Sleep(50 * time.Millisecond)
+	if syncs.Load() != 1 || m.Healthy(1) {
+		t.Fatalf("deferred notification state: calls=%d healthy=%v", syncs.Load(), m.Healthy(1))
+	}
+}
+
 func TestNotificationSyncUsesManagerLimitsAndClearsProgress(t *testing.T) {
 	repo := newFakeRepo(domain.Account{ID: 1, Enabled: true})
 	var manager *Manager

@@ -458,6 +458,7 @@
               >
                 等待目录确认
               </el-tag>
+              <el-tag v-else-if="!row.accountEnabled && row.configuredEnabled" type="info" effect="plain" size="small">随主号暂停</el-tag>
               <SyncStatus v-else :item="row" details />
             </template>
             <template v-else-if="column.key === 'actions'">
@@ -531,6 +532,7 @@
             >
               等待目录确认
             </el-tag>
+            <el-tag v-else-if="!alias.accountEnabled && alias.configuredEnabled" type="info" effect="plain" size="small">随主号暂停</el-tag>
             <SyncStatus v-else :item="alias" details />
           </header>
           <dl class="mobile-kv-list">

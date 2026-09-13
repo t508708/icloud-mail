@@ -645,6 +645,9 @@ func (s *Service) CreateAliasWithChannel(ctx context.Context, accountID int64, c
 	if !account.Enabled {
 		return domain.Alias{}, wrapError(CodeAccountDisabled, ErrAccountDisabled, nil)
 	}
+	if domain.IsIMAPAuthenticationFailure(account.LastSyncError) {
+		return domain.Alias{}, wrapError(CodeMailboxAuthenticationPaused, domain.ErrIMAPAuthenticationPaused, nil)
+	}
 	reportProgress(domain.AliasCreationPhaseCheckingCapacity, autoCreateCheckingCapacityPercent, 0)
 	pendingConfirmation, pendingErr := getPending(ctx, accountID)
 	hasPendingConfirmation := pendingErr == nil
@@ -674,6 +677,27 @@ func (s *Service) CreateAliasWithChannel(ctx context.Context, accountID int64, c
 	if trustedDSID == "" {
 		return domain.Alias{}, expireAutoSession(wrapError(CodeSessionExpired, ErrSessionExpired,
 			errors.New("stored Apple session omitted the account identifier")))
+	}
+	// Claim before the first upstream request. All entry points and channels
+	// share this durable attempt budget, including failed confirmation attempts.
+	if budget, ok := s.repo.(appleCreationBudgetRepository); ok {
+		if err := budget.ClaimAppleCreationAttempt(ctx, accountID, s.now()); err != nil {
+			if errors.Is(err, store.ErrAccountDisabled) {
+				return domain.Alias{}, wrapError(CodeAccountDisabled, ErrAccountDisabled, err)
+			}
+			return domain.Alias{}, err
+		}
+		defer func() {
+			if !errors.Is(resultErr, ErrRateLimited) && !apple.IsRateLimited(resultErr) {
+				return
+			}
+			persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), autoCreatePersistTimeout)
+			defer cancel()
+			until := s.now().Add(max(24*time.Hour, apple.RetryDelay(resultErr)))
+			if err := budget.PauseAppleCreation(persistCtx, accountID, until); err != nil {
+				resultErr = errors.Join(resultErr, wrapPersistenceError(err))
+			}
+		}()
 	}
 	reportProgress(domain.AliasCreationPhaseValidatingSession, autoCreateValidatingSessionPercent, 0)
 	validated, err := s.client.Validate(ctx, session)

@@ -105,6 +105,11 @@ func (s *Store) UpdateAccount(ctx context.Context, account domain.Account) (doma
 		return domain.Account{}, fmt.Errorf("begin account update: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	// Pool writers acquire this lock before account rows. Keep that ordering
+	// while account enable/disable atomically snapshots or restores membership.
+	if err := s.lockPoolTx(ctx, tx); err != nil {
+		return domain.Account{}, fmt.Errorf("lock pool before account update: %w", err)
+	}
 	accountVersion, err := s.lockAccountVersionForUpdate(ctx, tx, account.ID)
 	if err != nil {
 		return domain.Account{}, fmt.Errorf("lock account for update: %w", err)
@@ -195,7 +200,18 @@ func (s *Store) UpdateAccount(ctx context.Context, account domain.Account) (doma
 	if err := s.upsertAccountMailboxSettingsTx(ctx, tx, account.ID, requestedMailboxType, requestedEmailSuffix, nextAccountVersion); err != nil {
 		return domain.Account{}, fmt.Errorf("update account mailbox settings: %w", err)
 	}
+	reenabled := !currentEnabled && account.Enabled
 	if !account.Enabled {
+		if _, err := s.txExecContext(ctx, tx, `INSERT INTO pool_suspended_members(alias_id,state,updated_at)
+			SELECT m.alias_id,m.state,m.updated_at FROM pool_members m
+			JOIN aliases al ON al.id=m.alias_id WHERE al.account_id=?
+			ON CONFLICT(alias_id) DO NOTHING`, account.ID); err != nil {
+			return domain.Account{}, fmt.Errorf("snapshot pool members after account disable: %w", err)
+		}
+		if _, err := s.txExecContext(ctx, tx, `DELETE FROM pool_members WHERE alias_id IN (
+			SELECT al.id FROM aliases al WHERE al.account_id=?)`, account.ID); err != nil {
+			return domain.Account{}, fmt.Errorf("remove pool members after account disable: %w", err)
+		}
 		// A disabled primary account must not retain a live background creation
 		// plan. Clearing future slots in this transaction prevents the worker
 		// from making another remote request after the account update commits.
@@ -204,6 +220,18 @@ func (s *Store) UpdateAccount(ctx context.Context, account domain.Account) (doma
 			SET enabled = FALSE, planned_at_json = '[]', next_run_at = NULL, updated_at = ?
 			WHERE account_id = ?`, timestamp(now), account.ID); err != nil {
 			return domain.Account{}, fmt.Errorf("disable alias creation after account update: %w", err)
+		}
+	}
+	if reenabled {
+		if _, err := s.txExecContext(ctx, tx, `INSERT INTO pool_members(alias_id,state,updated_at)
+			SELECT suspended.alias_id,suspended.state,suspended.updated_at
+			FROM pool_suspended_members suspended JOIN aliases al ON al.id=suspended.alias_id
+			WHERE al.account_id=? ON CONFLICT(alias_id) DO NOTHING`, account.ID); err != nil {
+			return domain.Account{}, fmt.Errorf("restore pool members after account re-enable: %w", err)
+		}
+		if _, err := s.txExecContext(ctx, tx, `DELETE FROM pool_suspended_members WHERE alias_id IN (
+			SELECT al.id FROM aliases al WHERE al.account_id=?)`, account.ID); err != nil {
+			return domain.Account{}, fmt.Errorf("clear pool member snapshot after account re-enable: %w", err)
 		}
 	}
 	if requestedMailboxType == domain.MailboxTypeCustom {
@@ -219,7 +247,6 @@ func (s *Store) UpdateAccount(ctx context.Context, account domain.Account) (doma
 	}
 
 	passwordChanged := account.PasswordCiphertext != "" && account.PasswordCiphertext != currentPassword
-	reenabled := !currentEnabled && account.Enabled
 	endpointChanged := requestedHost != strings.TrimSpace(currentHost) || account.IMAPPort != currentPort
 	mailboxSourceChanged := endpointChanged || usernameChanged
 	if emailChanged || requestedMailboxType != domain.NormalizeMailboxType(currentMailboxType) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"icloud-api/internal/apple"
 	"icloud-api/internal/domain"
 	"icloud-api/internal/hmesync"
+	"icloud-api/internal/store"
 )
 
 type manualAliasFake struct {
@@ -113,7 +115,7 @@ func TestManualAliasRateLimitAndBusyRelease(t *testing.T) {
 	}}
 	env.server.SetHMESyncService(fake)
 	first := manualAliasRequest(t, env, account.ID, cookie, csrf)
-	if first.Code != http.StatusTooManyRequests || first.Header().Get("Retry-After") != "7" {
+	if first.Code != http.StatusTooManyRequests || first.Header().Get("Retry-After") != "86400" {
 		t.Fatalf("rate response=%d retry=%q", first.Code, first.Header().Get("Retry-After"))
 	}
 	mu.Lock()
@@ -128,6 +130,55 @@ func TestManualAliasRateLimitAndBusyRelease(t *testing.T) {
 	mu.Unlock()
 	if got != 2 {
 		t.Fatalf("calls=%d", got)
+	}
+}
+
+func TestManualAliasBudgetWaitUsesLocal429AndRetryAfter(t *testing.T) {
+	env := newAdminAPITestEnv(t)
+	account := adminAPITestCreateAccount(t, env, "manual-budget@icloud.com")
+	cookie, csrf, _ := env.createSession(t, "manual-budget-admin", "password")
+	delay := 95 * time.Second
+	fake := &manualAliasFake{create: func(context.Context, int64) (domain.Alias, error) {
+		now := time.Now()
+		return domain.Alias{}, &store.AppleCreationBudgetError{Now: now, Until: now.Add(delay)}
+	}}
+	env.server.SetHMESyncService(fake)
+	response := manualAliasRequest(t, env, account.ID, cookie, csrf)
+	var payload struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") != "95" {
+		t.Fatalf("budget response=%d retry=%q body=%s", response.Code, response.Header().Get("Retry-After"), response.Body.String())
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Error.Code != "APPLE_CREATION_BUDGET_WAIT" || !strings.Contains(payload.Error.Message, "本地主号创建预算") {
+		t.Fatalf("budget response body = %s", response.Body.String())
+	}
+}
+
+func TestManualAliasIMAPAuthenticationPauseIsConflict(t *testing.T) {
+	env := newAdminAPITestEnv(t)
+	account := adminAPITestCreateAccount(t, env, "manual-imap-paused@icloud.com")
+	cookie, csrf, _ := env.createSession(t, "manual-imap-paused-admin", "password")
+	env.server.SetHMESyncService(&manualAliasFake{create: func(context.Context, int64) (domain.Alias, error) {
+		return domain.Alias{}, domain.ErrIMAPAuthenticationPaused
+	}})
+	response := manualAliasRequest(t, env, account.ID, cookie, csrf)
+	var payload struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusConflict || payload.Error.Code != "IMAP_AUTHENTICATION_PAUSED" {
+		t.Fatalf("IMAP pause response=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

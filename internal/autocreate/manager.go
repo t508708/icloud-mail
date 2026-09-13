@@ -22,18 +22,18 @@ import (
 )
 
 const (
-	// CreationsPerCycle is the number of attempts in one hourly schedule.
-	CreationsPerCycle = 40
+	// CreationsPerCycle is this project's conservative hourly ceiling, not an
+	// Apple-published quota or guarantee.
+	CreationsPerCycle = 5
 
 	// MinimumInterval is the smallest permitted interval between attempts.
-	MinimumInterval = time.Minute
+	MinimumInterval = 10 * time.Minute
 
 	// CycleDuration is the duration covered by one generated plan.
 	CycleDuration = time.Hour
 
-	// appleRateLimitCooldown clears Apple's observed 30-60 minute reserve
-	// batch window before another generated address is submitted.
-	appleRateLimitCooldown = 61 * time.Minute
+	// appleRateLimitCooldown is a conservative pause after explicit upstream throttling.
+	appleRateLimitCooldown = 24 * time.Hour
 
 	defaultPollInterval                  = 5 * time.Second
 	defaultOverdueGrace                  = 2 * time.Minute
@@ -261,7 +261,7 @@ func (m *Manager) UpgradeCadence(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
-	return upgrader.UpgradeAliasCreationCadence(ctx, "40-per-hour-v1", m.now(), m.newPlan)
+	return upgrader.UpgradeAliasCreationCadence(ctx, "conservative-5-per-hour-v2", m.now(), m.newPlan)
 }
 
 // GetSchedule returns a persisted schedule. An absent row means the feature
@@ -585,7 +585,13 @@ func (m *Manager) processDue(ctx context.Context, schedule domain.AliasCreationS
 			// Start the cooldown at the observed failure time. The claim timestamp
 			// can precede Apple's response by several seconds, which would otherwise
 			// shorten the provider's rolling window.
-			cooldownPlan, cooldownPlanErr := m.newPlanStartingAt(m.now().Add(appleRateLimitCooldown))
+			delay := appleRateLimitCooldown
+			if diagnoseAliasCreationError(createErr).code == "APPLE_CREATION_BUDGET_WAIT" {
+				delay = max(MinimumInterval, localCreationBudgetRetryDelay(createErr))
+			} else if retryDelay := apple.RetryDelay(createErr); retryDelay > delay {
+				delay = retryDelay
+			}
+			cooldownPlan, cooldownPlanErr := m.newPlanStartingAt(m.now().Add(delay))
 			if cooldownPlanErr == nil {
 				expectedNext := nextRunAt.UTC()
 				cooldownContext, cancelCooldownContext := context.WithTimeout(logContext, terminalStatePersistTimeout)
@@ -623,6 +629,9 @@ func (m *Manager) processDue(ctx context.Context, schedule domain.AliasCreationS
 		case errors.Is(createErr, ErrCapacityReached):
 			disableOperation = "disable_creation_schedule"
 			disableMessage = "达到容量上限后关闭自动创建失败"
+		case disableAliasCreationAfterError(createErr):
+			disableOperation = "disable_creation_schedule_after_account_error"
+			disableMessage = "账户或会话异常后关闭自动创建失败"
 		case aliasCreationUntrackedRemoteSideEffect(createErr):
 			disableOperation = "pause_after_untracked_remote_side_effect"
 			disableMessage = "远端地址可能已创建但本地候选未保存，暂停自动创建失败"
@@ -684,6 +693,18 @@ func (m *Manager) processDue(ctx context.Context, schedule domain.AliasCreationS
 		nextRunAt,
 		resultRecorded,
 	)
+}
+
+func disableAliasCreationAfterError(err error) bool {
+	switch diagnoseAliasCreationError(err).code {
+	case "APPLE_LOGIN_REQUIRED", "APPLE_SESSION_EXPIRED", "APPLE_ACCOUNT_LOGIN_REQUIRED",
+		"APPLE_ACCOUNT_SESSION_EXPIRED", "APPLE_CREDENTIALS_INVALID",
+		"APPLE_VERIFICATION_INVALID", "APPLE_FLOW_EXPIRED", "APPLE_ACCOUNT_ACTION_REQUIRED",
+		"APPLE_ACCOUNT_MISMATCH", "ACCOUNT_DISABLED", "ACCOUNT_CHANGED", "IMAP_AUTHENTICATION_PAUSED":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Manager) correctPlanAfterClaim(
@@ -804,8 +825,8 @@ func (m *Manager) newPlanStartingAt(first time.Time) ([]time.Time, error) {
 	return planned, nil
 }
 
-// generatePlan spreads forty deadlines across an hour. Gaps are randomized
-// in seconds, at least one minute, and total exactly one hour.
+// generatePlan spreads five deadlines across an hour. Gaps are randomized
+// in seconds, at least ten minutes, and total exactly one hour.
 func generatePlan(anchor time.Time, random RandomSource) ([]time.Time, error) {
 	if random == nil {
 		return nil, errors.New("random source is required")
@@ -869,7 +890,16 @@ func aliasCreationRequiresRateLimitCooldown(err error) bool {
 	// classified error, but also inspect wrapped Apple causes. A reserve can
 	// return a rate-limit response while a session checkpoint fails, in which
 	// case hmesync joins the persistence error before APPLE_RATE_LIMITED.
-	return diagnoseAliasCreationError(err).code == "APPLE_RATE_LIMITED" || apple.IsRateLimited(err)
+	code := diagnoseAliasCreationError(err).code
+	return code == "APPLE_RATE_LIMITED" || code == "APPLE_CREATION_BUDGET_WAIT" || apple.IsRateLimited(err)
+}
+
+func localCreationBudgetRetryDelay(err error) time.Duration {
+	var retry interface{ RetryDelay() time.Duration }
+	if errors.As(err, &retry) && retry != nil {
+		return retry.RetryDelay()
+	}
+	return MinimumInterval
 }
 
 func (m *Manager) logAutomaticScheduleError(

@@ -111,6 +111,7 @@ func run() error {
 	fetcher.MaxBodyBytes = int(cfg.MaxBodyBytes)
 	fetcher.AllowWeakRecipientHeaders = cfg.AllowWeakRecipientHeaders
 	fetcher.ArchiveTempDir = db.MailArchiveTempDir()
+	fetcher.MaxIncrementalCandidates = 128
 
 	signalContext, stopSignal := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignal()
@@ -124,13 +125,16 @@ func run() error {
 	}
 	manager := syncer.New(db, cipher, fetcher, logger, syncInterval, cfg.SyncConcurrency)
 	manager.SetSyncTimeout(cfg.SyncTimeout)
+	manager.SetMinimumFetchInterval(30 * time.Second)
 	mailboxEvents := syncer.NewMailboxEvents(db, cipher, fetcher.WatchMailbox, func(ctx context.Context, accountID int64) error {
-		for {
+		for batch := 0; batch < 128; batch++ {
 			err := manager.SyncAccountFromNotification(ctx, accountID)
 			if !errors.Is(err, syncer.ErrSyncPending) {
 				return err
 			}
 		}
+		logger.Warn("通知同步达到续批上限，等待后续周期", "account_id", accountID, "operation", "continue_batch_limit")
+		return syncer.ErrSyncDeferred
 	}, logger)
 	appleClient, err := apple.NewClient(apple.Config{})
 	if err != nil {

@@ -302,6 +302,12 @@ func TestExplicitRateLimitRejectionLogsNoRemoteSideEffectAndCooldown(t *testing.
 	assertFlowLogsDoNotContain(t, logs, upstream.ServiceCode)
 }
 
+func TestLocalBudgetWaitStatusIsRecognizedAsCooldown(t *testing.T) {
+	if !IsRateLimitStatus("APPLE_CREATION_BUDGET_WAIT") || !IsRateLimitStatus(aliasCreationErrorReason("APPLE_CREATION_BUDGET_WAIT")) {
+		t.Fatal("local budget wait should be recognized by persisted status and user-facing reason")
+	}
+}
+
 func TestJoinedGenericAppleDiagnosticRefinesToExplicitRateLimit(t *testing.T) {
 	upstream := &apple.Error{
 		Op:          "reserve Hide My Email alias",

@@ -170,6 +170,8 @@ type adminAPIAliasDTO struct {
 	CredentialMode    string  `json:"credential_mode,omitempty"`
 	CredentialVersion int64   `json:"credential_version"`
 	Enabled           bool    `json:"enabled"`
+	ConfiguredEnabled bool    `json:"configured_enabled"`
+	AccountEnabled    bool    `json:"account_enabled"`
 	LastSyncStatus    string  `json:"last_sync_status"`
 	LastSyncError     string  `json:"last_sync_error"`
 	LastSyncErrorLog  string  `json:"last_sync_error_log"`
@@ -445,7 +447,9 @@ func (s *Server) adminAPIAliasFromDomain(alias domain.Alias) (adminAPIAliasDTO, 
 		APIKeyPrefix:      alias.APIKeyPrefix,
 		CredentialMode:    alias.CredentialMode,
 		CredentialVersion: alias.CredentialVersion,
-		Enabled:           alias.Enabled,
+		Enabled:           alias.Enabled && !alias.AccountDisabled,
+		ConfiguredEnabled: alias.Enabled,
+		AccountEnabled:    !alias.AccountDisabled,
 		LastSyncStatus:    alias.LastSyncStatus,
 		LastSyncError:     adminAPISyncErrorSummary(alias.LastSyncError),
 		LastSyncErrorLog:  alias.LastSyncError,
@@ -1221,6 +1225,10 @@ func (s *Server) adminAPISyncAccount(c *gin.Context) {
 	}
 	if !account.Enabled {
 		writeAdminAPIError(c, http.StatusConflict, "ACCOUNT_DISABLED", "主号已停用，请先启用主号后再同步邮件")
+		return
+	}
+	if domain.IsIMAPAuthenticationFailure(account.LastSyncError) {
+		writeAdminAPIError(c, http.StatusConflict, "IMAP_AUTHENTICATION_PAUSED", domain.ErrIMAPAuthenticationPaused.Error())
 		return
 	}
 	result := "success"

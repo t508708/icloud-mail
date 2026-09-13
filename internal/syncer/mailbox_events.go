@@ -3,6 +3,7 @@ package syncer
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -89,13 +90,26 @@ func (m *MailboxEvents) Run(ctx context.Context) {
 			return
 		}
 		next := make(map[int64]domain.Account, len(accounts))
+		paused := make(map[int64]struct{})
 		for _, account := range accounts {
 			if account.Enabled {
 				next[account.ID] = account
+				if domain.IsIMAPAuthenticationFailure(account.LastSyncError) {
+					paused[account.ID] = struct{}{}
+				}
 			}
 		}
 		for id, w := range workers {
 			account, exists := next[id]
+			if _, isPaused := paused[id]; exists && isPaused {
+				w.cancel()
+				<-w.done
+				delete(workers, id)
+				m.statesMu.Lock()
+				delete(m.states, id)
+				m.statesMu.Unlock()
+				continue
+			}
 			if !exists || w.identity != mailboxWatchIdentity(account) {
 				w.cancel()
 				<-w.done
@@ -106,6 +120,9 @@ func (m *MailboxEvents) Run(ctx context.Context) {
 			}
 		}
 		for id, account := range next {
+			if _, isPaused := paused[id]; isPaused {
+				continue
+			}
 			if _, exists := workers[id]; exists {
 				continue
 			}
@@ -162,6 +179,13 @@ func (m *MailboxEvents) runAccount(ctx context.Context, account domain.Account, 
 				if err == nil || ctx.Err() != nil {
 					break
 				}
+				if errors.Is(err, ErrSyncDeferred) {
+					break
+				}
+				if domain.IsIMAPAuthenticationFailure(err.Error()) {
+					cancel()
+					return
+				}
 				m.logger.Warn("通知触发的邮件同步未完成，将退避重试并保留低频补偿", "account_id", account.ID, "attempt", attempt+1)
 				if attempt < 2 && !waitForInterval(ctx, m.retryMinimum*time.Duration(attempt+1)) {
 					return
@@ -187,7 +211,7 @@ func (m *MailboxEvents) runAccount(ctx context.Context, account domain.Account, 
 		var connected sync.Once
 		state.synced.Store(false)
 		started := time.Now()
-		_ = m.watch(ctx, account, password, func() {
+		watchErr := m.watch(ctx, account, password, func() {
 			connected.Do(func() {
 				state.connected.Store(true)
 				m.logger.Info("IMAP IDLE 通知连接已建立", "account_id", account.ID)
@@ -197,6 +221,11 @@ func (m *MailboxEvents) runAccount(ctx context.Context, account domain.Account, 
 		state.connected.Store(false)
 		password = ""
 		if ctx.Err() != nil {
+			return
+		}
+		if watchErr != nil && domain.IsIMAPAuthenticationFailure(watchErr.Error()) {
+			// Persist the failure through the manager's normal account error path once.
+			_ = m.syncAccount(ctx, account.ID)
 			return
 		}
 		// An unsupported/disconnected watcher must still have a bounded fallback.

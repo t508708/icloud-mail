@@ -9,22 +9,23 @@ import (
 )
 
 const (
-	CodeLoginRequired            = "APPLE_LOGIN_REQUIRED"
-	CodeSessionExpired           = "APPLE_SESSION_EXPIRED"
-	CodeCredentialsInvalid       = "APPLE_CREDENTIALS_INVALID"
-	CodeVerificationInvalid      = "APPLE_VERIFICATION_INVALID"
-	CodeFlowExpired              = "APPLE_FLOW_EXPIRED"
-	CodeAccountActionRequired    = "APPLE_ACCOUNT_ACTION_REQUIRED"
-	CodeRateLimited              = "APPLE_RATE_LIMITED"
-	CodeUpstreamError            = "APPLE_UPSTREAM_ERROR"
-	CodeForwardingTargetMissing  = "APPLE_FORWARDING_TARGET_MISSING"
-	CodeAliasConfirmationPending = domain.AppleAliasConfirmationPending
-	CodeAccountMismatch          = "APPLE_ACCOUNT_MISMATCH"
-	CodeAccountChanged           = "ACCOUNT_CHANGED"
-	CodeAliasOwnershipConflict   = "ALIAS_OWNERSHIP_CONFLICT"
-	CodeAccountDisabled          = "ACCOUNT_DISABLED"
-	CodePersistenceError         = "AUTO_CREATION_PERSISTENCE_ERROR"
-	CodeCryptoError              = "AUTO_CREATION_CRYPTO_ERROR"
+	CodeLoginRequired               = "APPLE_LOGIN_REQUIRED"
+	CodeSessionExpired              = "APPLE_SESSION_EXPIRED"
+	CodeCredentialsInvalid          = "APPLE_CREDENTIALS_INVALID"
+	CodeVerificationInvalid         = "APPLE_VERIFICATION_INVALID"
+	CodeFlowExpired                 = "APPLE_FLOW_EXPIRED"
+	CodeAccountActionRequired       = "APPLE_ACCOUNT_ACTION_REQUIRED"
+	CodeRateLimited                 = "APPLE_RATE_LIMITED"
+	CodeUpstreamError               = "APPLE_UPSTREAM_ERROR"
+	CodeForwardingTargetMissing     = "APPLE_FORWARDING_TARGET_MISSING"
+	CodeAliasConfirmationPending    = domain.AppleAliasConfirmationPending
+	CodeAccountMismatch             = "APPLE_ACCOUNT_MISMATCH"
+	CodeAccountChanged              = "ACCOUNT_CHANGED"
+	CodeAliasOwnershipConflict      = "ALIAS_OWNERSHIP_CONFLICT"
+	CodeAccountDisabled             = "ACCOUNT_DISABLED"
+	CodePersistenceError            = "AUTO_CREATION_PERSISTENCE_ERROR"
+	CodeCryptoError                 = "AUTO_CREATION_CRYPTO_ERROR"
+	CodeMailboxAuthenticationPaused = "IMAP_AUTHENTICATION_PAUSED"
 )
 
 var (

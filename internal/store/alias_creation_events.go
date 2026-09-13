@@ -30,6 +30,9 @@ func (s *Store) migrateAliasCreationEvents(ctx context.Context, tx *sql.Tx) erro
 			return fmt.Errorf("migrate Apple alias creation events: %w", err)
 		}
 	}
+	if err := s.migrateAppleCreationBudget(ctx, tx); err != nil {
+		return err
+	}
 	return nil
 }
 

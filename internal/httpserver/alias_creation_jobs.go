@@ -25,6 +25,12 @@ type aliasCreationJobRuntime struct {
 	wg       sync.WaitGroup
 	interval time.Duration
 }
+
+const (
+	aliasCreationJobInterval = 10 * time.Minute
+	aliasCreationJobLifetime = 7 * 24 * time.Hour
+)
+
 type channelAliasCreator interface {
 	CreateAliasWithChannel(context.Context, int64, string) (domain.Alias, error)
 }
@@ -44,7 +50,7 @@ func (s *Server) StartAliasCreationJobs(ctx context.Context) error {
 	}
 	r.ctx = ctx
 	r.cancel = make(map[int64]context.CancelFunc)
-	r.interval = 3 * time.Second
+	r.interval = aliasCreationJobInterval
 	return nil
 }
 
@@ -56,50 +62,11 @@ func (s *Server) RunAliasCreationJobs() {
 	if ctx == nil {
 		return
 	}
-	ticker := time.NewTicker(4 * time.Minute)
-	defer ticker.Stop()
-keepalive:
-	for {
-		select {
-		case <-ctx.Done():
-			break keepalive
-		case <-ticker.C:
-			s.keepAliveAppleAccounts(ctx)
-		}
-	}
+	<-ctx.Done()
 	r.mu.Lock()
 	r.stopping = true
 	r.mu.Unlock()
 	r.wg.Wait()
-}
-
-func (s *Server) keepAliveAppleAccounts(ctx context.Context) {
-	service, ok := s.hmeSync.(interface {
-		KeepAliveAccountSession(context.Context, int64) error
-	})
-	if !ok {
-		return
-	}
-	accounts, err := s.store.ListEnabledAccounts(ctx)
-	if err != nil {
-		return
-	}
-	for _, account := range accounts {
-		if ctx.Err() != nil {
-			return
-		}
-		if domain.NormalizeMailboxType(account.MailboxType) != domain.MailboxTypeICloud {
-			continue
-		}
-		s.credentialRotationMu.RLock()
-		refreshCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
-		err := service.KeepAliveAccountSession(refreshCtx, account.ID)
-		cancel()
-		s.credentialRotationMu.RUnlock()
-		if err != nil && ctx.Err() == nil {
-			s.logger.Warn("Apple Account 会话保活未完成", "account_id", account.ID)
-		}
-	}
 }
 
 func (s *Server) adminAPIStartAliasCreationJob(c *gin.Context) {
@@ -187,7 +154,9 @@ func (s *Server) adminAPIStartAliasCreationJob(c *gin.Context) {
 		}
 		return
 	}
-	waitCtx, cancel := context.WithTimeout(r.ctx, 24*time.Hour)
+	// The shared daily ceiling of 20 means a 100-alias job needs at least five
+	// days; seven days leaves two days of margin for budget and throttle waits.
+	waitCtx, cancel := context.WithTimeout(r.ctx, aliasCreationJobLifetime)
 	r.cancel[id] = cancel
 	r.wg.Add(1)
 	accepted = true
@@ -299,13 +268,17 @@ func (s *Server) runAliasCreationJob(waitCtx context.Context, creator channelAli
 			if errors.As(err, &upstream) {
 				attributes = append(attributes, "apple_operation", upstream.Op, "apple_http_status", upstream.StatusCode)
 			}
-			s.logger.Warn("批量创建请求未完成", attributes...)
+			if isAppleCreationBudgetWait(err) {
+				s.logger.Info("批量创建任务等待本地请求预算", attributes...)
+			} else {
+				s.logger.Warn("批量创建请求未完成", attributes...)
+			}
 			j.LastError = apiErr.Message
 			var pending interface{ PendingConfirmation() bool }
 			var uncertain interface{ RemoteSideEffectPossible() bool }
 			ambiguous := errors.Is(err, hmesync.ErrAliasConfirmationPending) || errors.As(err, &pending) && pending.PendingConfirmation() || errors.As(err, &uncertain) && uncertain.RemoteSideEffectPossible()
-			if !ambiguous && (errors.Is(err, hmesync.ErrRateLimited) || apple.IsRateLimited(err)) {
-				delay := max(61*time.Minute, apple.RetryDelay(err))
+			if !ambiguous && isAppleCreationBudgetWait(err) {
+				delay := max(aliasCreationJobInterval, manualAliasRetryDelay(err))
 				next := time.Now().UTC().Add(delay)
 				j.Status = "waiting"
 				j.NextRunAt = &next
@@ -316,6 +289,25 @@ func (s *Server) runAliasCreationJob(waitCtx context.Context, creator channelAli
 					break
 				}
 				continue
+			}
+			if !ambiguous && (errors.Is(err, hmesync.ErrRateLimited) || apple.IsRateLimited(err)) {
+				delay := max(24*time.Hour, apple.RetryDelay(err))
+				next := time.Now().UTC().Add(delay)
+				j.Status = "waiting"
+				j.NextRunAt = &next
+				if !checkpoint() {
+					return
+				}
+				if !wait(delay) {
+					break
+				}
+				continue
+			}
+			if errors.Is(err, domain.ErrIMAPAuthenticationPaused) {
+				j.Status = "failed"
+				j.NextRunAt = nil
+				checkpoint()
+				return
 			}
 			j.Status = "failed"
 			j.NextRunAt = nil
@@ -358,7 +350,7 @@ func (s *Server) runAliasCreationJob(waitCtx context.Context, creator channelAli
 		j.LastError = "服务已重启或停止，已保留完成地址"
 	} else if errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
 		j.Status = "interrupted"
-		j.LastError = "任务达到 24 小时时限，已保留完成地址"
+		j.LastError = "任务达到 7 天时限，已保留完成地址"
 	}
 	checkpoint()
 }

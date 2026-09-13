@@ -39,6 +39,10 @@ type MailFetcher interface {
 // failed mailbox sync.
 var ErrSyncPending = errors.New("mailbox sync batch committed; more messages remain")
 
+// ErrSyncDeferred means this run should stop without treating the sync as
+// caught up or retrying immediately.
+var ErrSyncDeferred = errors.New("mailbox sync deferred until a later cycle")
+
 // ErrSyncQueued means a manual sync is running in the background, or an
 // equivalent request for the same account is already queued.
 var ErrSyncQueued = errors.New("mailbox sync queued")
@@ -85,17 +89,20 @@ type syncFlowSnapshot struct {
 }
 
 type Manager struct {
-	repo         Repository
-	cipher       CredentialCipher
-	fetcher      MailFetcher
-	logger       *slog.Logger
-	interval     time.Duration
-	syncTimeout  time.Duration
-	syncSlots    chan struct{}
-	withTimeout  func(context.Context, time.Duration) (context.Context, context.CancelFunc)
-	waitInterval func(context.Context, time.Duration) bool
-	retryDelays  []time.Duration
-	retryBudget  time.Duration
+	repo                 Repository
+	cipher               CredentialCipher
+	fetcher              MailFetcher
+	logger               *slog.Logger
+	interval             time.Duration
+	syncTimeout          time.Duration
+	syncSlots            chan struct{}
+	withTimeout          func(context.Context, time.Duration) (context.Context, context.CancelFunc)
+	waitInterval         func(context.Context, time.Duration) bool
+	retryDelays          []time.Duration
+	retryBudget          time.Duration
+	minimumFetchInterval time.Duration
+	fetchTimesMu         sync.Mutex
+	fetchTimes           map[int64]time.Time
 
 	locksMu  sync.Mutex
 	locks    map[int64]*accountLock
@@ -131,6 +138,7 @@ func New(repo Repository, cipher CredentialCipher, fetcher MailFetcher, logger *
 		manualJobs:   make(map[int64]syncFlowSeed),
 		manualDone:   make(chan struct{}),
 		progress:     make(map[int64]activeMailboxSync),
+		fetchTimes:   make(map[int64]time.Time),
 	}
 }
 
@@ -153,6 +161,30 @@ func (m *Manager) SetSyncTimeout(timeout time.Duration) {
 	}
 }
 
+// SetMinimumFetchInterval rate-limits mailbox fetch starts per primary account.
+// It defaults to zero so tests and existing callers retain their current timing.
+func (m *Manager) SetMinimumFetchInterval(interval time.Duration) {
+	m.fetchTimesMu.Lock()
+	m.minimumFetchInterval = max(interval, 0)
+	m.fetchTimesMu.Unlock()
+}
+
+func (m *Manager) waitForFetchInterval(ctx context.Context, accountID int64) error {
+	m.fetchTimesMu.Lock()
+	delay := m.minimumFetchInterval - time.Since(m.fetchTimes[accountID])
+	m.fetchTimesMu.Unlock()
+	if delay > 0 && !waitForInterval(ctx, delay) {
+		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.fetchTimesMu.Lock()
+	m.fetchTimes[accountID] = time.Now()
+	m.fetchTimesMu.Unlock()
+	return nil
+}
+
 // BeginShutdown prevents cancellation caused by process shutdown from being
 // persisted as an account synchronization failure.
 func (m *Manager) BeginShutdown() {
@@ -170,6 +202,7 @@ func (m *Manager) Run(ctx context.Context) {
 	var retryCtx context.Context
 	var cancelRetry context.CancelFunc
 	retryAttempt := 0
+	continuationBatches := 0
 	clearRetryCycle := func() {
 		if cancelRetry != nil {
 			cancelRetry()
@@ -197,8 +230,12 @@ func (m *Manager) Run(ctx context.Context) {
 		retryQueue = mergeAccountIDSets(retryQueue, result.retryable)
 		retryWindowDone := retryCtx != nil && retryWindowExpiredFromContext(retryCtx)
 		if len(result.pending) > 0 && !retryWindowDone {
-			continuations = result.pending
-			continue
+			if continuationBatches < 127 {
+				continuationBatches++
+				continuations = result.pending
+				continue
+			}
+			m.deferContinuations(ctx, result.pending, "continue_batch_limit")
 		}
 		if retryWindowDone {
 			m.deferContinuations(ctx, result.pending, "continue_batch")
@@ -237,6 +274,7 @@ func (m *Manager) Run(ctx context.Context) {
 			}
 			return
 		}
+		continuationBatches = 0
 	}
 }
 
@@ -631,6 +669,12 @@ func (m *Manager) syncAllRoundDetailedWithContexts(
 	var wg sync.WaitGroup
 	for _, account := range accounts {
 		account := account
+		if domain.IsIMAPAuthenticationFailure(account.LastSyncError) {
+			if _, continuing := continuations[account.ID]; continuing {
+				m.finishProgress(account.ID, domain.MailboxSyncTriggerAutomatic)
+			}
+			continue
+		}
 		_, continuing := continuations[account.ID]
 		if continuations != nil && !continuing {
 			continue
@@ -953,9 +997,17 @@ func (m *Manager) QueueAccountSync(ctx context.Context, accountID int64) error {
 func (m *Manager) runQueuedAccountSync(ctx context.Context, accountID int64, seed syncFlowSeed) {
 	defer m.finishManualJob(accountID)
 	defer m.finishProgress(accountID, domain.MailboxSyncTriggerManual)
+	batches := 0
 	for {
 		syncErr := m.syncQueuedAccount(ctx, accountID, seed)
 		if errors.Is(syncErr, ErrSyncPending) {
+			batches++
+			if batches >= 128 {
+				if flow, active := m.currentSyncFlow(accountID, domain.MailboxSyncTriggerManual); active {
+					m.logSyncDeferred(ctx, accountID, domain.MailboxSyncTriggerManual, flow, "continue_batch_limit")
+				}
+				return
+			}
 			continue
 		}
 		return
@@ -1102,7 +1154,11 @@ func (m *Manager) syncAccountLocked(
 	failedOperation := "check_context"
 	sensitiveValues := make([]string, 0, 4)
 	defer func() {
-		if syncErr != nil && !errors.Is(syncErr, ErrSyncPending) &&
+		if errors.Is(syncErr, ErrSyncDeferred) {
+			m.logSyncDeferred(ctx, accountID, trigger, flow, failedOperation)
+			return
+		}
+		if syncErr != nil && !errors.Is(syncErr, ErrSyncPending) && !errors.Is(syncErr, ErrSyncDeferred) &&
 			retryWindowInterrupted(ctx, syncErr) {
 			m.logSyncDeferred(ctx, accountID, trigger, flow, failedOperation)
 			return
@@ -1123,6 +1179,9 @@ func (m *Manager) syncAccountLocked(
 	if !account.Enabled {
 		return store.ErrAccountDisabled
 	}
+	if domain.IsIMAPAuthenticationFailure(account.LastSyncError) {
+		return domain.ErrIMAPAuthenticationPaused
+	}
 	m.logSyncFlow(
 		ctx,
 		slog.LevelDebug,
@@ -1135,7 +1194,7 @@ func (m *Manager) syncAccountLocked(
 	failures := newFailureRecorder(m, ctx, accountID, account.UpdatedAt)
 	defer failures.close()
 	defer func() {
-		if syncErr != nil && !errors.Is(syncErr, ErrSyncPending) &&
+		if syncErr != nil && !errors.Is(syncErr, ErrSyncPending) && !errors.Is(syncErr, ErrSyncDeferred) &&
 			!retryWindowInterrupted(ctx, syncErr) {
 			failures.record(syncErr)
 		}
@@ -1196,6 +1255,9 @@ func (m *Manager) syncAccountLocked(
 	fetchCtx := domain.WithMailboxSyncProgressReporter(ctx, func(update domain.MailboxSyncProgressUpdate) {
 		m.reportProgress(accountID, trigger, update)
 	})
+	if err := m.waitForFetchInterval(fetchCtx, accountID); err != nil {
+		return err
+	}
 	failedOperation = "fetch_incremental"
 	result, err := m.fetcher.FetchIncremental(
 		fetchCtx, account, password, enabled, previousState, snapshotPositions,
@@ -1246,6 +1308,20 @@ func (m *Manager) syncAccountLocked(
 		slog.Bool("has_more", result.HasMore),
 	)
 	if result.HasMore {
+		if previousState != nil && previousState.UIDValidity == result.State.UIDValidity && result.State.LastUID <= previousState.LastUID {
+			m.logSyncFlow(
+				ctx,
+				slog.LevelWarn,
+				"邮件同步批次未推进 UID 游标，暂停本轮续跑",
+				accountID,
+				trigger,
+				"batch_no_progress",
+				saving,
+				slog.Uint64("uid_validity", uint64(result.State.UIDValidity)),
+				slog.Uint64("cursor_uid", uint64(result.State.LastUID)),
+			)
+			return ErrSyncDeferred
+		}
 		m.logSyncFlow(
 			ctx,
 			slog.LevelInfo,

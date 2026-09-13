@@ -145,7 +145,7 @@
           <div class="switch-field">
             <div>
               <strong>启用主号同步</strong>
-              <p>停用后，此主号下所有隐私邮箱的全部取件凭证会立即失效。</p>
+              <p>停用后下属邮箱显示为暂停并暂停分配，移出邮箱池可分配库存；重新启用按停用前状态恢复，不删除邮箱或领取历史。</p>
             </div>
             <el-switch
               v-model="form.enabled"
@@ -175,6 +175,7 @@
 
 <script setup>
 import { Back, Check, Close, Refresh } from "@element-plus/icons-vue";
+import { ElMessageBox } from "element-plus";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
@@ -189,7 +190,7 @@ import {
   createActionLock,
   createLatestRequestGate,
 } from "../utils/asyncState.js";
-import { successMessage } from "../utils/feedback.js";
+import { confirmationCancelled, successMessage } from "../utils/feedback.js";
 import {
   DEFAULT_IMAP_HOST,
   DEFAULT_IMAP_PORT,
@@ -208,6 +209,7 @@ const submitting = ref(false);
 const loadError = ref(null);
 const submitError = ref(null);
 const aliasCount = ref(0);
+const storedEnabled = ref(true);
 const loadGate = createLatestRequestGate();
 const submitLock = createActionLock();
 let viewActive = true;
@@ -383,6 +385,7 @@ function resetForm() {
     enabled: true,
   });
   aliasCount.value = 0;
+  storedEnabled.value = true;
   loadError.value = null;
   submitError.value = null;
   formRef.value?.clearValidate();
@@ -412,6 +415,7 @@ async function loadAccount() {
       imapPassword: "",
       enabled: account.enabled,
     });
+    storedEnabled.value = Boolean(account.enabled);
     aliasCount.value = account.aliasCount;
   } catch (error) {
     if (!loadGate.isCurrent(ticket, routeKey())) return;
@@ -432,6 +436,15 @@ async function submit() {
     submitError.value = null;
     const valid = await formRef.value?.validate().catch(() => false);
     if (!valid || submittedRouteKey !== routeKey()) return;
+
+    if (isEdit.value && storedEnabled.value && !form.enabled) {
+      await ElMessageBox.confirm(
+        "停用会暂停此主号的收件连接；下属邮箱显示为暂停并暂停分配，同时从邮箱池可分配库存中移出。重新启用后，按停用前快照恢复原启用及池成员状态；原本单独停用的邮箱仍保持停用。不会删除邮箱、邮件或领取历史。",
+        "确认停用主号",
+        { type: "warning", confirmButtonText: "停用主号", cancelButtonText: "取消" },
+      );
+    }
+    if (!viewActive || submittedRouteKey !== routeKey()) return;
 
     const imapEndpoint = normalizeIMAPEndpoint(form.imapHost, form.imapPort);
     const payload = {
@@ -458,10 +471,17 @@ async function submit() {
       : await createAccount(payload, auth.state.csrfToken);
     if (!viewActive || submittedRouteKey !== routeKey()) return;
     form.imapPassword = "";
-    successMessage(isEdit.value ? "主号设置已保存。" : "主号已添加。");
+    successMessage(
+      isEdit.value && !form.enabled
+        ? "主号已停用；收件已暂停，下属邮箱显示为暂停并移出可分配库存，停用前状态及历史记录保留。"
+        : isEdit.value
+          ? "主号设置已保存。"
+          : "主号已添加。",
+    );
     await router.replace({ name: "account-detail", params: { id: account.id } });
   } catch (error) {
     if (!viewActive || submittedRouteKey !== routeKey()) return;
+    if (confirmationCancelled(error)) return;
     form.imapPassword = "";
     submitError.value = error;
     formRef.value?.clearValidate("imapPassword");

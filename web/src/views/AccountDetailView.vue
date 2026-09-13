@@ -161,6 +161,11 @@
           </div>
         </div>
 
+        <div v-if="!account.enabled" class="account-paused-notice" role="status">
+          <strong>主号已停用</strong>
+          <span>收件连接已暂停；下属邮箱显示为暂停并暂停分配，同时移出邮箱池可分配库存。重新启用后按停用前快照恢复原启用及池成员状态；单独停用的邮箱仍保持停用。邮箱与历史记录未删除。</span>
+        </div>
+
         <details class="settings-disclosure">
           <summary>连接详情</summary>
           <dl class="detail-grid">
@@ -189,6 +194,9 @@
 
         <div v-if="account.lastSyncError" class="inline-error" role="status">
           <strong>最近错误</strong>
+          <p v-if="isIMAPAuthenticationFailure(account.lastSyncError)">
+            自动收件连接已暂停；更新 Apple App 专用密码并检查邮箱服务状态后，再恢复收件同步。
+          </p>
           <div class="inline-error__content">
             <span>{{ account.lastSyncError }}</span>
             <SyncErrorLogDialog
@@ -306,7 +314,7 @@
           <details class="settings-disclosure">
             <summary>计划详情</summary>
             <p>
-              自动双通道 · 每主号每小时 40 次计划 · 最短 60 秒、平均约 90 秒。最多 3 个主号并行，同一主号串行确认；一次几十个请使用上方批量任务。
+              每主号共享本地预算：滚动 1 小时最多 5 次、24 小时最多 20 次，尝试至少间隔 10 分钟；失败和待确认尝试也计数，手动与自动创建共用。自动只选择本轮初始通道，限流后不会切换通道。Apple 明确限流后暂停至少 24 小时。这是本项目的保守上限，不代表 Apple 官方配额保证；一次多件请使用上方批量任务。
             </p>
             <dl class="auto-creation-metrics">
             <div>
@@ -562,17 +570,19 @@
                 >
                   等待目录确认
                 </el-tag>
+                <el-tag v-else-if="!row.accountEnabled && row.configuredEnabled" type="info" effect="plain" size="small">随主号暂停</el-tag>
                 <SyncStatus v-else :item="row" details />
               </template>
               <template v-else-if="column.key === 'enabled'">
                 <el-switch
-                  v-if="!isAliasConfirmationPending(row)"
-                  :model-value="row.enabled"
+                  v-if="row.accountEnabled && !isAliasConfirmationPending(row)"
+                  :model-value="row.configuredEnabled"
                   :loading="Boolean(toggleLoading[row.id])"
                   :disabled="isAliasActionBusy(row)"
                   :aria-label="`启用隐私邮箱 ${row.address}`"
                   @change="(enabled) => toggleAlias(row, enabled)"
                 />
+                <span v-else-if="!row.configuredEnabled" class="muted-text">已停用</span>
               </template>
               <template v-else-if="column.key === 'actions'">
                 <div
@@ -661,6 +671,7 @@
               >
                 等待目录确认
               </el-tag>
+              <el-tag v-else-if="!alias.accountEnabled && alias.configuredEnabled" type="info" effect="plain" size="small">随主号暂停</el-tag>
               <SyncStatus v-else :item="alias" details />
             </header>
             <dl class="mobile-kv-list">
@@ -689,16 +700,18 @@
                   </el-select>
                 </dd>
               </div>
-              <div v-if="!isAliasConfirmationPending(alias)">
+              <div v-if="!alias.accountEnabled || !isAliasConfirmationPending(alias)">
                 <dt>启用</dt>
                 <dd>
                   <el-switch
-                    :model-value="alias.enabled"
+                    v-if="alias.accountEnabled && !isAliasConfirmationPending(alias)"
+                    :model-value="alias.configuredEnabled"
                     :loading="Boolean(toggleLoading[alias.id])"
                     :disabled="isAliasActionBusy(alias)"
                     :aria-label="`启用隐私邮箱 ${alias.address}`"
                     @change="(enabled) => toggleAlias(alias, enabled)"
                   />
+                  <span v-else>{{ alias.configuredEnabled ? "随主号暂停" : "已停用" }}</span>
                 </dd>
               </div>
             </dl>
@@ -1148,6 +1161,8 @@ const appleAliasControlsDisabled = computed(
 );
 
 const AUTO_CREATION_ERROR_MESSAGES = Object.freeze({
+  APPLE_CREATION_BUDGET_WAIT:
+    "本项目的主号共享创建预算正在等待恢复；这是本地节流，不表示 Apple 返回了限流。",
   APPLE_LOGIN_REQUIRED:
     "Apple 账户尚未登录，请点击“同步隐私邮箱”并完成登录后重试",
   APPLE_SESSION_EXPIRED:
@@ -1161,7 +1176,7 @@ const AUTO_CREATION_ERROR_MESSAGES = Object.freeze({
   APPLE_ACCOUNT_ACTION_REQUIRED:
     "Apple 账户需要完成条款确认或其他账户操作，请前往 Apple 官网处理后重试",
   APPLE_RATE_LIMITED:
-    "Apple 请求过于频繁，自动创建已进入冷却，冷却后会继续执行",
+    "Apple 返回了限流；该创建计划已暂停至少 24 小时，不会自动切换到另一通道。",
   APPLE_UPSTREAM_ERROR:
     "Apple 服务暂时异常，请稍后再试；自动创建会按计划继续执行",
   APPLE_ALIAS_CONFIRMATION_PENDING:
@@ -1185,14 +1200,40 @@ const AUTO_CREATION_ERROR_MESSAGES = Object.freeze({
 function autoCreationErrorMessage(value) {
   const original = String(value ?? "");
   const code = original.trim();
-  return Object.prototype.hasOwnProperty.call(AUTO_CREATION_ERROR_MESSAGES, code)
-    ? AUTO_CREATION_ERROR_MESSAGES[code]
-    : original;
+  if (Object.prototype.hasOwnProperty.call(AUTO_CREATION_ERROR_MESSAGES, code)) {
+    return AUTO_CREATION_ERROR_MESSAGES[code];
+  }
+  if (isLocalCreationBudgetWait(code)) {
+    return AUTO_CREATION_ERROR_MESSAGES.APPLE_CREATION_BUDGET_WAIT;
+  }
+  if (isAppleRateLimited(code)) {
+    return AUTO_CREATION_ERROR_MESSAGES.APPLE_RATE_LIMITED;
+  }
+  return original;
 }
 
 function isAutoCreationRateLimited(item) {
-  const code = String(item?.lastError || "").trim().toUpperCase();
-  return item?.status === "cooldown" || code === "APPLE_RATE_LIMITED";
+  const error = String(item?.lastError || "").trim();
+  return isAppleRateLimited(error) ||
+    (item?.status === "cooldown" && !isLocalCreationBudgetWait(error));
+}
+
+function isLocalCreationBudgetWait(value) {
+  const message = String(value || "");
+  const code = message.toUpperCase();
+  return code.includes("APPLE_CREATION_BUDGET_WAIT") || message.includes("本地主号创建预算已用尽");
+}
+
+function isAppleRateLimited(value) {
+  const message = String(value || "");
+  const code = message.toUpperCase();
+  return code.includes("APPLE_RATE_LIMITED") || message.includes("Apple 请求被限流") || message.includes("Apple 请求过于频繁") || message.includes("Apple 返回了限流");
+}
+
+function isIMAPAuthenticationFailure(value) {
+  const message = String(value || "").toLowerCase();
+  return message.includes("imap_authentication_paused") ||
+    /imap.{0,40}(authentication|auth failed|login failed|invalid credentials)|(?:authentication|auth) (?:failed|rejected)|invalid credentials/.test(message);
 }
 
 function isAliasConfirmationPending(item) {
@@ -1248,6 +1289,10 @@ function autoCreationStatusLabel(item) {
       return "最近失败";
     case "paused":
       return "已暂停";
+    case "cooldown":
+      return isLocalCreationBudgetWait(item?.lastError)
+        ? "等待本地主号共享预算"
+        : "创建等待中";
     case "login_required":
       return "需要 Apple 登录";
     case "pending":
@@ -1278,6 +1323,8 @@ function autoCreationStatusType(item) {
     case "failed":
       return "danger";
     case "paused":
+      return "info";
+    case "cooldown":
       return "info";
     case "login_required":
       return "warning";
@@ -2276,8 +2323,9 @@ async function copyLegacyDirectLink(alias) {
 
 async function toggleAlias(alias, enabled) {
   if (
+    !alias.accountEnabled ||
     isAliasConfirmationPending(alias) ||
-    alias.enabled === enabled ||
+    alias.configuredEnabled === enabled ||
     !aliasActionLock.acquire(alias.id)
   ) {
     return;
@@ -2539,6 +2587,19 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
   font-size: 12px;
 }
+
+.account-paused-notice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.account-paused-notice strong { color: var(--text); }
 
 .auto-creation-panel__status-line {
   display: flex;

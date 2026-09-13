@@ -112,8 +112,11 @@ type Alias struct {
 	ID           int64
 	AccountID    int64
 	AccountEmail string
-	Address      string
-	Label        string
+	// AccountDisabled is a read-time parent gate; Enabled keeps the alias's
+	// own setting so re-enabling the parent does not revive manually paused aliases.
+	AccountDisabled bool
+	Address         string
+	Label           string
 	// GroupID and GroupName describe the optional administrator-defined
 	// mailbox group. A nil GroupID means that the alias is currently
 	// ungrouped; GroupName is populated by list/detail queries for display.

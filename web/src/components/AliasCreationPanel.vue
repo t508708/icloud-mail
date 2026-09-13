@@ -1,6 +1,7 @@
 <template>
   <div class="creation-job-panel">
     <h2 id="batch-creation-title" class="creation-job-panel__title">批量创建隐私邮箱</h2>
+    <span class="creation-job-panel__budget-short">5 次/小时 · 20 次/日</span>
     <div class="creation-job-panel__apple">
       <el-tag :type="appleAuthenticated ? 'success' : 'info'" title="新通道登录状态">新通道：{{ appleAuthenticated ? '已登录' : '未登录' }}</el-tag>
       <el-button v-if="!appleAuthenticated" :disabled="active || !webAuthenticated || appleLoading" @click="openLogin">登录 Apple Account</el-button>
@@ -9,7 +10,7 @@
     <div class="creation-job-panel__controls">
       <el-input-number v-model="count" :min="1" :max="100" :controls="false" aria-label="创建数量" :disabled="active || starting" />
       <el-select v-model="channel" aria-label="创建通道" :disabled="active || starting">
-        <el-option label="自动双通道（推荐）" value="auto" />
+        <el-option label="自动（初始选择通道）" value="auto" />
         <el-option label="Apple Account 新通道" value="apple_account" />
         <el-option label="iCloud Web 旧通道" value="icloud_web" />
       </el-select>
@@ -17,13 +18,17 @@
       <el-button v-else type="primary" :loading="starting" :disabled="!ready || !accountEnabled || !webAuthenticated || appleLoading" @click="start">开始批量创建</el-button>
       <el-button v-if="!ready" :loading="loading" @click="load">重新读取状态</el-button>
     </div>
+    <details class="creation-job-panel__budget-details">
+      <summary>创建节奏与等待说明</summary>
+      <p>每主号手动与自动创建共用本地预算：滚动 1 小时最多 5 次、24 小时最多 20 次，尝试至少间隔 10 分钟；失败及待确认尝试也计数。自动只选择本轮初始通道，不因限流切换。Apple 明确限流后暂停至少 24 小时。本地上限不是 Apple 官方配额保证。100 次至少需要 5 天预算窗口；任务生命周期为 7 天。</p>
+    </details>
     <RequestAlert v-if="error && !appleVisible" :error="error" closable @close="error = null" />
     <div v-if="job && active" class="creation-job-panel__status" aria-live="polite">
       <span>{{ statusLabel }}：{{ job.completed }}/{{ job.target }}<template v-if="job.status === 'waiting' && job.next_run_at">，预计 {{ formatTime(job.next_run_at, { seconds: true }) }}</template></span>
-      <span v-if="job.last_error">{{ job.last_error }}</span>
+      <span v-if="job.last_error">{{ jobErrorMessage(job.last_error) }}</span>
     </div>
     <div v-if="job && !active && job.status !== 'completed'" class="creation-job-panel__status" aria-live="polite">
-      <span>{{ statusLabel }}</span><span v-if="job.last_error">{{ job.last_error }}</span>
+      <span>{{ statusLabel }}</span><span v-if="job.last_error">{{ jobErrorMessage(job.last_error) }}</span>
     </div>
     <el-dialog v-model="appleVisible" title="登录 Apple Account 新通道" width="min(480px, calc(100vw - 28px))" :close-on-click-modal="false" :before-close="closeLogin">
       <RequestAlert v-if="error" :error="error" />
@@ -53,21 +58,42 @@ import { formatTime } from "../utils/format.js";
 
 const props = defineProps({ accountId: { type: [Number, String], required: true }, appleIdHint: { type: String, default: "" }, accountEnabled: Boolean, webAuthenticated: Boolean, csrfToken: { type: String, default: "" } });
 const emit = defineEmits(["busy", "change"]);
-const count = ref(30), channel = ref("auto"), job = ref(null);
+const count = ref(5), channel = ref("auto"), job = ref(null);
 const starting = ref(false), stopping = ref(false), loading = ref(false), ready = ref(false), error = ref(null);
 const appleVisible = ref(false), appleLoading = ref(false), appleStep = ref("login"), appleSession = ref(null);
 const appleId = ref(""), applePassword = ref(""), region = ref("global"), code = ref(""), challengeId = ref("");
 let timer, alive = true, generation = 0, jobRequest = 0, sessionRequest = 0;
+const jobStatusPollIntervalMs = 10_000;
 const active = computed(() => ["running", "waiting"].includes(job.value?.status));
 const appleAuthenticated = computed(() => appleSession.value?.status === "authenticated");
-const statusLabel = computed(() => ({ running: "创建中", waiting: "等待 Apple 配额恢复", completed: "已完成", stopped: "已停止", failed: "本轮已停止", interrupted: "已中断" }[job.value?.status] || "任务"));
+const statusLabel = computed(() => {
+  if (job.value?.status === "waiting") {
+    if (isLocalBudgetWait(job.value?.last_error)) return "等待本地主号共享预算恢复";
+    if (isAppleRateLimited(job.value?.last_error)) return "Apple 限流暂停中（至少 24 小时）";
+    return "等待任务继续";
+  }
+  return ({ running: "创建中", completed: "已完成", stopped: "已停止", failed: "本轮已停止", interrupted: "已中断" }[job.value?.status] || "任务");
+});
+function jobErrorMessage(value) {
+  if (isLocalBudgetWait(value)) return "本地主号创建预算已用尽，本地等待不表示 Apple 返回了限流。";
+  if (isAppleRateLimited(value)) return "Apple 返回限流；该通道暂停至少 24 小时，不会自动切换通道。";
+  return value;
+}
+function isLocalBudgetWait(value) {
+  const message = String(value || "");
+  return message.toUpperCase().includes("APPLE_CREATION_BUDGET_WAIT") || message.includes("本地主号创建预算已用尽");
+}
+function isAppleRateLimited(value) {
+  const message = String(value || "");
+  return message.toUpperCase().includes("APPLE_RATE_LIMITED") || message.includes("Apple 请求被限流") || message.includes("Apple 请求过于频繁") || message.includes("Apple 返回了限流");
+}
 watch(() => active.value || starting.value || appleLoading.value, busy => emit("busy", busy));
 watch(() => `${job.value?.id}:${job.value?.completed}:${job.value?.status}`, () => {
   if (!active.value) stopping.value = false;
   if (job.value) emit("change", job.value);
 });
 function guard() { const g = generation, id = props.accountId; return () => alive && g === generation && id === props.accountId; }
-function schedule() { clearTimeout(timer); if (alive && (active.value || !ready.value)) timer = setTimeout(poll, 3000); }
+function schedule() { clearTimeout(timer); if (alive && (active.value || !ready.value)) timer = setTimeout(poll, jobStatusPollIntervalMs); }
 async function poll() {
   const valid = guard(), request = ++jobRequest;
   const current = () => valid() && request === jobRequest;
@@ -149,10 +175,14 @@ onBeforeUnmount(() => { alive = false; generation++; clearTimeout(timer); appleP
 .creation-job-panel__controls, .creation-job-panel__apple { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .creation-job-panel__title { margin: 0; color: var(--text); font-size: 18px; line-height: 1.3; white-space: nowrap; }
 .creation-job-panel__title { order: 1; }
+.creation-job-panel__budget-short { order: 1; color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
 .creation-job-panel__controls { order: 2; margin-left: auto; }
 .creation-job-panel__apple { order: 3; }
-.creation-job-panel__status { order: 4; }
-.creation-job-panel > .el-alert { order: 5; }
+.creation-job-panel__budget-details { order: 4; color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
+.creation-job-panel__budget-details summary { cursor: pointer; }
+.creation-job-panel__budget-details p { max-width: 720px; padding-top: 6px; }
+.creation-job-panel__status { order: 5; }
+.creation-job-panel > .el-alert { order: 6; }
 .creation-job-panel__controls .el-select { width: 220px; }
 .creation-job-panel__controls :deep(.el-input-number) { width: 104px; }
 .creation-job-panel__status { display: flex; flex-basis: 100%; flex-wrap: wrap; gap: 8px; overflow-wrap: anywhere; color: var(--text-secondary); }
