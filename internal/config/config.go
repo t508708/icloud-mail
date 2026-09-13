@@ -39,6 +39,7 @@ type Config struct {
 	SessionTTL                time.Duration
 	PollInterval              time.Duration
 	IMAPIdleEnabled           bool
+	MailOnDemandOnly          bool
 	IMAPFallbackInterval      time.Duration
 	IMAPTimeout               time.Duration
 	SyncTimeout               time.Duration
@@ -109,6 +110,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.IMAPIdleEnabled, err = envBool("ICLOUD_API_IMAP_IDLE_ENABLED", true); err != nil {
+		return Config{}, err
+	}
+	if cfg.MailOnDemandOnly, err = envBool("ICLOUD_API_MAIL_ON_DEMAND_ONLY", true); err != nil {
 		return Config{}, err
 	}
 	if cfg.IMAPFallbackInterval, err = envDuration("ICLOUD_API_IMAP_FALLBACK_INTERVAL", 15*time.Minute); err != nil {

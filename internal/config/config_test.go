@@ -19,6 +19,7 @@ var configEnvironment = []string{
 	"ICLOUD_API_SESSION_TTL",
 	"ICLOUD_API_POLL_INTERVAL",
 	"ICLOUD_API_IMAP_IDLE_ENABLED",
+	"ICLOUD_API_MAIL_ON_DEMAND_ONLY",
 	"ICLOUD_API_IMAP_FALLBACK_INTERVAL",
 	"ICLOUD_API_IMAP_TIMEOUT",
 	"ICLOUD_API_SYNC_TIMEOUT",
@@ -217,6 +218,28 @@ func TestIMAPIdleConfiguration(t *testing.T) {
 				t.Fatalf("got %v/%v", got.IMAPIdleEnabled, got.IMAPFallbackInterval)
 			}
 		})
+	}
+}
+
+func TestMailOnDemandOnlyConfiguration(t *testing.T) {
+	clearConfigEnvironment(t)
+	cfg, err := Load()
+	if err != nil || !cfg.MailOnDemandOnly {
+		t.Fatalf("default MailOnDemandOnly = %v, err=%v; want true", cfg.MailOnDemandOnly, err)
+	}
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{{"true", true}, {"false", false}} {
+		t.Setenv("ICLOUD_API_MAIL_ON_DEMAND_ONLY", tc.value)
+		cfg, err := Load()
+		if err != nil || cfg.MailOnDemandOnly != tc.want {
+			t.Fatalf("value %q = %v, err=%v", tc.value, cfg.MailOnDemandOnly, err)
+		}
+	}
+	t.Setenv("ICLOUD_API_MAIL_ON_DEMAND_ONLY", "maybe")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid MailOnDemandOnly value accepted")
 	}
 }
 

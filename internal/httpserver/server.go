@@ -49,6 +49,7 @@ type Server struct {
 	manualAliasMu        sync.Mutex
 	manualAliasesRunning map[int64]bool
 	manualProbesRunning  map[int64]bool
+	demandAliasSync      func(context.Context, int64) error
 	aliasCreationJobs    aliasCreationJobRuntime
 	aliasDeletionJobs    aliasDeletionJobRuntime
 	// beforeCredentialRotationLock is a deterministic test seam. Production
@@ -134,9 +135,12 @@ func (s *Server) SetMailboxWatchHealth(healthy func(int64) bool) {
 	s.mailboxWatchHealthy = healthy
 }
 
-// requestMailboxSync coalesces external polling into a bounded background
-// sync. API handlers never wait for IMAP work; the cooldown prevents a client
-// polling every few seconds from creating a new login for every request.
+func (s *Server) SetAliasDemandSync(sync func(context.Context, int64) error) {
+	s.demandAliasSync = sync
+}
+
+// requestMailboxSync is the compatibility path used when on-demand-only mode
+// is disabled. It coalesces external polling into a bounded background sync.
 func (s *Server) requestMailboxSync(accountID int64, now time.Time) {
 	if s == nil || s.sync == nil || accountID < 1 {
 		return

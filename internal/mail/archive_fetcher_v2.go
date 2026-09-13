@@ -141,7 +141,7 @@ func (f *Fetcher) fetchArchiveIncremental(
 	// window. The following incremental batch examines every UID after this
 	// boundary, preserving the no-unbounded-backfill behavior while retaining
 	// both upstream-read and upstream-unread messages in the v2 archive.
-	if reset {
+	if reset && settings.targetAliasAddress == "" {
 		lastUID, hasMore, err := establishArchiveRecentCursor(
 			ctx, client, mailbox.NumMessages, upperUID, settings.maxCandidates,
 		)
@@ -156,6 +156,16 @@ func (f *Fetcher) fetchArchiveIncremental(
 		domain.ReportMailboxSyncProgress(ctx, domain.MailboxSyncPhaseReading, 20)
 		return publish()
 	}
+	if reset {
+		// The first on-demand request reads a bounded recent UID window in the
+		// same connection, instead of requiring a second request after baseline.
+		baseline := result.State
+		baseline.LastUID = 0
+		if upperUID > demandAliasUIDWindow {
+			baseline.LastUID = upperUID - demandAliasUIDWindow
+		}
+		previous = &baseline
+	}
 	if previous.LastUID > upperUID {
 		return failure, fmt.Errorf("stored IMAP cursor UID %d exceeds mailbox upper UID %d", previous.LastUID, upperUID)
 	}
@@ -164,7 +174,14 @@ func (f *Fetcher) fetchArchiveIncremental(
 		return publish()
 	}
 
-	uids, hasMore, processedThrough, err := discoverArchiveUIDs(client, previous.LastUID, upperUID, settings.maxIncrementalCandidates)
+	var uids []uint32
+	var hasMore bool
+	var processedThrough uint32
+	if settings.targetAliasAddress != "" {
+		uids, hasMore, processedThrough, err = discoverAliasArchiveUIDs(client, previous.LastUID, upperUID, settings.targetAliasAddress, settings.maxIncrementalCandidates)
+	} else {
+		uids, hasMore, processedThrough, err = discoverArchiveUIDs(client, previous.LastUID, upperUID, settings.maxIncrementalCandidates)
+	}
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return failure, ctxErr
@@ -758,6 +775,21 @@ func fetchArchiveCandidateHeaders(
 			continue
 		}
 		candidate.aliasIDs, _ = classifyArchiveRecipientAliases(parsedHeader.Header, aliases, account, settings.allowWeakRecipientHeaders)
+		if settings.targetAliasID > 0 {
+			matched := false
+			for _, aliasID := range candidate.aliasIDs {
+				if aliasID == settings.targetAliasID {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+			// Classify with the complete recipient context, but route and fetch
+			// bodies only for the requested alias's publication.
+			candidate.aliasIDs = []int64{settings.targetAliasID}
+		}
 		if len(candidate.aliasIDs) == 0 {
 			continue
 		}

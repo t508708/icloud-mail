@@ -40,7 +40,10 @@ func (s *Server) otpHistory(c *gin.Context) {
 	if s.now != nil {
 		now = s.now().UTC()
 	}
-	s.requestMailboxSync(binding.Account.ID, now)
+	binding, ok = s.refreshDemandMailbox(c, binding)
+	if !ok {
+		return
+	}
 	if err := s.store.TouchAliasAccess(c.Request.Context(), binding.Alias.ID, now); err != nil {
 		s.logger.Warn("更新 API 最近访问时间失败", "alias_id", binding.Alias.ID, "error", err, "request_id", requestID(c))
 	}

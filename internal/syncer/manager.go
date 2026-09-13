@@ -103,6 +103,9 @@ type Manager struct {
 	minimumFetchInterval time.Duration
 	fetchTimesMu         sync.Mutex
 	fetchTimes           map[int64]time.Time
+	onDemandOnly         bool
+	demandMu             sync.Mutex
+	demandFlights        map[int64]*aliasDemandFlight
 
 	locksMu  sync.Mutex
 	locks    map[int64]*accountLock
@@ -161,6 +164,10 @@ func (m *Manager) SetSyncTimeout(timeout time.Duration) {
 	}
 }
 
+// SetOnDemandOnly disables the periodic fetch loop, not explicit user requests.
+// Call before starting workers.
+func (m *Manager) SetOnDemandOnly(enabled bool) { m.onDemandOnly = enabled }
+
 // SetMinimumFetchInterval rate-limits mailbox fetch starts per primary account.
 // It defaults to zero so tests and existing callers retain their current timing.
 func (m *Manager) SetMinimumFetchInterval(interval time.Duration) {
@@ -197,6 +204,10 @@ func (m *Manager) BeginShutdown() {
 func (m *Manager) Run(ctx context.Context) {
 	defer m.waitForManualJobs()
 	defer m.clearProgress(domain.MailboxSyncTriggerAutomatic)
+	if m.onDemandOnly {
+		<-ctx.Done()
+		return
+	}
 	var continuations accountIDSet
 	var retryQueue accountIDSet
 	var retryCtx context.Context

@@ -261,6 +261,9 @@ func (s *Store) UpdateAccount(ctx context.Context, account domain.Account) (doma
 		if _, err := s.txExecContext(ctx, tx, `DELETE FROM imap_sync_states WHERE account_id = ?`, account.ID); err != nil {
 			return domain.Account{}, fmt.Errorf("delete account IMAP sync state: %w", err)
 		}
+		if _, err := s.txExecContext(ctx, tx, `DELETE FROM alias_imap_sync_states WHERE alias_id IN (SELECT id FROM aliases WHERE account_id = ?)`, account.ID); err != nil {
+			return domain.Account{}, fmt.Errorf("delete alias IMAP sync states: %w", err)
+		}
 		if mailboxSourceChanged {
 			// UIDVALIDITY and UID are scoped to one mailbox source. Retaining
 			// snapshots or consumption history across an endpoint or username

@@ -1,4 +1,4 @@
-# 通知驱动的邮件接收
+# 按需触发的邮件接收
 
 ## 选型
 
@@ -9,17 +9,16 @@
 - [go-imap](https://github.com/emersion/go-imap)：本项目已使用的 Go IMAP 协议库；IDLE 命令自动约每 28 分钟续订，避免长期空闲超时。
 - [EmailEngine](https://github.com/postalsys/emailengine)：参考通知唤醒与持久化同步状态的分工。其当前许可为商业源码可用许可，项目没有将它当作免费开源依赖引入。
 
-本项目连接的是现有 iCloud 收件箱，使用标准 IMAP IDLE；不假设存在 Gmail/Graph 风格的 iCloud 收信 webhook。
+默认 `ICLOUD_API_MAIL_ON_DEMAND_ONLY=true`：不在启动时或周期任务中建立 IMAP 同步/IDLE。邮件读取由真实、已鉴权的取件请求触发；管理员显式手动同步仍可执行主号级增量同步。`ICLOUD_API_MAIL_ON_DEMAND_ONLY=false` 时保留历史的周期/IDLE 兼容行为。
 
 ## 上游资源与一致性
 
-1. 每个启用主号一个只读 INBOX 通知连接，所有隐私邮箱共享。通知连接只接收 EXISTS，不做 FETCH/SEARCH，不抢占全局同步并发名额。
-2. 完成 IDLE 握手后触发追齐；通知在协议解码线程外串行转交给容量为 1 的唤醒队列，合并突发事件。同账号同步串行，常规事件间隔至少 10 秒；同步期间的新事件保留一次后续执行。
-3. 原有读取器通过 UIDVALIDITY + UID 持久游标、UIDNEXT 上界增量读取，每批最多 32 个候选。通过原有事务提交归档与游标，未提交的批次不提前推进游标。正文使用 PEEK 流式归档，通知本身不下载正文。
-4. 连接和首次追齐均成功后，外部 OTP/邮箱池查询只读本地结果，不让客户端高频取码变成高频 Apple 登录。通知失效或首次追齐失败时恢复按需补查，同主号每 10 秒最多唤醒一次。
-5. 无新邮件时保留每 15 分钟补偿；断线后补查并按 1、2、4、5 分钟退避重连。通知触发的读取失败最多退避重试两次，之后等待新事件、按需补查或补偿计划。
-6. 本地账号订阅配置每 30 秒核对一次，停用主号、变更服务器/用户名/密码时取消旧连接并重新订阅。这个核对仅查询本地数据库，不访问 Apple。
-7. 关闭 IDLE 开关可回到原轮询模式。连接建立、取消、断线、超时均有协议级测试；保留 TLS 验证，不记录密码或原始 IMAP 报文。
+1. OTP Bearer、`?token=` 直链、legacy latest/recent 和 pool lease code，以及浏览器直接访问/刷新取件地址，都会触发对应 alias 的读取。
+2. 同一 alias 的并发请求合并；完成后 10 秒内去重，同主号原有最短 30 秒 fetch guard 保留。
+3. 每次最多处理一批 128 封目标邮件，不后台续跑；首次按最近 4096 个 UID 的数值窗口读取，后续访问从每个 alias 自己的游标继续。
+4. 上游先 SEARCH recipient headers，再精确复核归属，只 FETCH 目标邮件内容；public IMAPS 仍仅读本地归档。
+5. 正文使用 PEEK 流式归档，事务提交归档与游标；未提交批次不推进游标。保留 TLS 验证，不记录密码或原始 IMAP 报文。
+6. 旧版 recent 入口的消费语义保持不变：消费后通过原有队列回写上游已读标记，失败任务保留重试；这类任务不搜索或下载新邮件。隐藏邮箱创建计划与邮件收取独立。
 
 ## 控制面板
 
@@ -31,10 +30,7 @@
 ## 验证
 
 ```sh
-go test -race ./internal/mail ./internal/syncer -run 'TestWatch|TestMailboxEvents' -count=5
-go test ./internal/httpserver -run 'TestMailboxWatch|TestLegacySnapshot'
-cd web
-npm test
+flock .local/project-heavy.lock env GOMAXPROCS=2 GOMEMLIMIT=512MiB go test -p 1 -parallel 2 ./internal/mail ./internal/store ./internal/syncer ./internal/httpserver -run 'TestFetchAliasIncremental|TestAliasMailboxSync|TestAliasDemand|TestPoolLeaseCodeDemand' -count=1
 ```
 
-上线后检查每个主号的 `IMAP IDLE 通知连接已建立` 日志，并观察一个空闲窗口内的同步次数、连接数与 CPU/内存。补偿间隔降低的是空查频率，不是承诺所有网络流量按同一比例下降；真实邮件正文仍需下载。
+上线后验证一次真实取件请求能触发单 alias 读取，并确认并发合并、游标续读和 public IMAPS 本地读取行为。

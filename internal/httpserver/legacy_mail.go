@@ -30,11 +30,15 @@ type recentMailData struct {
 // the durable legacy latest_messages row loaded by authentication.
 func (s *Server) availableMailboxSnapshot(c *gin.Context) (domain.MailboxBinding, time.Time, bool) {
 	binding := mustBinding(c)
+	var ok bool
+	binding, ok = s.refreshDemandMailbox(c, binding)
+	if !ok {
+		return domain.MailboxBinding{}, time.Time{}, false
+	}
 	now := time.Now().UTC()
 	if s.now != nil {
 		now = s.now().UTC()
 	}
-	s.requestMailboxSync(binding.Account.ID, now)
 	if err := s.store.TouchAliasAccess(c.Request.Context(), binding.Alias.ID, now); err != nil {
 		s.logger.Warn("更新 API 最近访问时间失败", "alias_id", binding.Alias.ID, "error", err, "request_id", requestID(c))
 	}

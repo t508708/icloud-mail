@@ -126,6 +126,7 @@ func run() error {
 	manager := syncer.New(db, cipher, fetcher, logger, syncInterval, cfg.SyncConcurrency)
 	manager.SetSyncTimeout(cfg.SyncTimeout)
 	manager.SetMinimumFetchInterval(30 * time.Second)
+	manager.SetOnDemandOnly(cfg.MailOnDemandOnly)
 	mailboxEvents := syncer.NewMailboxEvents(db, cipher, fetcher.WatchMailbox, func(ctx context.Context, accountID int64) error {
 		for batch := 0; batch < 128; batch++ {
 			err := manager.SyncAccountFromNotification(ctx, accountID)
@@ -197,8 +198,12 @@ func run() error {
 	web.SetAccountLocker(manager.WithAccountLock)
 	web.SetApplicationLogSource(applicationLogs)
 	web.SetSyncProgressProvider(manager.AccountProgress)
-	if cfg.IMAPIdleEnabled {
+	if cfg.IMAPIdleEnabled && !cfg.MailOnDemandOnly {
 		web.SetMailboxWatchHealth(mailboxEvents.Healthy)
+	}
+	if cfg.MailOnDemandOnly {
+		web.SetAliasDemandSync(manager.SyncAliasOnDemand)
+		logger.Info("邮件收取使用按需模式", "operation", "mail_demand_mode", "periodic_fetch", false, "imap_idle_watch", false)
 	}
 	web.SetHMESyncService(hmeService)
 	if err := web.StartAliasCreationJobs(workerContext); err != nil {
@@ -231,7 +236,7 @@ func run() error {
 
 	var background sync.WaitGroup
 	background.Add(6)
-	if cfg.IMAPIdleEnabled {
+	if cfg.IMAPIdleEnabled && !cfg.MailOnDemandOnly {
 		background.Add(1)
 		go func() {
 			defer background.Done()

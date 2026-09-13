@@ -86,7 +86,39 @@ func (f *Fetcher) FetchIncremental(
 	)
 }
 
+// FetchAliasIncremental searches upstream recipient headers before downloading
+// content. Its cursor belongs to this alias, never to the whole account.
+func (f *Fetcher) FetchAliasIncremental(ctx context.Context, account domain.Account, password string, alias domain.Alias, knownAliases []domain.Alias, previous *domain.IMAPSyncState, positions map[int64]domain.MailboxSnapshotPosition) (domain.MailboxSyncResult, error) {
+	if !alias.Enabled || alias.ID < 1 || alias.AccountID != account.ID {
+		return domain.MailboxSyncResult{}, ErrInvalidAlias
+	}
+	if knownAliases == nil {
+		knownAliases = []domain.Alias{alias}
+	}
+	targetKnown := false
+	for _, known := range knownAliases {
+		if known.ID == alias.ID {
+			if !known.Enabled || known.AccountID != alias.AccountID || known.Address != alias.Address {
+				return domain.MailboxSyncResult{}, ErrInvalidAlias
+			}
+			targetKnown = true
+		}
+	}
+	if !targetKnown {
+		return domain.MailboxSyncResult{}, ErrInvalidAlias
+	}
+	if err := validateLegacySnapshotPositions([]domain.Alias{alias}, positions); err != nil {
+		return domain.MailboxSyncResult{}, err
+	}
+	settings := f.settings()
+	settings.targetAliasAddress = alias.Address
+	settings.targetAliasID = alias.ID
+	return f.fetchArchiveIncremental(ctx, account, password, knownAliases, previous, positions, settings)
+}
+
 type fetchSettings struct {
+	targetAliasAddress        string
+	targetAliasID             int64
 	timeout                   time.Duration
 	maxAliases                int
 	maxCandidates             int

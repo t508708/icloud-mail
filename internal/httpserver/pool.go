@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -53,11 +54,13 @@ func (s *Server) poolAuth() gin.HandlerFunc {
 func poolClient(c *gin.Context) store.PoolClient { return c.MustGet("pool_client").(store.PoolClient) }
 
 func (s *Server) registerPoolRoutes(api *gin.RouterGroup) {
+	api.Use(func(c *gin.Context) { c.Header("Cache-Control", "no-store"); c.Next() })
+	// Upstream reads must not hold the pool-wide mutation lock while waiting.
+	api.GET("/leases/:leaseID/code", s.poolAuth(), s.poolLeaseCode)
 	api.Use(s.poolLock(), s.poolAuth())
 	api.POST("/claim", s.poolClaim)
 	api.GET("/leases", s.poolListLeases)
 	api.GET("/leases/:leaseID", s.poolGetLease)
-	api.GET("/leases/:leaseID/code", s.poolLeaseCode)
 	api.POST("/leases/:leaseID/commit", s.poolLeaseAction("commit", false))
 	api.POST("/leases/:leaseID/release", s.poolLeaseAction("release", false))
 	api.POST("/leases/:leaseID/renew", s.poolLeaseAction("renew", false))
@@ -258,7 +261,40 @@ func (s *Server) poolLeaseCode(c *gin.Context) {
 			after = parsed
 		}
 	}
-	s.requestMailboxSync(alias.AccountID, s.now())
+	if s.demandAliasSync != nil {
+		if err := s.demandAliasSync(c.Request.Context(), alias.ID); err != nil {
+			c.Header("Retry-After", "10")
+			s.writeAPIError(c, http.StatusServiceUnavailable, "SYNC_UNAVAILABLE", "本次按需取件尚未完成，请稍后刷新取件地址")
+			return
+		}
+	} else {
+		s.requestMailboxSync(alias.AccountID, s.now())
+	}
+	// Revalidate after the network wait, then serialize only the local response
+	// against pool key rotation and lease changes.
+	s.poolMu.Lock()
+	defer s.poolMu.Unlock()
+	token, _ := strictBearerToken(c.Request)
+	currentClient, err := s.store.AuthenticatePoolClient(c.Request.Context(), token)
+	if errors.Is(err, store.ErrNotFound) || err == nil && currentClient.ID != poolClient(c).ID {
+		s.writeAPIError(c, http.StatusUnauthorized, "INVALID_POOL_KEY", "项目 Key 已更新或停用")
+		return
+	}
+	if err != nil {
+		s.poolError(c, err)
+		return
+	}
+	currentLease, err := s.store.GetPoolLease(c.Request.Context(), v.ID, currentClient.ID)
+	if err != nil || currentLease.AliasID != alias.ID || currentLease.State != "used" && (currentLease.State != "leased" || !s.now().Before(currentLease.ExpiresAt)) {
+		s.poolError(c, store.ErrPoolClosed)
+		return
+	}
+	currentAlias, aliasErr := s.store.GetAlias(c.Request.Context(), alias.ID)
+	currentAccount, accountErr := s.store.GetAccount(c.Request.Context(), alias.AccountID)
+	if aliasErr != nil || accountErr != nil || !currentAlias.Enabled || !currentAccount.Enabled || currentAlias.AccountID != account.ID {
+		s.poolError(c, store.ErrPoolClosed)
+		return
+	}
 	records, err := s.store.ListAliasOTPs(c.Request.Context(), alias.ID, 100)
 	if err != nil {
 		s.poolError(c, err)
