@@ -34,7 +34,7 @@ test("batch creation stays compact without progress or created-address summary",
   assert.match(source, /const count = ref\(5\)/);
   assert.match(source, /const jobStatusPollIntervalMs = 10_000/);
   assert.match(source, /<details class="creation-job-panel__budget-details">/);
-  assert.match(source, /滚动 1 小时最多 25 次，尝试至少间隔 2 分钟/);
+  assert.match(source, /滚动 1 小时最多 18 次，尝试至少间隔 2 分钟/);
   assert.match(source, /任务生命周期为 7 天/);
   assert.match(source, /自动只选择本轮初始通道，不因限流切换/);
   assert.match(source, /等待本地主号共享预算/);

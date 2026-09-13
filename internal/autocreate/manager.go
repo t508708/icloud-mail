@@ -261,7 +261,7 @@ func (m *Manager) UpgradeCadence(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
-	return upgrader.UpgradeAliasCreationCadence(ctx, "25-per-hour-independent-probes-v3", m.now(), m.newPlan)
+	return upgrader.UpgradeAliasCreationCadence(ctx, "18-per-hour-independent-probes-v4", m.now(), m.newPlan)
 }
 
 // GetSchedule returns a persisted schedule. An absent row means the feature

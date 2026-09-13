@@ -24,8 +24,18 @@ func TestUpgradeAliasCreationCadenceMigratesEnabledOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	oldPlan := make([]time.Time, 25)
+	for i := range oldPlan {
+		oldPlan[i] = now.Add(time.Duration(i+1) * 144 * time.Second)
+	}
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS alias_creation_cadence_versions(version TEXT PRIMARY KEY,applied_at BIGINT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO alias_creation_cadence_versions(version,applied_at) VALUES(?,?)`, "25-per-hour-independent-probes-v3", timestamp(now.Add(-time.Hour))); err != nil {
+		t.Fatal(err)
+	}
 	for _, id := range []int64{a1.ID, a2.ID, a3.ID} {
-		if err := s.EnableAliasCreation(context.Background(), id, []time.Time{now.Add(time.Hour)}, now); err != nil {
+		if err := s.EnableAliasCreation(context.Background(), id, oldPlan, now); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -40,27 +50,27 @@ func TestUpgradeAliasCreationCadenceMigratesEnabledOnly(t *testing.T) {
 	var calls int
 	planner := func(anchor time.Time) ([]time.Time, error) {
 		calls++
-		out := make([]time.Time, 40)
+		out := make([]time.Time, 18)
 		for i := range out {
-			out[i] = anchor.Add(time.Duration(i+1) * 90 * time.Second)
+			out[i] = anchor.Add(time.Duration(i+1) * 200 * time.Second)
 		}
 		return out, nil
 	}
-	if err := s.UpgradeAliasCreationCadence(context.Background(), "v1", now, planner); err != nil {
+	if err := s.UpgradeAliasCreationCadence(context.Background(), "18-per-hour-independent-probes-v4", now, planner); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.GetAliasCreationSchedule(context.Background(), a1.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Enabled || len(got.PlannedAt) != 40 || got.LastAliasAddress != "old@icloud.com" || got.LastError != "cooldown" || got.LastAttemptedAt == nil || got.LastCreatedAt == nil || got.NextRunAt == nil || !got.NextRunAt.After(now.Add(2*time.Hour)) {
+	if !got.Enabled || len(got.PlannedAt) != 18 || got.LastAliasAddress != "old@icloud.com" || got.LastError != "cooldown" || got.LastAttemptedAt == nil || got.LastCreatedAt == nil || got.NextRunAt == nil || !got.NextRunAt.After(now.Add(2*time.Hour)) {
 		t.Fatalf("schedule=%+v", got)
 	}
 	if !got.LastAttemptedAt.Equal(oldAttempt) || !got.LastCreatedAt.Equal(oldCreated) {
 		t.Fatal("history changed")
 	}
 	second, err := s.GetAliasCreationSchedule(context.Background(), a2.ID)
-	if err != nil || !second.Enabled || len(second.PlannedAt) != 40 {
+	if err != nil || !second.Enabled || len(second.PlannedAt) != 18 {
 		t.Fatalf("second schedule=%+v error=%v", second, err)
 	}
 	disabled, err := s.GetAliasCreationSchedule(context.Background(), a3.ID)
@@ -70,7 +80,7 @@ func TestUpgradeAliasCreationCadenceMigratesEnabledOnly(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("planner calls=%d", calls)
 	}
-	if err := s.UpgradeAliasCreationCadence(context.Background(), "v1", now, func(time.Time) ([]time.Time, error) { panic("planner called twice") }); err != nil {
+	if err := s.UpgradeAliasCreationCadence(context.Background(), "18-per-hour-independent-probes-v4", now, func(time.Time) ([]time.Time, error) { panic("planner called twice") }); err != nil {
 		t.Fatal(err)
 	}
 }

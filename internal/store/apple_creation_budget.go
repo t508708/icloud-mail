@@ -126,9 +126,11 @@ func (s *Store) claimAppleCreationAttempt(ctx context.Context, accountID int64, 
 
 	// Table names are fixed internal identifiers, never request input.
 	attemptTable := "apple_creation_attempts"
+	hourlyLimit, dailyLimit := AppleCreationHourlyLimit, AppleCreationDailyLimit
 	var cooldownUntil int64
 	if probe {
 		attemptTable = "apple_creation_probe_attempts"
+		hourlyLimit, dailyLimit = domain.AppleCreationProbeHourlyLimit, domain.AppleCreationProbeDailyLimit
 	} else {
 		err = s.txQueryRowContext(ctx, tx,
 			`SELECT until_at FROM apple_creation_cooldowns WHERE account_id = ?`, accountID,
@@ -144,7 +146,7 @@ func (s *Store) claimAppleCreationAttempt(ctx context.Context, accountID int64, 
 		FROM (SELECT attempted_at FROM `+attemptTable+`
 		WHERE account_id = ? AND attempted_at > ?
 		ORDER BY attempted_at DESC LIMIT ?) budget_window`,
-		accountID, timestamp(now.Add(-appleCreationHourWindow)), AppleCreationHourlyLimit,
+		accountID, timestamp(now.Add(-appleCreationHourWindow)), hourlyLimit,
 	).Scan(&hourlyCount, &oldestHourly, &latestAttempt); err != nil {
 		return fmt.Errorf("count hourly Apple creation attempts: %w", err)
 	}
@@ -153,7 +155,7 @@ func (s *Store) claimAppleCreationAttempt(ctx context.Context, accountID int64, 
 		FROM (SELECT attempted_at FROM `+attemptTable+`
 		WHERE account_id = ? AND attempted_at > ?
 		ORDER BY attempted_at DESC LIMIT ?) budget_window`,
-		accountID, timestamp(now.Add(-appleCreationDayWindow)), AppleCreationDailyLimit,
+		accountID, timestamp(now.Add(-appleCreationDayWindow)), dailyLimit,
 	).Scan(&dailyCount, &oldestDaily); err != nil {
 		return fmt.Errorf("count daily Apple creation attempts: %w", err)
 	}
@@ -162,10 +164,10 @@ func (s *Store) claimAppleCreationAttempt(ctx context.Context, accountID int64, 
 	if cooldownUntil > timestamp(now) {
 		waitUntil = timeFromTimestamp(cooldownUntil)
 	}
-	if hourlyCount >= AppleCreationHourlyLimit && oldestHourly.Valid {
+	if hourlyCount >= hourlyLimit && oldestHourly.Valid {
 		waitUntil = laterTime(waitUntil, timeFromTimestamp(oldestHourly.Int64).Add(appleCreationHourWindow))
 	}
-	if dailyCount >= AppleCreationDailyLimit && oldestDaily.Valid {
+	if dailyCount >= dailyLimit && oldestDaily.Valid {
 		waitUntil = laterTime(waitUntil, timeFromTimestamp(oldestDaily.Int64).Add(appleCreationDayWindow))
 	}
 	if latestAttempt.Valid {

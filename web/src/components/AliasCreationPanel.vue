@@ -1,7 +1,7 @@
 <template>
   <div class="creation-job-panel">
     <h2 id="batch-creation-title" class="creation-job-panel__title">批量创建隐私邮箱</h2>
-    <span class="creation-job-panel__budget-short">滚动 1 小时 25 次 · 间隔至少 2 分钟</span>
+    <span class="creation-job-panel__budget-short">滚动 1 小时 18 次 · 间隔至少 2 分钟</span>
     <div class="creation-job-panel__controls">
       <el-input-number v-model="count" :min="1" :max="100" :controls="false" aria-label="创建数量" :disabled="active || starting" />
       <el-button :loading="probing" :disabled="probing || starting || job?.status === 'running' || !ready || !accountEnabled || !webAuthenticated || connectionBusy" @click="probe">手动探测 1 个</el-button>
@@ -13,7 +13,7 @@
     <RequestAlert v-if="probeError" :error="probeError" :message="probeErrorMessage(probeError)" :type="probeError.code === 'APPLE_RATE_LIMITED' || probeError.code === 'APPLE_CREATION_BUDGET_WAIT' ? 'info' : 'error'" closable @close="probeError = null" />
     <details class="creation-job-panel__budget-details">
       <summary>创建节奏与等待说明</summary>
-      <p>后台批量与自动创建共享本地预算：滚动 1 小时最多 25 次，尝试至少间隔 2 分钟；手动单次探测使用独立同等额度，不消耗后台额度，也不受后台 Apple 24 小时冷却阻挡，且不修改后台冷却或计划。失败及待确认尝试也计数。自动只选择本轮初始通道，不因限流切换。本地上限不是 Apple 官方配额保证；任务生命周期为 7 天。</p>
+      <p>后台批量与自动创建共享本地预算：滚动 1 小时最多 18 次，尝试至少间隔 2 分钟；手动单次探测使用独立 25 次/小时额度，不消耗后台额度，也不受后台 Apple 24 小时冷却阻挡，且不修改后台冷却或计划。失败及待确认尝试也计数。自动只选择本轮初始通道，不因限流切换。本地上限不是 Apple 官方配额保证；任务生命周期为 7 天。</p>
     </details>
     <RequestAlert v-if="error" :error="error" closable @close="error = null" />
     <div v-if="job && active" class="creation-job-panel__status" aria-live="polite">
