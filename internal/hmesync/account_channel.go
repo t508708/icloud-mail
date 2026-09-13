@@ -29,7 +29,6 @@ type accountAuthChallenge struct {
 	id       string
 	owner    int64
 	identity accountIdentity
-	webDSID  string
 	session  apple.AccountSession
 	expires  time.Time
 	attempts int
@@ -51,14 +50,18 @@ func accountSessionInfo(session *apple.AccountSession) SessionInfo {
 }
 
 func (s *Service) GetAccountSession(ctx context.Context, id int64) (SessionInfo, error) {
-	_, session, err := s.loadSession(ctx, id)
-	if errors.Is(err, ErrLoginRequired) {
+	session, err := s.readAccountManagementSession(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
 		return SessionInfo{Status: StatusLoginRequired}, nil
 	}
 	if err != nil {
 		return SessionInfo{}, err
 	}
-	return accountSessionInfo(session.Account), nil
+	info := accountSessionInfo(session)
+	if info.ExpiresAt != nil && !info.ExpiresAt.IsZero() && !info.ExpiresAt.After(s.now()) {
+		info.Status = StatusExpired
+	}
+	return info, nil
 }
 
 // Refresh under the same account lock as creation, so waiting batches retain
@@ -82,26 +85,24 @@ func (s *Service) KeepAliveAccountSession(ctx context.Context, id int64) error {
 	if domain.IsIMAPAuthenticationFailure(account.LastSyncError) {
 		return domain.ErrIMAPAuthenticationPaused
 	}
-	_, web, err := s.loadSession(ctx, id)
-	if errors.Is(err, ErrLoginRequired) {
+	managedSession, err := s.readAccountManagementSession(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if accountSessionInfo(web.Account).Status != StatusAuthenticated {
+	if accountSessionInfo(managedSession).Status != StatusAuthenticated {
 		return nil
 	}
-	managed, err := client.RefreshAccountSession(ctx, *web.Account)
+	managed, err := client.RefreshAccountSession(ctx, *managedSession)
 	if err != nil {
 		return err
 	}
-	if !sameEmail(managed.AppleID, web.AppleID) {
+	if !sameEmail(managed.AppleID, managedSession.AppleID) {
 		return wrapError(CodeAccountMismatch, ErrAccountMismatch, nil)
 	}
-	web.Account = &managed
-	_, err = s.persistSession(ctx, id, identityOf(account), web)
-	return err
+	return s.persistAccountManagementSession(ctx, id, identityOf(account), managed)
 }
 
 func (s *Service) StartAccountAuth(ctx context.Context, owner, id int64, appleID, password string, region apple.Region) (AuthResult, error) {
@@ -118,26 +119,27 @@ func (s *Service) StartAccountAuth(ctx context.Context, owner, id int64, appleID
 	if err != nil {
 		return AuthResult{}, err
 	}
-	if !account.Enabled {
-		return AuthResult{}, wrapError(CodeAccountDisabled, ErrAccountDisabled, nil)
+	webRecord, webErr := s.repo.GetAppleWebSession(ctx, id)
+	if webErr != nil && !errors.Is(webErr, store.ErrNotFound) {
+		return AuthResult{}, webErr
 	}
-	_, web, err := s.loadSession(ctx, id)
-	if err != nil {
+	previous, err := s.readAccountManagementSession(ctx, id)
+	if err != nil && !errors.Is(err, store.ErrNotFound) && Code(err) != CodeAccountSessionExpired {
 		return AuthResult{}, err
 	}
-	if owner < 1 || !sameEmail(appleID, web.AppleID) {
+	if owner < 1 || webErr == nil && !sameEmail(appleID, webRecord.AppleID) {
 		return AuthResult{}, wrapError(CodeAccountMismatch, ErrAccountMismatch, nil)
 	}
 	region, err = normalizeRegion(region)
 	if err != nil {
 		return AuthResult{}, err
 	}
-	managed, verify, err := client.SignInAccount(ctx, appleID, password, region, web.Account)
+	managed, verify, err := client.SignInAccount(ctx, appleID, password, region, previous)
 	password = ""
 	if err != nil {
 		return AuthResult{}, mapAppleError(err, false)
 	}
-	if !sameEmail(managed.AppleID, web.AppleID) {
+	if !sameEmail(managed.AppleID, appleID) {
 		return AuthResult{}, wrapError(CodeAccountMismatch, ErrAccountMismatch, nil)
 	}
 	s.challengeMu.Lock()
@@ -153,7 +155,7 @@ func (s *Service) StartAccountAuth(ctx context.Context, owner, id int64, appleID
 		if err != nil {
 			return AuthResult{}, err
 		}
-		flow := accountAuthChallenge{id: flowID, owner: owner, identity: identityOf(account), webDSID: web.DSID, session: managed, expires: s.now().Add(s.challengeTTL)}
+		flow := accountAuthChallenge{id: flowID, owner: owner, identity: identityOf(account), session: managed, expires: s.now().Add(s.challengeTTL)}
 		s.challengeMu.Lock()
 		s.accountAuthChallenges[id] = flow
 		s.challengeMu.Unlock()
@@ -162,11 +164,10 @@ func (s *Service) StartAccountAuth(ctx context.Context, owner, id int64, appleID
 	if managed.APIKey == "" || managed.AuthenticatedAt.IsZero() {
 		return AuthResult{}, wrapError(CodeAccountSessionExpired, ErrSessionExpired, nil)
 	}
-	web.Account = &managed
-	if _, err := s.persistSession(ctx, id, identityOf(account), web); err != nil {
+	if err := s.persistAccountManagementSession(ctx, id, identityOf(account), managed); err != nil {
 		return AuthResult{}, err
 	}
-	return AuthResult{Status: StatusAuthenticated, Session: accountSessionInfo(web.Account)}, nil
+	return AuthResult{Status: StatusAuthenticated, Session: accountSessionInfo(&managed)}, nil
 }
 
 func (s *Service) VerifyAccountAuth(ctx context.Context, owner, id int64, challengeID, code string) (AuthResult, error) {
@@ -192,14 +193,14 @@ func (s *Service) VerifyAccountAuth(ctx context.Context, owner, id int64, challe
 	if err != nil {
 		return AuthResult{}, err
 	}
-	if !account.Enabled || !sameIdentity(flow.identity, identityOf(account)) {
+	if !sameIdentity(flow.identity, identityOf(account)) {
 		return AuthResult{}, wrapError(CodeAccountChanged, ErrAccountChanged, nil)
 	}
-	_, web, err := s.loadSession(ctx, id)
-	if err != nil {
-		return AuthResult{}, err
+	webRecord, webErr := s.repo.GetAppleWebSession(ctx, id)
+	if webErr != nil && !errors.Is(webErr, store.ErrNotFound) {
+		return AuthResult{}, webErr
 	}
-	if web.DSID != flow.webDSID || !sameEmail(web.AppleID, flow.session.AppleID) {
+	if webErr == nil && !sameEmail(webRecord.AppleID, flow.session.AppleID) {
 		return AuthResult{}, wrapError(CodeAccountChanged, ErrAccountChanged, nil)
 	}
 	managed, err := client.VerifyAccountCode(ctx, flow.session, code)
@@ -210,17 +211,16 @@ func (s *Service) VerifyAccountAuth(ctx context.Context, owner, id int64, challe
 		s.challengeMu.Unlock()
 		return AuthResult{}, mapAppleError(err, true)
 	}
-	if !sameEmail(managed.AppleID, web.AppleID) || managed.APIKey == "" || managed.AuthenticatedAt.IsZero() {
+	if !sameEmail(managed.AppleID, flow.session.AppleID) || managed.APIKey == "" || managed.AuthenticatedAt.IsZero() {
 		return AuthResult{}, wrapError(CodeAccountMismatch, ErrAccountMismatch, nil)
 	}
-	web.Account = &managed
-	if _, err := s.persistSession(ctx, id, identityOf(account), web); err != nil {
+	if err := s.persistAccountManagementSession(ctx, id, identityOf(account), managed); err != nil {
 		return AuthResult{}, err
 	}
 	s.challengeMu.Lock()
 	delete(s.accountAuthChallenges, id)
 	s.challengeMu.Unlock()
-	return AuthResult{Status: StatusAuthenticated, Session: accountSessionInfo(web.Account)}, nil
+	return AuthResult{Status: StatusAuthenticated, Session: accountSessionInfo(&managed)}, nil
 }
 
 func (s *Service) ClearAccountAuth(ctx context.Context, id int64) error {
@@ -236,6 +236,11 @@ func (s *Service) ClearAccountAuth(ctx context.Context, id int64) error {
 	s.challengeMu.Lock()
 	delete(s.accountAuthChallenges, id)
 	s.challengeMu.Unlock()
+	if repo, ok := s.repo.(accountSessionRepository); ok {
+		if err := repo.DeleteAppleAccountSession(ctx, id); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+	}
 	_, web, err := s.loadSession(ctx, id)
 	if errors.Is(err, ErrLoginRequired) || errors.Is(err, store.ErrNotFound) {
 		return nil

@@ -253,6 +253,9 @@ func (s *Store) UpdateAccount(ctx context.Context, account domain.Account) (doma
 		if _, err := s.txExecContext(ctx, tx, `DELETE FROM apple_web_sessions WHERE account_id = ?`, account.ID); err != nil {
 			return domain.Account{}, fmt.Errorf("delete apple web session after mailbox identity change: %w", err)
 		}
+		if _, err := s.txExecContext(ctx, tx, `DELETE FROM apple_account_sessions WHERE account_id = ?`, account.ID); err != nil {
+			return domain.Account{}, fmt.Errorf("delete Apple Account session after mailbox identity change: %w", err)
+		}
 	}
 	if passwordChanged || reenabled || mailboxSourceChanged || emailChanged {
 		// The next sync establishes a new no-backfill boundary. Password rotation

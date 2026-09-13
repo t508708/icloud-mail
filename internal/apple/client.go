@@ -303,8 +303,11 @@ func (c *Client) ListAliases(ctx context.Context, session Session) (list ListRes
 		return list, result, err
 	}
 	defer op.persist(&result)
-	if result.PremiumMailSettingsURL == "" || result.DSID == "" {
+	if result.DSID == "" {
 		return list, result, operationError("list Hide My Email aliases", ErrInvalidSession, 0, nil)
+	}
+	if result.PremiumMailSettingsURL == "" {
+		return list, result, operationError("discover Hide My Email service", ErrHMEUnavailable, 0, nil)
 	}
 	requestURL, err := c.premiumMailSettingsRequestURL(result, "/v2/hme/list")
 	if err != nil {
@@ -808,6 +811,7 @@ type responseData struct {
 
 func (response responseData) operationError(operation string, kind error, cause error) *Error {
 	err := operationError(operation, kind, response.status, cause)
+	err.ServiceCode = responseServiceCode(response.body)
 	err.RetryAfter = parseRetryAfter(response.header.Get("Retry-After"), time.Now())
 	return err
 }

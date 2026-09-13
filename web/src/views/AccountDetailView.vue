@@ -1845,7 +1845,7 @@ async function finishAppleAuthentication(result, accountId) {
   }
   if (shouldResumeSync) {
     await nextTick();
-    await performAliasesSync();
+    await performAliasesSync({ afterAuthentication: true });
   }
 }
 
@@ -2011,7 +2011,7 @@ function syncAliasesFromApple() {
   performAliasesSync();
 }
 
-async function performAliasesSync() {
+async function performAliasesSync({ afterAuthentication = false } = {}) {
   if (
     aliasesSyncLoading.value ||
     autoCreationLoading.value ||
@@ -2054,6 +2054,10 @@ async function performAliasesSync() {
     if (isAppleSessionInvalid(error)) {
       if (appleSession.value) {
         appleSession.value = { ...appleSession.value, status: "expired" };
+      }
+      if (afterAuthentication) {
+        showRequestError({ ...error, message: `旧通道登录验证已通过，但随后读取隐藏邮箱目录时会话校验失败。${error.message || "请查看操作记录中的请求编号。"}` });
+        return;
       }
       openAppleLogin({ error, resumeSync: true });
       return;

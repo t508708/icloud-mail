@@ -66,7 +66,7 @@
               {{ row.username || "系统" }}
             </template>
             <template v-else-if="column.key === 'action'">
-              <strong class="audit-action">{{ actionLabel(row.action) }}</strong>
+              <strong class="audit-action" :title="row.action">{{ actionLabel(row.action) }}</strong>
             </template>
             <template v-else-if="column.key === 'resource'">
               {{ resourceLabel(row.resourceType, row.resourceId) }}
@@ -92,7 +92,7 @@
         <article v-for="log in logs" :key="log.id" class="mobile-record">
           <header class="mobile-record__header">
             <div class="primary-stack">
-              <strong>{{ actionLabel(log.action) }}</strong>
+              <strong :title="log.action">{{ actionLabel(log.action) }}</strong>
               <small>{{ formatTime(log.createdAt, { seconds: true }) }}</small>
             </div>
             <el-tag
@@ -146,30 +146,22 @@ import SectionHeader from "../components/SectionHeader.vue";
 import VirtualDataTable from "../components/VirtualDataTable.vue";
 import { createLatestRequestGate } from "../utils/asyncState.js";
 import { formatTime } from "../utils/format.js";
+import { auditActionLabel } from "../utils/audit.js";
 import {
   ALL_PAGE_SIZE,
   DEFAULT_PAGE_SIZE,
   normalizePageSize,
 } from "../utils/pagination.js";
 
-const actionLabels = {
-  login: "登录后台",
-  logout: "退出登录",
-  change_password: "修改登录密码",
-  create: "创建",
-  update: "更新",
-  delete: "删除",
-  sync: "同步主号",
-  rotate_key: "轮换 API Key",
-  rotate_credentials: "轮换整套凭证",
-  rotate_all_credentials: "轮换全部令牌",
-  toggle: "切换启用状态",
-};
-
 const resourceLabels = {
   admin: "管理员",
   account: "主号",
   alias: "隐私邮箱",
+  mail_group: "邮箱分组",
+  pool: "邮箱池",
+  pool_client: "邮箱池项目",
+  pool_request: "邮箱领取请求",
+  pool_lease: "邮箱租约",
 };
 
 const resultLabels = {
@@ -196,11 +188,11 @@ let listAbortController = null;
 let viewActive = true;
 
 function actionLabel(action) {
-  return actionLabels[action] || action || "未知操作";
+  return auditActionLabel(action);
 }
 
 function resourceLabel(type, id) {
-  const typeLabel = resourceLabels[type] || type || "系统";
+  const typeLabel = Object.hasOwn(resourceLabels, type) ? resourceLabels[type] : type || "系统";
   return id ? `${typeLabel} #${id}` : typeLabel;
 }
 

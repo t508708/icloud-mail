@@ -4,8 +4,11 @@
     <span class="creation-job-panel__budget-short">滚动 1 小时 25 次 · 间隔至少 2 分钟</span>
     <div class="creation-job-panel__apple">
       <el-tag :type="appleAuthenticated ? 'success' : 'info'" title="新通道登录状态">新通道：{{ appleAuthenticated ? '已登录' : '未登录' }}</el-tag>
-      <el-button v-if="!appleAuthenticated" :disabled="active || probing || !webAuthenticated || appleLoading" @click="openLogin">登录 Apple Account</el-button>
-      <el-button v-else :disabled="active || probing || appleLoading" @click="clearApple">退出新通道</el-button>
+      <el-button v-if="!appleAuthenticated" :disabled="loginBusy" @click="openLogin">登录 Apple Account</el-button>
+      <template v-else>
+        <el-button :disabled="loginBusy" @click="openLogin">重新登录</el-button>
+        <el-button :disabled="active || probing || appleLoading" @click="clearApple">退出新通道</el-button>
+      </template>
     </div>
     <div class="creation-job-panel__controls">
       <el-input-number v-model="count" :min="1" :max="100" :controls="false" aria-label="创建数量" :disabled="active || starting" />
@@ -39,6 +42,7 @@
         <el-form-item label="Apple 账户密码"><el-input v-model="applePassword" type="password" autocomplete="current-password" show-password /></el-form-item>
         <el-form-item label="账户区域"><el-select v-model="region"><el-option label="全球" value="global" /><el-option label="中国大陆" value="cn" /></el-select></el-form-item>
         <p class="field-help">密码仅用于本次登录。完成后会保存独立的新通道会话。</p>
+        <p class="field-help">旧通道仅影响目录同步与创建确认，不影响新通道登录；登录不会启用已停用的主号。</p>
       </el-form>
       <el-form v-else label-position="top" :disabled="appleLoading" @submit.prevent="verifyApple">
         <p class="field-help">在受信任的 Apple 设备上允许登录，并填写六位验证码。</p>
@@ -70,6 +74,7 @@ let timer, alive = true, generation = 0, jobRequest = 0, sessionRequest = 0;
 const jobStatusPollIntervalMs = 10_000;
 const active = computed(() => ["running", "waiting"].includes(job.value?.status));
 const appleAuthenticated = computed(() => appleSession.value?.status === "authenticated");
+const loginBusy = computed(() => ["running"].includes(job.value?.status) || probing.value || starting.value || appleLoading.value);
 const statusLabel = computed(() => {
   if (job.value?.status === "waiting") {
     if (isLocalBudgetWait(job.value?.last_error)) return "等待本地主号共享预算恢复";
@@ -155,7 +160,7 @@ async function stop() {
   catch (e) { if (current()) { error.value = e; stopping.value = false; } }
   if (current()) schedule();
 }
-function openLogin() { error.value = null; appleId.value = props.appleIdHint; applePassword.value = ""; code.value = ""; challengeId.value = ""; appleStep.value = "login"; appleVisible.value = true; }
+function openLogin() { if (loginBusy.value) return; error.value = null; appleId.value = appleSession.value?.appleId || props.appleIdHint; region.value = appleSession.value?.region || "global"; applePassword.value = ""; code.value = ""; challengeId.value = ""; appleStep.value = "login"; appleVisible.value = true; }
 function closeLogin(done) { if (appleLoading.value) return; applePassword.value = ""; code.value = ""; done(); }
 async function loginApple() {
   if (appleLoading.value) return;

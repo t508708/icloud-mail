@@ -467,5 +467,7 @@ test("an active full export blocks rotation before any confirmation", async () =
 
 test("audit view translates the global credential-rotation action", async () => {
   const source = await readFile(auditViewPath, "utf8");
-  assert.match(source, /rotate_all_credentials:\s*"轮换全部令牌"/);
+  assert.match(source, /auditActionLabel\(action\)/);
+  const { auditActionLabel } = await import("../src/utils/audit.js");
+  assert.equal(auditActionLabel("rotate_all_credentials"), "轮换全部凭证");
 });

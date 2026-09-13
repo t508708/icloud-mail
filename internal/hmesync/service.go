@@ -197,6 +197,9 @@ func (s *Service) StartAuth(
 		return AuthResult{Status: StatusVerificationRequired, ChallengeID: flow.id, Session: info}, nil
 	}
 
+	if err := s.attachManagementForWebLogin(ctx, accountID, &session); err != nil {
+		return AuthResult{}, err
+	}
 	record, err := s.persistSession(ctx, accountID, identityOf(account), session)
 	if err != nil {
 		return AuthResult{}, err
@@ -251,6 +254,9 @@ func (s *Service) VerifyAuth(
 		return AuthResult{}, mapped
 	}
 	normalizeSession(&session, flow.appleID, flow.region, s.now())
+	if err := s.attachManagementForWebLogin(ctx, accountID, &session); err != nil {
+		return AuthResult{}, err
+	}
 	record, err := s.persistSession(ctx, accountID, flow.identity, session)
 	if err != nil {
 		s.deleteChallenge(challengeID)
@@ -298,7 +304,7 @@ func (s *Service) ClearAuth(ctx context.Context, accountID int64) error {
 	defer release()
 	s.deleteAccountChallenge(accountID)
 	return s.locker.WithAccountLock(ctx, accountID, func() error {
-		err := s.repo.DeleteAppleWebSession(ctx, accountID)
+		err := s.deleteWebSessionPreservingAccount(ctx, accountID)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
@@ -491,7 +497,7 @@ func (s *Service) checkpointAliasDeletionSession(ctx context.Context, accountID 
 func (s *Service) expireAliasDeletionSession(ctx context.Context, accountID int64, sessionErr error) error {
 	persistContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), aliasDeletePersistTimeout)
 	defer cancel()
-	err := s.repo.DeleteAppleWebSession(persistContext, accountID)
+	err := s.deleteWebSessionPreservingAccount(persistContext, accountID)
 	if errors.Is(err, store.ErrNotFound) {
 		err = nil
 	}
@@ -625,10 +631,10 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 		if releaseAccount != nil {
 			// The production locker is deliberately non-reentrant. The account
 			// lock already protects this deletion across the remote operation.
-			deleteErr = s.repo.DeleteAppleWebSession(cleanupContext, accountID)
+			deleteErr = s.deleteWebSessionPreservingAccount(cleanupContext, accountID)
 		} else {
 			deleteErr = s.locker.WithAccountLock(cleanupContext, accountID, func() error {
-				err := s.repo.DeleteAppleWebSession(cleanupContext, accountID)
+				err := s.deleteWebSessionPreservingAccount(cleanupContext, accountID)
 				if errors.Is(err, store.ErrNotFound) {
 					return nil
 				}
@@ -1418,7 +1424,7 @@ func (s *Service) removeSessionForIdentity(ctx context.Context, accountID int64,
 		if !sameIdentity(identityOf(current), expected) {
 			return wrapError(CodeAccountChanged, ErrAccountChanged, nil)
 		}
-		err = s.repo.DeleteAppleWebSession(ctx, accountID)
+		err = s.deleteWebSessionPreservingAccount(ctx, accountID)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
@@ -1468,6 +1474,13 @@ func (s *Service) loadSession(ctx context.Context, accountID int64) (domain.Appl
 	if err != nil {
 		return record, apple.Session{}, wrapError(CodeSessionExpired, ErrSessionExpired, err)
 	}
+	managed, managedErr := s.readAccountManagementSession(ctx, accountID)
+	if managedErr != nil && !errors.Is(managedErr, store.ErrNotFound) && Code(managedErr) != CodeAccountSessionExpired {
+		return record, apple.Session{}, managedErr
+	}
+	if managedErr == nil && sameEmail(managed.AppleID, session.AppleID) {
+		session.Account = managed
+	}
 	return record, session, nil
 }
 
@@ -1506,7 +1519,7 @@ func (s *Service) previousSession(ctx context.Context, accountID int64, appleID 
 
 func (s *Service) expireSession(ctx context.Context, accountID int64) {
 	_ = s.locker.WithAccountLock(ctx, accountID, func() error {
-		err := s.repo.DeleteAppleWebSession(ctx, accountID)
+		err := s.deleteWebSessionPreservingAccount(ctx, accountID)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}

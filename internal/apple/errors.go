@@ -18,6 +18,7 @@ const (
 var (
 	ErrInvalidConfig    = errors.New("invalid Apple client configuration")
 	ErrInvalidSession   = errors.New("invalid or expired Apple session")
+	ErrHMEUnavailable   = errors.New("Hide My Email service is not available for this session")
 	ErrAuthentication   = errors.New("Apple authentication failed")
 	ErrTwoFactorCode    = errors.New("invalid Apple two-factor code")
 	ErrTermsRequired    = errors.New("Apple account action required")

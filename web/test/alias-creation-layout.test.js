@@ -25,6 +25,12 @@ test("batch creation stays compact without progress or created-address summary",
   assert.doesNotMatch(source, /el-progress|已创建\s*\{\{/);
   assert.match(source, /creation-job-panel__title/);
   assert.match(source, /creation-job-panel__apple/);
+  assert.match(source, /旧通道仅影响目录同步与创建确认/);
+  assert.match(source, /const loginBusy = computed\(\(\) => \["running"\]/);
+  assert.match(source, /<el-button v-if="!appleAuthenticated" :disabled="loginBusy" @click="openLogin">登录 Apple Account<\/el-button>/);
+  assert.match(source, /<el-button :disabled="loginBusy" @click="openLogin">重新登录<\/el-button>/);
+  assert.match(source, /function openLogin\(\) \{ if \(loginBusy\.value\) return;/);
+  assert.doesNotMatch(source, /登录 Apple Account<\/el-button>\n\s*<\/div>[\s\S]*!webAuthenticated/);
   assert.match(source, /creation-job-panel__controls \{ order: 2; margin-left: auto; \}/);
   assert.match(source, /creation-job-panel__status \{ display: flex; flex-basis: 100%;/);
   assert.match(source, /@media \(max-width: 720px\) \{ \.creation-job-panel__controls \{ margin-left: 0; \}/);
@@ -88,4 +94,11 @@ test("manual probe runs once during batch wait, refreshes counts and never chang
   await probe(); assert.equal(calls, 3); assert.equal(opened, 1);
   channel.value = "icloud_web"; failure = null; current = false;
   await probe(); assert.equal(calls, 4); assert.equal(changes.length, 2); assert.equal(messages.length, 1);
+});
+
+test("new Apple Account login is independent of old web auth and account state", async () => {
+  const source = await readFile(componentPath, "utf8");
+  assert.match(source, /const loginBusy = computed\(\(\) => \["running"\]\.includes\(job\.value\?\.status\) \|\| probing\.value \|\| starting\.value \|\| appleLoading\.value\)/);
+  assert.match(source, /:disabled="active \|\| probing \|\| appleLoading" @click="clearApple"/);
+  assert.match(source, /:disabled="probing \|\| starting \|\| job\?\.status === 'running' \|\| !ready \|\| !accountEnabled \|\| !webAuthenticated \|\| appleLoading"/);
 });

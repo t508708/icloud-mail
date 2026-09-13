@@ -11,6 +11,7 @@ import (
 const (
 	CodeLoginRequired               = "APPLE_LOGIN_REQUIRED"
 	CodeSessionExpired              = "APPLE_SESSION_EXPIRED"
+	CodeHMEUnavailable              = "APPLE_HME_UNAVAILABLE"
 	CodeCredentialsInvalid          = "APPLE_CREDENTIALS_INVALID"
 	CodeVerificationInvalid         = "APPLE_VERIFICATION_INVALID"
 	CodeFlowExpired                 = "APPLE_FLOW_EXPIRED"
@@ -31,6 +32,7 @@ const (
 var (
 	ErrLoginRequired            = errors.New("Apple login required")
 	ErrSessionExpired           = errors.New("Apple session expired")
+	ErrHMEUnavailable           = errors.New("Hide My Email service unavailable")
 	ErrCredentialsInvalid       = errors.New("Apple credentials invalid")
 	ErrVerificationInvalid      = errors.New("Apple verification code invalid")
 	ErrFlowExpired              = errors.New("Apple verification flow expired")
@@ -214,6 +216,8 @@ func mapAppleError(err error, duringVerification bool) error {
 		return err
 	}
 	switch {
+	case errors.Is(err, apple.ErrHMEUnavailable):
+		return wrapError(CodeHMEUnavailable, ErrHMEUnavailable, err)
 	case errors.Is(err, apple.ErrInvalidSession):
 		return wrapError(CodeSessionExpired, ErrSessionExpired, err)
 	case errors.Is(err, apple.ErrAuthentication) && duringVerification:
