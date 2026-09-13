@@ -178,7 +178,7 @@ func (f *Fetcher) fetchArchiveIncremental(
 	var hasMore bool
 	var processedThrough uint32
 	if settings.targetAliasAddress != "" {
-		uids, hasMore, processedThrough, err = discoverAliasArchiveUIDs(client, previous.LastUID, upperUID, settings.targetAliasAddress, settings.maxIncrementalCandidates)
+		uids, hasMore, processedThrough, err = discoverAliasArchiveUIDs(client, previous.LastUID, upperUID, settings.targetAliasAddress, host, settings.maxIncrementalCandidates)
 	} else {
 		uids, hasMore, processedThrough, err = discoverArchiveUIDs(client, previous.LastUID, upperUID, settings.maxIncrementalCandidates)
 	}

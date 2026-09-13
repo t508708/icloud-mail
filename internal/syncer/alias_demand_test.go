@@ -1,10 +1,12 @@
 package syncer
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +15,35 @@ import (
 	"icloud-api/internal/domain"
 	"icloud-api/internal/store"
 )
+
+func TestAliasDemandFailureLogsRequestAndRedactsCredentials(t *testing.T) {
+	account := domain.Account{ID: 1, Email: "owner@example.test", IMAPUsername: "login@example.test", PasswordCiphertext: "encrypted-fixture", Enabled: true}
+	base := newFakeRepo(account)
+	base.aliases[1] = []domain.Alias{{ID: 10, AccountID: 1, Address: "target@example.test", Enabled: true}}
+	var logs bytes.Buffer
+	fetcher := demandFetcherFake{fn: func(context.Context, domain.Alias, *domain.IMAPSyncState, map[int64]domain.MailboxSnapshotPosition) (domain.MailboxSyncResult, error) {
+		return domain.MailboxSyncResult{}, errors.New("discover new mailbox UIDs: imap: NO [UNAVAILABLE] Unexpected exception fixture encrypted-fixture owner@example.test login@example.test target@example.test")
+	}}
+	m := New(&demandRepoFake{fakeRepo: base}, demandCipherFake{}, fetcher, slog.New(slog.NewJSONHandler(&logs, nil)), time.Second, 1)
+	ctx := domain.WithMailboxRequestID(context.Background(), "demand-request")
+	if err := m.SyncAliasOnDemand(ctx, 10); err == nil {
+		t.Fatal("search failure lost")
+	}
+	output := logs.String()
+	for _, want := range []string{"单邮箱按需获取失败", `"request_id":"demand-request"`, `"account_id":1`, `"alias_id":10`, `"failed_operation":"fetch"`, "discover new mailbox UIDs", "[UNAVAILABLE]"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("missing diagnostic %q", want)
+		}
+	}
+	for _, secret := range []string{"fixture", account.Email, account.IMAPUsername, account.PasswordCiphertext, "target@example.test"} {
+		if strings.Contains(output, secret) {
+			t.Fatal("credential or mailbox appeared in diagnostic")
+		}
+	}
+	if strings.Count(output, "单邮箱按需获取") != 1 {
+		t.Fatal("duplicate failure diagnostics")
+	}
+}
 
 type demandRepoFake struct {
 	*fakeRepo

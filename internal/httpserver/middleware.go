@@ -156,6 +156,7 @@ func (s *Server) requestContext() gin.HandlerFunc {
 			requestID = "request-id-unavailable"
 		}
 		c.Set(requestIDKey, requestID)
+		c.Request = c.Request.WithContext(domain.WithMailboxRequestID(c.Request.Context(), requestID))
 		c.Header("X-Request-ID", requestID)
 		started := time.Now()
 		c.Next()

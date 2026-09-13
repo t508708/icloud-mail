@@ -57,7 +57,11 @@ func TestAliasDemandSyncOTPErrorReturns503(t *testing.T) {
 	env := newAdminAPITestEnv(t)
 	account := adminAPITestCreateAccount(t, env, "demand-error@example.test")
 	_, credentials := createV2AliasFixture(t, env, account.ID, "demand-error-alias@example.test")
-	env.server.SetAliasDemandSync(func(context.Context, int64) error { return context.Canceled })
+	var syncRequestID string
+	env.server.SetAliasDemandSync(func(ctx context.Context, _ int64) error {
+		syncRequestID = domain.MailboxRequestID(ctx)
+		return context.Canceled
+	})
 	router, err := env.server.Router()
 	if err != nil {
 		t.Fatal(err)
@@ -68,6 +72,9 @@ func TestAliasDemandSyncOTPErrorReturns503(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "SYNC_UNAVAILABLE") {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if syncRequestID == "" || rec.Header().Get("X-Request-ID") != syncRequestID || !strings.Contains(rec.Body.String(), syncRequestID) {
+		t.Fatal("request ID did not reach the demand sync and error response")
 	}
 }
 

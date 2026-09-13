@@ -2,6 +2,8 @@ package mail
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,66 @@ import (
 
 	"icloud-api/internal/domain"
 )
+
+func TestICloudDemandSearchUsesSupportedHeadersAndKeepsGenericDeliverySearch(t *testing.T) {
+	f := startArchiveIMAPFixture(t, 0, 0)
+	for _, header := range []string{
+		"X-ICLOUD-HME: alias@example.test",
+		"To: alias@example.test",
+		"Cc: alias@example.test",
+		"To: other@example.test",
+	} {
+		if _, err := f.user.Append("INBOX", strings.NewReader(header+"\r\n\r\nfixture\r\n"), &imap.AppendOptions{Time: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var supported func(*imap.SearchCriteria) error
+	supported = func(criteria *imap.SearchCriteria) error {
+		for _, header := range criteria.Header {
+			switch strings.ToUpper(header.Key) {
+			case "X-ICLOUD-HME", "TO", "CC":
+			default:
+				return &imap.Error{Type: imap.StatusResponseTypeNo, Code: imap.ResponseCodeUnavailable, Text: "Unexpected exception"}
+			}
+		}
+		for _, pair := range criteria.Or {
+			for _, child := range pair {
+				if err := supported(&child); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	f.mu.Lock()
+	f.searchPolicy = supported
+	f.mu.Unlock()
+	host, endpoint, username, err := accountEndpoint(f.account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := dialArchiveIMAP(context.Background(), endpoint, host, NewFetcher().settings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.Login(username, "fixture-password").Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Select("INBOX", &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {
+		t.Fatal(err)
+	}
+	// Reproduce Apple's response to the generic query before using its profile.
+	_, _, through, err := discoverAliasArchiveUIDs(client, 0, 4, f.alias.Address, host, 128)
+	var protocolErr *imap.Error
+	if !errors.As(err, &protocolErr) || protocolErr.Code != imap.ResponseCodeUnavailable || through != 0 {
+		t.Fatalf("generic unsupported search: through=%d err=%v", through, err)
+	}
+	uids, more, through, err := discoverAliasArchiveUIDs(client, 0, 4, f.alias.Address, domain.DefaultIMAPHost, 128)
+	if err != nil || more || through != 4 || !reflect.DeepEqual(uids, []uint32{1, 2, 3}) {
+		t.Fatalf("iCloud search: uids=%v more=%v through=%d err=%v", uids, more, through, err)
+	}
+}
 
 func TestFetchAliasIncrementalFirstCallFindsTargetAndOnlyDownloadsMatch(t *testing.T) {
 	f := startArchiveIMAPFixture(t, 0, 0)

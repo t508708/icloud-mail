@@ -71,7 +71,20 @@ func (m *Manager) SyncAliasOnDemand(ctx context.Context, aliasID int64) error {
 	return err
 }
 
-func (m *Manager) syncAliasDemand(ctx context.Context, aliasID int64) error {
+func (m *Manager) syncAliasDemand(ctx context.Context, aliasID int64) (retErr error) {
+	failedOperation := "load_alias"
+	var accountID int64
+	var transport string
+	var sensitive []string
+	defer func() {
+		if retErr == nil || m == nil || m.logger == nil {
+			return
+		}
+		m.logger.Warn("单邮箱按需获取失败", "account_id", accountID, "alias_id", aliasID, "transport", transport,
+			"request_id", domain.MailboxRequestID(ctx), "operation", "alias_demand_sync",
+			"failed_operation", failedOperation,
+			"error_context", redactSyncLogText(retErr.Error(), sensitive...))
+	}()
 	repo, ok := m.repo.(aliasDemandRepository)
 	if !ok {
 		return errors.New("alias demand persistence unavailable")
@@ -87,13 +100,18 @@ func (m *Manager) syncAliasDemand(ctx context.Context, aliasID int64) error {
 	if !alias.Enabled {
 		return store.ErrAccountDisabled
 	}
+	accountID = alias.AccountID
+	sensitive = append(sensitive, alias.Address, alias.CredentialCiphertext, alias.APIKeyPrefix)
+	failedOperation = "wait_for_account"
 	ctx, cancel := context.WithTimeout(ctx, m.syncTimeout)
 	defer cancel()
 	return m.WithAccountIMAPSlot(ctx, alias.AccountID, func() error {
+		failedOperation = "load_account"
 		account, err := m.repo.GetAccount(ctx, alias.AccountID)
 		if err != nil {
 			return err
 		}
+		sensitive = append(sensitive, account.Email, account.IMAPUsername, account.PasswordCiphertext)
 		current, err := repo.GetAlias(ctx, aliasID)
 		if err != nil {
 			return err
@@ -101,7 +119,7 @@ func (m *Manager) syncAliasDemand(ctx context.Context, aliasID int64) error {
 		if !account.Enabled || !current.Enabled || current.AccountID != account.ID {
 			return store.ErrAccountDisabled
 		}
-		transport, err := accountMailTransport(ctx, m.repo, account.ID)
+		transport, err = accountMailTransport(ctx, m.repo, account.ID)
 		if err != nil {
 			return err
 		}
@@ -109,9 +127,11 @@ func (m *Manager) syncAliasDemand(ctx context.Context, aliasID int64) error {
 		if !useWebMail && domain.IsIMAPAuthenticationFailure(account.LastSyncError) {
 			return domain.ErrIMAPAuthenticationPaused
 		}
+		failedOperation = "wait_for_fetch_interval"
 		if err := m.waitForFetchInterval(ctx, account.ID); err != nil {
 			return err
 		}
+		failedOperation = "load_mailbox_state"
 		state, err := repo.GetAliasIMAPSyncState(ctx, aliasID)
 		var previous *domain.IMAPSyncState
 		if err == nil {
@@ -133,16 +153,20 @@ func (m *Manager) syncAliasDemand(ctx context.Context, aliasID int64) error {
 		}
 		m.logger.Debug("取件请求触发单邮箱获取", "account_id", account.ID, "alias_id", aliasID, "operation", "alias_demand_sync", "transport", transport)
 		var result domain.MailboxSyncResult
+		failedOperation = "fetch"
 		if useWebMail {
 			if m.webMailFetcher == nil {
 				return errors.New("web mail receiver unavailable")
 			}
 			result, err = m.webMailFetcher(ctx, account, current, knownAliases)
 		} else {
+			failedOperation = "decrypt_credentials"
 			password, decryptErr := m.cipher.Decrypt(account.PasswordCiphertext)
 			if decryptErr != nil {
 				return fmt.Errorf("decrypt demand mailbox credentials: %w", decryptErr)
 			}
+			sensitive = append(sensitive, password)
+			failedOperation = "fetch"
 			result, err = fetcher.FetchAliasIncremental(ctx, account, password, current, knownAliases, previous, positions)
 			password = ""
 		}
@@ -152,9 +176,9 @@ func (m *Manager) syncAliasDemand(ctx context.Context, aliasID int64) error {
 				defer failures.close()
 				failures.record(err)
 			}
-			m.logger.Warn("单邮箱按需获取未完成", "account_id", account.ID, "alias_id", aliasID, "operation", "alias_demand_sync", "transport", transport, "authentication_paused", domain.IsIMAPAuthenticationFailure(err.Error()))
 			return err
 		}
+		failedOperation = "publish"
 		if useWebMail {
 			webRepo, ok := m.repo.(webMailRepository)
 			if !ok {
