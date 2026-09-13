@@ -242,7 +242,11 @@ func run() error {
 	}
 
 	var background sync.WaitGroup
-	background.Add(6)
+	background.Add(7)
+	go func() {
+		defer background.Done()
+		hmeService.RunAccountSessionRenewal(workerContext, logger)
+	}()
 	if cfg.IMAPIdleEnabled && !cfg.MailOnDemandOnly {
 		background.Add(1)
 		go func() {

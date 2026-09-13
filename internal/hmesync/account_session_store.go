@@ -61,8 +61,14 @@ func (s *Service) readAccountManagementSession(ctx context.Context, id int64) (*
 	}
 	if err == nil {
 		web, decodeErr := s.decryptSession(record)
+		newer := record.UpdatedAt.After(current.UpdatedAt)
+		if managed != nil && web.Account != nil && (!managed.UpdatedAt.IsZero() || !web.Account.UpdatedAt.IsZero()) {
+			// Web mail/directory writes can carry older embedded ACC cookies.
+			// Compare the management checkpoint, not the outer Web write time.
+			newer = web.Account.UpdatedAt.After(managed.UpdatedAt)
+		}
 		if decodeErr == nil && web.Account != nil && sameEmail(web.AppleID, web.Account.AppleID) &&
-			(managed == nil || sameEmail(managed.AppleID, web.Account.AppleID) && record.UpdatedAt.After(current.UpdatedAt)) {
+			(managed == nil || sameEmail(managed.AppleID, web.Account.AppleID) && newer) {
 			managed = web.Account
 		}
 	}

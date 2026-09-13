@@ -36,7 +36,32 @@ type AccountSession struct {
 	FrameID         string             `json:"frame_id,omitempty"`
 	AuthenticatedAt time.Time          `json:"authenticated_at,omitempty"`
 	ExpiresAt       time.Time          `json:"expires_at,omitempty"`
+	UpdatedAt       time.Time          `json:"updated_at,omitempty"`
+	RefreshedAt     time.Time          `json:"refreshed_at,omitempty"`
+	RefreshAfter    time.Time          `json:"refresh_after,omitempty"`
+	RefreshFailures int                `json:"refresh_failures,omitempty"`
+	RefreshRejected bool               `json:"refresh_rejected,omitempty"`
 	Cookies         []PersistentCookie `json:"cookies,omitempty"`
+}
+
+// Refresh before the idle deadline, including when creation is waiting on its
+// own quota. Without a server TTL, use a bounded four-minute fallback.
+func (s AccountSession) NeedsRefresh(now time.Time) bool {
+	if s.RefreshRejected || s.RefreshAfter.After(now) {
+		return false
+	}
+	if s.ExpiresAt.IsZero() {
+		return !s.RefreshedAt.Add(4 * time.Minute).After(now)
+	}
+	lead := 3 * time.Minute
+	anchor := s.RefreshedAt
+	if anchor.IsZero() {
+		anchor = s.AuthenticatedAt
+	}
+	if lifetime := s.ExpiresAt.Sub(anchor); lifetime > 0 && lifetime/5 < lead {
+		lead = lifetime / 5
+	}
+	return !s.ExpiresAt.Add(-lead).After(now)
 }
 
 func accountHeaders(s AccountSession, auth bool) http.Header {
@@ -160,6 +185,7 @@ func (c *Client) accountCall(ctx context.Context, s *AccountSession, method, raw
 		}
 	}
 	s.Cookies = jar.Export()
+	s.UpdatedAt = time.Now().UTC()
 	for key, target := range map[string]*string{"scnt": &s.SCNT, "X-Apple-ID-Session-Id": &s.SessionID, "X-Apple-Session-Token": &s.SessionToken, "X-Apple-Auth-Attributes": &s.AuthAttributes, "X-Apple-TwoSV-Trust-Token": &s.TrustToken} {
 		if value := r.header.Get(key); value != "" {
 			*target = value
@@ -210,7 +236,11 @@ func accountResponseError(r responseData, kind error) *Error {
 }
 
 func (c *Client) accountManagementCall(ctx context.Context, s *AccountSession, method, path string, body any) (responseData, error) {
-	r, err := c.accountCall(ctx, s, method, accountManage+path, body, accountHeaders(*s, false), false)
+	h := accountHeaders(*s, false)
+	if path == "/account/manage/gs/ws/token" || path == "/account/manage" {
+		h.Del("X-Apple-Api-Key")
+	}
+	r, err := c.accountCall(ctx, s, method, accountManage+path, body, h, false)
 	var upstream *Error
 	if errors.As(err, &upstream) {
 		upstream.Op = "account " + method + " " + path
@@ -254,16 +284,12 @@ func (c *Client) RefreshAccountSession(ctx context.Context, s AccountSession) (A
 		return s, operationError("account session", ErrInvalidSession, 0, nil)
 	}
 	refresh := func() error {
-		h := accountHeaders(s, false)
-		h.Del("X-Apple-Api-Key")
-		r, err := c.accountCall(ctx, &s, http.MethodGet, accountManage+"/account/manage/gs/ws/token", nil, h, false)
+		r, err := c.accountManagementCall(ctx, &s, http.MethodGet, "/account/manage/gs/ws/token", nil)
 		if err != nil {
 			return err
 		}
 		setAccountTTL(&s, r.body)
-		h = accountHeaders(s, false)
-		h.Del("X-Apple-Api-Key")
-		r, err = c.accountCall(ctx, &s, http.MethodGet, accountManage+"/account/manage", nil, h, false)
+		r, err = c.accountManagementCall(ctx, &s, http.MethodGet, "/account/manage", nil)
 		if err != nil {
 			return err
 		}
@@ -277,6 +303,10 @@ func (c *Client) RefreshAccountSession(ctx context.Context, s AccountSession) (A
 		if s.AuthenticatedAt.IsZero() {
 			s.AuthenticatedAt = time.Now().UTC()
 		}
+		s.RefreshedAt = time.Now().UTC()
+		s.RefreshAfter = time.Time{}
+		s.RefreshFailures = 0
+		s.RefreshRejected = false
 		return nil
 	}
 	err := refresh()
@@ -443,10 +473,14 @@ func (c *Client) VerifyAccountCode(ctx context.Context, s AccountSession, code s
 }
 
 func (c *Client) CreateAccountAlias(ctx context.Context, s AccountSession, label, note string) (Alias, AccountSession, error) {
-	if s.APIKey == "" || s.SCNT == "" {
+	if s.APIKey == "" || s.SCNT == "" || s.RefreshRejected {
 		return Alias{}, s, ErrInvalidSession
 	}
-	if !time.Now().Before(s.ExpiresAt) {
+	now := time.Now()
+	if s.RefreshAfter.After(now) && !now.Before(s.ExpiresAt) {
+		return Alias{}, s, &Error{Op: "account refresh backoff", Kind: ErrService, StatusCode: http.StatusServiceUnavailable, Retryable: true, RetryAfter: s.RefreshAfter.Sub(now)}
+	}
+	if s.NeedsRefresh(now) || !now.Before(s.ExpiresAt) {
 		var err error
 		s, err = c.RefreshAccountSession(ctx, s)
 		if err != nil {

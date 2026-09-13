@@ -7,12 +7,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"icloud-api/internal/apple"
-	"icloud-api/internal/domain"
 	"icloud-api/internal/store"
 )
 
@@ -71,7 +71,7 @@ func (s *Service) GetAccountSession(ctx context.Context, id int64) (SessionInfo,
 		return SessionInfo{}, err
 	}
 	info := accountSessionInfo(session)
-	if info.ExpiresAt != nil && !info.ExpiresAt.IsZero() && !info.ExpiresAt.After(s.now()) {
+	if session.RefreshRejected || info.ExpiresAt != nil && !info.ExpiresAt.IsZero() && !info.ExpiresAt.After(s.now()) {
 		info.Status = StatusExpired
 	}
 	return info, nil
@@ -80,6 +80,10 @@ func (s *Service) GetAccountSession(ctx context.Context, id int64) (SessionInfo,
 // Refresh under the same account lock as creation, so waiting batches retain
 // management cookies without overwriting concurrent Web-session changes.
 func (s *Service) KeepAliveAccountSession(ctx context.Context, id int64) error {
+	return s.keepAliveAccountSession(ctx, id, false, nil)
+}
+
+func (s *Service) keepAliveAccountSession(ctx context.Context, id int64, onlyDue bool, logger *slog.Logger) error {
 	client, ok := s.client.(interface {
 		RefreshAccountSession(context.Context, apple.AccountSession) (apple.AccountSession, error)
 	})
@@ -95,9 +99,6 @@ func (s *Service) KeepAliveAccountSession(ctx context.Context, id int64) error {
 	if err != nil || !account.Enabled {
 		return err
 	}
-	if domain.IsIMAPAuthenticationFailure(account.LastSyncError) {
-		return domain.ErrIMAPAuthenticationPaused
-	}
 	managedSession, err := s.readAccountManagementSession(ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
@@ -108,14 +109,47 @@ func (s *Service) KeepAliveAccountSession(ctx context.Context, id int64) error {
 	if accountSessionInfo(managedSession).Status != StatusAuthenticated {
 		return nil
 	}
+	if onlyDue && !managedSession.NeedsRefresh(s.now()) {
+		return nil
+	}
 	managed, err := client.RefreshAccountSession(ctx, *managedSession)
 	if err != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return err
+		}
+		// Retain the last accepted credentials. Persist retry state so a
+		// restart does not turn an upstream outage into a request burst.
+		failed := *managedSession
+		// RefreshAccountSession returns its working checkpoint on an error. Keep
+		// accepted cookie/SCNT rotation from an earlier step, while preserving
+		// the last known-good API key and credentials when nothing was accepted.
+		if managed.UpdatedAt.After(managedSession.UpdatedAt) {
+			failed = managed
+		}
+		failed.RefreshFailures = min(failed.RefreshFailures+1, 6)
+		delay := min(time.Minute*time.Duration(1<<failed.RefreshFailures), 30*time.Minute)
+		failed.RefreshAfter = s.now().Add(max(delay, apple.RetryDelay(err)))
+		failed.RefreshRejected = errors.Is(err, apple.ErrInvalidSession)
+		failed.UpdatedAt = s.now()
+		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), autoCreatePersistTimeout)
+		defer cancel()
+		if persistErr := s.persistAccountManagementSession(persistCtx, id, identityOf(account), failed); persistErr != nil {
+			return errors.Join(err, persistErr)
+		}
 		return err
 	}
 	if !sameEmail(managed.AppleID, managedSession.AppleID) {
 		return wrapError(CodeAccountMismatch, ErrAccountMismatch, nil)
 	}
-	return s.persistAccountManagementSession(ctx, id, identityOf(account), managed)
+	managed.RefreshedAt, managed.UpdatedAt = s.now(), s.now()
+	managed.RefreshAfter, managed.RefreshFailures, managed.RefreshRejected = time.Time{}, 0, false
+	if err := s.persistAccountManagementSession(ctx, id, identityOf(account), managed); err != nil {
+		return err
+	}
+	if logger != nil {
+		logger.Info("Apple Account 会话已续期", "account_id", id, "operation", "apple_account_session_renew", "expires_at", managed.ExpiresAt)
+	}
+	return nil
 }
 
 func (s *Service) StartAccountAuth(ctx context.Context, owner, id int64, appleID, password string, region apple.Region) (AuthResult, error) {

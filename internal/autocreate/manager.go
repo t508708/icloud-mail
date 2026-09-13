@@ -999,6 +999,10 @@ func safeAppleOperation(value string) string {
 		"delete Hide My Email alias",
 		"decode delete Hide My Email alias",
 		"create Hide My Email alias",
+		"account GET /account/manage/gs/ws/token",
+		"account GET /account/manage",
+		"account POST /account/manage/email/private/add",
+		"account PUT /account/manage/email/private/add/complete",
 		"reserve alias":
 		return value
 	default:
