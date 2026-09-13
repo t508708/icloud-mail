@@ -277,15 +277,44 @@ func (c *Client) VerifyCode(ctx context.Context, session Session, code string) (
 	return result, nil
 }
 
-// Validate checks a persisted web session without triggering a fresh sign-in.
+// Validate checks a persisted web session, exchanging its trusted token once
+// on HTTP 421 without triggering a fresh sign-in.
 func (c *Client) Validate(ctx context.Context, session Session) (result Session, err error) {
 	result = session
 	op, err := c.newOperation(&result)
 	if err != nil {
 		return result, err
 	}
-	defer op.persist(&result)
 	account, err := op.validate(ctx)
+	op.persist(&result)
+	var upstream *Error
+	if errors.As(err, &upstream) && upstream.StatusCode == http.StatusMisdirectedRequest && session.SessionToken != "" && !IsRateLimited(err) {
+		// A rejected Web cookie does not prove the trusted session token expired.
+		// Exchange that checkpoint once; never repeat SRP, 2FA or an HME mutation.
+		checkpoint := session
+		checkpoint.Region = result.Region
+		if checkpoint.Region == RegionChina {
+			checkpoint.CountryCode = "CN"
+		}
+		recovery, recoveryErr := c.newOperation(&checkpoint)
+		if recoveryErr != nil {
+			return session, recoveryErr
+		}
+		account, recoveryErr = recovery.accountLogin(ctx)
+		if recoveryErr != nil {
+			return session, recoveryErr
+		}
+		if string(account.DSInfo.DSID) == "" || session.DSID != "" && string(account.DSInfo.DSID) != session.DSID {
+			return session, operationError("recover Apple session identity", ErrInvalidResponse, http.StatusOK, nil)
+		}
+		checkpoint.applyAccount(account)
+		if requiresTwoFactor(checkpoint) {
+			return session, operationError("recover Apple session trust", ErrInvalidSession, http.StatusOK, nil)
+		}
+		recovery.persist(&checkpoint)
+		result = checkpoint
+		err = nil
+	}
 	if err != nil {
 		return result, err
 	}
@@ -1017,7 +1046,7 @@ func (op *operation) accountLogin(ctx context.Context) (accountResponse, error) 
 		if err != nil {
 			return accountResponse{}, err
 		}
-		if response.status == http.StatusMisdirectedRequest && attempt == 0 && responseCountry(response.body) == "CN" {
+		if response.status == http.StatusMisdirectedRequest && attempt == 0 && op.session.Region != RegionChina && responseCountry(response.body) == "CN" {
 			op.setRegion(RegionChina)
 			continue
 		}
@@ -1042,11 +1071,11 @@ func (op *operation) validate(ctx context.Context) (accountResponse, error) {
 		if err != nil {
 			return accountResponse{}, err
 		}
-		if response.status == http.StatusMisdirectedRequest && attempt == 0 && responseCountry(response.body) == "CN" {
+		if response.status == http.StatusMisdirectedRequest && attempt == 0 && op.session.Region != RegionChina && responseCountry(response.body) == "CN" {
 			op.setRegion(RegionChina)
 			continue
 		}
-		if response.status == http.StatusUnauthorized || response.status == http.StatusForbidden || response.status == 450 || response.status == http.StatusMisdirectedRequest {
+		if response.status == http.StatusUnauthorized || response.status == http.StatusForbidden || response.status == 450 {
 			return accountResponse{}, response.operationError("validate Apple session", ErrInvalidSession, nil)
 		}
 		if response.status < 200 || response.status >= 300 {
@@ -1061,7 +1090,7 @@ func (op *operation) validate(ctx context.Context) (accountResponse, error) {
 		}
 		return account, nil
 	}
-	return accountResponse{}, operationError("validate Apple session", ErrInvalidSession, http.StatusMisdirectedRequest, nil)
+	return accountResponse{}, operationError("validate Apple session", ErrService, http.StatusMisdirectedRequest, nil)
 }
 
 func (op *operation) setRegion(region Region) {

@@ -20,7 +20,7 @@
       <el-dialog
         v-model="appleAuthVisible"
         class="apple-auth-dialog"
-        :title="appleAuthStep === 'verification' ? '输入双重认证验证码' : '登录 Apple 账户'"
+        :title="appleAuthStep === 'verification' ? '验证目录连接' : '登录目录连接 · iCloud Web'"
         width="min(520px, calc(100vw - 28px))"
         :close-on-click-modal="false"
         :close-on-press-escape="false"
@@ -217,15 +217,6 @@
         >
           <template #actions>
             <el-button
-              v-if="!isCustomMailbox && appleSessionAuthenticated"
-              :icon="SwitchButton"
-              :loading="appleDisconnectLoading"
-              :disabled="appleAliasControlsDisabled || aliasesSyncLoading"
-              @click="disconnectAppleSession"
-            >
-              退出 Apple 登录
-            </el-button>
-            <el-button
               v-if="!isCustomMailbox"
               type="primary"
               :icon="Refresh"
@@ -238,16 +229,18 @@
           </template>
         </SectionHeader>
 
-        <div v-if="!isCustomMailbox" class="apple-session-strip">
-          <div class="apple-session-strip__identity">
-            <el-tag :type="appleSessionAuthenticated ? 'success' : 'info'" effect="plain">
-              {{ appleSessionAuthenticated ? "Apple 已登录" : "Apple 未登录" }}
-            </el-tag>
-            <span v-if="appleSession?.appleId">{{ appleSession.appleId }}</span>
-            <span v-if="appleSessionAuthenticated">
-              {{ appleSession.region === "cn" ? "中国大陆" : "全球" }}
-            </span>
-          </div>
+        <AppleConnectionPanel
+          v-if="!isCustomMailbox"
+          :account-id="account.id"
+          :apple-id-hint="appleSession?.appleId || account.email"
+          :web-authenticated="appleSessionAuthenticated"
+          :csrf-token="auth.state.csrfToken"
+          :busy="appleConnectionBlocked"
+          @busy="(busy) => (appleConnectionLoading = busy)"
+          @open-web-login="openAppleLogin()"
+          @disconnect-web="disconnectAppleSession"
+        />
+        <div v-if="!isCustomMailbox && aliasSyncSummary" class="apple-session-strip">
           <div v-if="aliasSyncSummary" class="apple-session-strip__summary">
             上次同步：共 {{ aliasSyncSummary.total }}，新建
             {{ aliasSyncSummary.createdCount }}，已存在
@@ -263,11 +256,12 @@
       <section v-if="!isCustomMailbox" class="section-block alias-creation-row" aria-labelledby="batch-creation-title">
         <AliasCreationPanel
           :account-id="account.id"
-          :apple-id-hint="appleSession?.appleId || account.email"
           :account-enabled="account.enabled"
           :web-authenticated="appleSessionAuthenticated"
+          :connection-busy="appleConnectionLoading || appleAuthLoading || appleDisconnectLoading || aliasesSyncLoading"
           :csrf-token="auth.state.csrfToken"
           @busy="(busy) => (manualAliasLoading = busy)"
+          @operation-busy="(busy) => (batchOperationLoading = busy)"
           @change="onAliasCreationChange"
         />
       </section>
@@ -882,7 +876,6 @@ import {
   Refresh,
   RefreshLeft,
   Search,
-  SwitchButton,
 } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
@@ -923,6 +916,7 @@ import {
 } from "../api/admin.js";
 import EmptyState from "../components/EmptyState.vue";
 import AliasCreationPanel from "../components/AliasCreationPanel.vue";
+import AppleConnectionPanel from "../components/AppleConnectionPanel.vue";
 import AliasDeletionProgress from "../components/AliasDeletionProgress.vue";
 import ListPagination from "../components/ListPagination.vue";
 import RequestAlert from "../components/RequestAlert.vue";
@@ -1008,6 +1002,8 @@ const randomAliasCount = ref(1);
 const randomAliasLoading = ref(false);
 const randomAliasError = ref(null);
 const manualAliasLoading = ref(false);
+const batchOperationLoading = ref(false);
+const appleConnectionLoading = ref(false);
 const aliasSyncSummary = ref(null);
 const copyLoading = reactive({});
 const toggleLoading = reactive({});
@@ -1140,6 +1136,9 @@ const aliasColumns = Object.freeze([
 const appleSessionAuthenticated = computed(
   () => appleSession.value?.status === "authenticated",
 );
+const appleConnectionBlocked = computed(() => batchOperationLoading.value ||
+  appleAuthLoading.value || appleDisconnectLoading.value || aliasesSyncLoading.value ||
+  autoCreationLoading.value || randomAliasLoading.value || deletionState.value.blocked || batchDeleteConfirming.value);
 function appleVerificationActionLabel() {
   if (resumeAutoCreationAfterAuth) return "验证并开启";
   if (resumeAliasSyncAfterAuth) return "验证并同步";
@@ -1152,6 +1151,7 @@ const autoCreationControlDisabled = computed(
     manualAliasLoading.value ||
     aliasesSyncLoading.value ||
     appleDisconnectLoading.value ||
+    appleConnectionLoading.value ||
     appleAuthLoading.value,
 );
 const autoCreationToggleDisabled = computed(
@@ -1163,6 +1163,7 @@ const appleAliasControlsDisabled = computed(
   () =>
     autoCreationLoading.value ||
     manualAliasLoading.value ||
+    appleConnectionLoading.value ||
     appleAuthLoading.value,
 );
 
@@ -1501,6 +1502,7 @@ function detailMutationPending() {
     syncLoading.value ||
     aliasesSyncLoading.value ||
     appleAuthLoading.value ||
+    appleConnectionLoading.value ||
     appleDisconnectLoading.value ||
     autoCreationLoading.value ||
     randomAliasLoading.value ||
@@ -1838,7 +1840,7 @@ async function finishAppleAuthentication(result, accountId) {
   resumeAutoCreationAfterAuth = false;
   appleAuthVisible.value = false;
   resetAppleAuthForm();
-  successMessage("Apple 账户已登录。");
+  successMessage("目录连接已登录。");
   if (shouldResumeAutoCreation) {
     await nextTick();
     await performSetAutoCreation(true);
@@ -2082,8 +2084,8 @@ async function disconnectAppleSession() {
   appleDisconnectLoading.value = true;
   try {
     await ElMessageBox.confirm(
-      "退出后，下次同步隐私邮箱时需要重新登录 Apple 账户。",
-      "退出 Apple 登录",
+      "退出目录连接后，同步与管理目录需要重新登录；新建连接的会话保持不变。",
+      "退出目录连接",
       {
         type: "warning",
         confirmButtonText: "退出登录",
@@ -2096,11 +2098,11 @@ async function disconnectAppleSession() {
     if (!isCurrentAccount(accountId)) return;
     appleSession.value = null;
     aliasSyncSummary.value = null;
-    successMessage("Apple 登录已退出。");
+    successMessage("目录连接已退出，新建连接保持不变。");
   } catch (error) {
     if (confirmationCancelled(error)) return;
     if (!isCurrentAccount(accountId)) return;
-    showRequestError(error, "退出 Apple 登录失败，请稍后重试。");
+    showRequestError(error, "退出目录连接失败，请稍后重试。");
   } finally {
     appleDisconnectLoading.value = false;
     appleDisconnectLock.release();
@@ -2503,6 +2505,8 @@ watch(
       randomAliasCount.value = 1;
       randomAliasError.value = null;
       manualAliasLoading.value = false;
+      batchOperationLoading.value = false;
+      appleConnectionLoading.value = false;
       loadDetail();
     }
   },

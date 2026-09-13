@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const componentPath = new URL("../src/components/AliasCreationPanel.vue", import.meta.url);
+const connectionPath = new URL("../src/components/AppleConnectionPanel.vue", import.meta.url);
 const viewPath = new URL("../src/views/AccountDetailView.vue", import.meta.url);
 
 function functionBody(source, signature) {
@@ -24,19 +25,14 @@ test("batch creation stays compact without progress or created-address summary",
   const source = await readFile(componentPath, "utf8");
   assert.doesNotMatch(source, /el-progress|已创建\s*\{\{/);
   assert.match(source, /creation-job-panel__title/);
-  assert.match(source, /creation-job-panel__apple/);
-  assert.match(source, /旧通道仅影响目录同步与创建确认/);
-  assert.match(source, /const loginBusy = computed\(\(\) => \["running"\]/);
-  assert.match(source, /<el-button v-if="!appleAuthenticated" :disabled="loginBusy" @click="openLogin">登录 Apple Account<\/el-button>/);
-  assert.match(source, /<el-button :disabled="loginBusy" @click="openLogin">重新登录<\/el-button>/);
-  assert.match(source, /function openLogin\(\) \{ if \(loginBusy\.value\) return;/);
-  assert.doesNotMatch(source, /登录 Apple Account<\/el-button>\n\s*<\/div>[\s\S]*!webAuthenticated/);
+  assert.doesNotMatch(source, /creation-job-panel__apple|el-dialog|loginAppleAccountAuth|v-model="channel"/);
+  assert.match(source, /channel: "auto"/);
+  assert.match(source, /管理 Apple 连接/);
   assert.match(source, /creation-job-panel__controls \{ order: 2; margin-left: auto; \}/);
   assert.match(source, /creation-job-panel__status \{ display: flex; flex-basis: 100%;/);
   assert.match(source, /@media \(max-width: 720px\) \{ \.creation-job-panel__controls \{ margin-left: 0; \}/);
   assert.match(source, /const count = ref\(5\)/);
   assert.match(source, /const jobStatusPollIntervalMs = 10_000/);
-  assert.match(source, /自动（初始选择通道）/);
   assert.match(source, /<details class="creation-job-panel__budget-details">/);
   assert.match(source, /滚动 1 小时最多 25 次，尝试至少间隔 2 分钟/);
   assert.match(source, /任务生命周期为 7 天/);
@@ -71,13 +67,13 @@ test("manual probe runs once during batch wait, refreshes counts and never chang
   const props = { accountId: 7, csrfToken: "csrf", accountEnabled: true, webAuthenticated: true };
   const job = { value: { status: "waiting", completed: 3 } };
   const probing = { value: false }, starting = { value: false }, ready = { value: true };
-  const channel = { value: "icloud_web" }, appleAuthenticated = { value: true }, appleLoading = { value: false }, probeError = { value: null };
-  let calls = 0, current = true, failure = null, opened = 0;
+  const probeError = { value: null };
+  let calls = 0, current = true, failure = null;
   const changes = [], messages = [];
-  const create = async (id, token, selected) => { calls++; assert.equal(id, 7); assert.equal(token, "csrf"); assert.equal(selected, "icloud_web"); if (failure) throw failure; };
-  const probe = Function("props", "job", "probing", "starting", "ready", "channel", "appleAuthenticated", "appleLoading", "probeError", "guard", "createAliasNow", "emit", "ElMessage", "openLogin", `return async function () ${body}`)(
-    props, job, probing, starting, ready, channel, appleAuthenticated, appleLoading, probeError,
-    () => () => current, create, (...event) => changes.push(event), { success: message => messages.push(message) }, () => { opened++; },
+  const create = async (id, token, selected) => { calls++; assert.equal(id, 7); assert.equal(token, "csrf"); assert.equal(selected, "auto"); if (failure) throw failure; };
+  const probe = Function("props", "job", "probing", "starting", "ready", "probeError", "guard", "createAliasNow", "emit", "ElMessage", `return async function () ${body}`)(
+    props, job, probing, starting, ready, probeError,
+    () => () => current, create, (...event) => changes.push(event), { success: message => messages.push(message) },
   );
   await probe();
   assert.equal(calls, 1); assert.deepEqual(changes, [["change", { account_id: 7 }]]);
@@ -90,15 +86,26 @@ test("manual probe runs once during batch wait, refreshes counts and never chang
   assert.equal(calls, 3); assert.deepEqual(changes[1], ["change", { account_id: 7 }]);
   job.value.status = "running";
   await probe(); assert.equal(calls, 3);
-  job.value.status = "waiting"; channel.value = "apple_account"; appleAuthenticated.value = false;
-  await probe(); assert.equal(calls, 3); assert.equal(opened, 1);
-  channel.value = "icloud_web"; failure = null; current = false;
+  job.value.status = "waiting"; props.connectionBusy = true;
+  await probe(); assert.equal(calls, 3);
+  props.connectionBusy = false; props.accountEnabled = false;
+  await probe(); assert.equal(calls, 3);
+  props.accountEnabled = true; props.webAuthenticated = false;
+  await probe(); assert.equal(calls, 3);
+  props.webAuthenticated = true; failure = null; current = false;
   await probe(); assert.equal(calls, 4); assert.equal(changes.length, 2); assert.equal(messages.length, 1);
 });
 
 test("new Apple Account login is independent of old web auth and account state", async () => {
-  const source = await readFile(componentPath, "utf8");
-  assert.match(source, /const loginBusy = computed\(\(\) => \["running"\]\.includes\(job\.value\?\.status\) \|\| probing\.value \|\| starting\.value \|\| appleLoading\.value\)/);
-  assert.match(source, /:disabled="active \|\| probing \|\| appleLoading" @click="clearApple"/);
-  assert.match(source, /:disabled="probing \|\| starting \|\| job\?\.status === 'running' \|\| !ready \|\| !accountEnabled \|\| !webAuthenticated \|\| appleLoading"/);
+  const source = await readFile(connectionPath, "utf8");
+  assert.match(source, /const blocked = computed\(\(\) => props.busy \|\| loading.value\)/);
+  assert.doesNotMatch(functionBody(source, "async function login"), /webAuthenticated|accountEnabled/);
+  assert.match(source, /两套会话独立保存，分别验证/);
+  assert.match(source, /登录仅配置连接，不会启用已停用的主号/);
+  const batch = await readFile(componentPath, "utf8");
+  assert.match(batch, /job.value\?\.status === "running" \|\| starting.value \|\| probing.value, busy => emit\("operation-busy", busy\)/);
+  assert.match(batch, /:disabled="probing \|\| starting \|\| job\?\.status === 'running' \|\| !ready \|\| !accountEnabled \|\| !webAuthenticated \|\| connectionBusy"/);
+  const view = await readFile(viewPath, "utf8");
+  assert.match(view, /@operation-busy="\(busy\) => \(batchOperationLoading = busy\)"/);
+  assert.match(view, /:busy="appleConnectionBlocked"/);
 });
