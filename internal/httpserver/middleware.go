@@ -187,7 +187,10 @@ func (s *Server) requestContext() gin.HandlerFunc {
 				key += " " + strconv.FormatInt(mailbox.Account.ID, 10)
 			}
 		}
-		if c.Request.Method == http.MethodGet && status < http.StatusBadRequest && duration < time.Second {
+		if status == http.StatusTooManyRequests {
+			key = c.FullPath() + " rate_limited"
+		}
+		if status == http.StatusTooManyRequests || c.Request.Method == http.MethodGet && status < http.StatusBadRequest && duration < time.Second {
 			if ok, suppressed := sampler.allow(key, time.Now()); !ok {
 				return
 			} else if suppressed > 0 {
@@ -196,7 +199,7 @@ func (s *Server) requestContext() gin.HandlerFunc {
 		}
 		if status >= 500 {
 			s.logger.Error(operation, attrs...)
-		} else if status >= 400 {
+		} else if status >= 400 && status != http.StatusTooManyRequests {
 			s.logger.Warn(operation, attrs...)
 		} else {
 			s.logger.Info(operation, attrs...)

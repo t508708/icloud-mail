@@ -50,6 +50,10 @@ type Server struct {
 	manualAliasesRunning map[int64]bool
 	manualProbesRunning  map[int64]bool
 	demandAliasSync      func(context.Context, int64) error
+	aliasDemandRateMu    sync.Mutex
+	aliasDemandRate      map[int64]aliasDemandRateState
+	accountPickupActive  map[int64]int
+	pickupRateCleanupAt  time.Time
 	aliasCreationJobs    aliasCreationJobRuntime
 	aliasDeletionJobs    aliasDeletionJobRuntime
 	// beforeCredentialRotationLock is a deterministic test seam. Production
@@ -265,7 +269,7 @@ func (s *Server) Router() (*gin.Engine, error) {
 	if err := router.SetTrustedProxies(s.cfg.TrustedProxies); err != nil {
 		return nil, fmt.Errorf("配置受信代理: %w", err)
 	}
-	router.Use(s.requestContext(), s.securityHeaders(), s.recovery())
+	router.Use(s.requestContext(), s.securityHeaders(), s.recovery(), s.pickupAdmission())
 
 	router.GET("/healthz", s.health)
 	rootRedirect := func(c *gin.Context) { c.Redirect(http.StatusFound, "/docs/") }

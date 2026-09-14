@@ -36,6 +36,11 @@ func (s *Server) otpHistory(c *gin.Context) {
 		s.writeAPIError(c, http.StatusUnauthorized, "INVALID_API_KEY", "API Key 无效")
 		return
 	}
+	release, ok := s.beginMailboxPickup(c, binding.Account.ID, binding.Alias.ID)
+	if !ok {
+		return
+	}
+	defer release()
 	now := time.Now().UTC()
 	if s.now != nil {
 		now = s.now().UTC()

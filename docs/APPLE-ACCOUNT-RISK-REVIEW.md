@@ -34,7 +34,7 @@
 
 - 后台自动与批量共享 `18/h`，手动 probe 独立 `25/h`、`2m`；理论合计为 `43/h`，并非全主号 `18/h`。自动日额度为 `432`（18*24）。每次新通道常规至少 `Validate + List + add + complete + List` 五个 Apple HTTP 请求；TTL refresh/确认传播会增加请求。
 - 当前统一连接管理：新建默认 auto、新优先；目录保留 Web（q 同样目录固定 Web）。界面合并不等价于 Apple 会话合并。
-- KeepAlive 当前无生产调用；IMAP 按 alias `10s` 去重，`cmd main` 生产账号 guard 为 30s；fetch 仍逐次 LOGIN，短时连接复用尚待优化。
+- KeepAlive 已接入生产调用；IMAP 按 alias `3s` 去重，HTTP 同一取件地址并发或 3 秒窗口直接限流，`cmd main` 生产账号 guard 为 30s；fetch 仍逐次 LOGIN，短时连接复用尚待优化。
 - 已修复：validate 421 不直接视为 expired，并最多一次可信 token `accountLogin` 恢复（允许一次全球到中国区路由修正）；不复投密码/2FA/创建/删除。现有证据未证明此前 550 停用由本项目造成。
 - 采纳方向：失败不覆盖管理态，按需刷新短 TTL；不照搬“限流后换通道”、2m 冷却或持续保活。
 

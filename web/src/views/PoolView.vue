@@ -338,7 +338,8 @@
             <h3>2. 查询本次领取后的新验证码</h3>
             <pre>{{ codeExample }}</pre>
             <p>
-              data.success 为 true 时读取 data.otp；no_code 时继续轮询。可以追加
+              data.success 为 true 时读取 data.otp；no_code 时等待至少 3 秒再请求。
+              同一邮箱共用取件限流，429 时按 Retry-After 重试。可以追加
               after=RFC3339 时间，只查询更晚的邮件。
             </p>
             <h3>3. 确认、释放或续期</h3>

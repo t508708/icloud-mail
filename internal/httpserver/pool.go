@@ -261,9 +261,14 @@ func (s *Server) poolLeaseCode(c *gin.Context) {
 			after = parsed
 		}
 	}
+	release, ok := s.beginMailboxPickup(c, account.ID, alias.ID)
+	if !ok {
+		return
+	}
+	defer release()
 	if s.demandAliasSync != nil {
 		if err := s.demandAliasSync(c.Request.Context(), alias.ID); err != nil {
-			c.Header("Retry-After", "10")
+			c.Header("Retry-After", "3")
 			s.writeAPIError(c, http.StatusServiceUnavailable, "SYNC_UNAVAILABLE", "本次按需取件尚未完成，请稍后刷新取件地址")
 			return
 		}

@@ -57,6 +57,12 @@ func (s *Server) availableMailboxSnapshot(c *gin.Context) (domain.MailboxBinding
 }
 
 func (s *Server) latestMail(c *gin.Context) {
+	initial := mustBinding(c)
+	release, ok := s.beginMailboxPickup(c, initial.Account.ID, initial.Alias.ID)
+	if !ok {
+		return
+	}
+	defer release()
 	binding, _, ok := s.availableMailboxSnapshot(c)
 	if !ok {
 		return
@@ -91,6 +97,12 @@ func (s *Server) latestMail(c *gin.Context) {
 }
 
 func (s *Server) recentMail(c *gin.Context) {
+	initial := mustBinding(c)
+	release, ok := s.beginMailboxPickup(c, initial.Account.ID, initial.Alias.ID)
+	if !ok {
+		return
+	}
+	defer release()
 	binding, now, ok := s.availableMailboxSnapshot(c)
 	if !ok {
 		return

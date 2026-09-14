@@ -99,6 +99,8 @@ func TestWebMailDemandURLReadsTargetWithoutIMAPOrCursorMutation(t *testing.T) {
 		return fetcher.ArchiveWebMail(ctx, account, alias, known, remote)
 	})
 	env.server.SetAliasDemandSync(manager.SyncAliasOnDemand)
+	now := time.Now().UTC()
+	env.server.now = func() time.Time { return now }
 	router, err := env.server.Router()
 	if err != nil {
 		t.Fatal(err)
@@ -112,6 +114,7 @@ func TestWebMailDemandURLReadsTargetWithoutIMAPOrCursorMutation(t *testing.T) {
 		if r.Code != http.StatusOK || !strings.Contains(r.Body.String(), "123456") {
 			t.Fatalf("read status=%d body=%s", r.Code, r.Body.String())
 		}
+		now = now.Add(3 * time.Second)
 	}
 	if calls != 4 || bodies != 1 {
 		t.Fatalf("cache/target fetch calls=%d bodies=%d", calls, bodies)

@@ -23,6 +23,8 @@ func TestAliasDemandSyncOTPInvokesTargetAndRejectsInvalidBeforeCallback(t *testi
 	}
 	var mu sync.Mutex
 	var calls []int64
+	now := time.Now().UTC()
+	env.server.now = func() time.Time { return now }
 	env.server.SetAliasDemandSync(func(_ context.Context, id int64) error { mu.Lock(); calls = append(calls, id); mu.Unlock(); return nil })
 	request := func(target, auth string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
@@ -36,6 +38,7 @@ func TestAliasDemandSyncOTPInvokesTargetAndRejectsInvalidBeforeCallback(t *testi
 	if got := request("/api/v1/otp", "Bearer "+credentials.APIKey); got.Code != http.StatusOK {
 		t.Fatalf("bearer status=%d", got.Code)
 	}
+	now = now.Add(3 * time.Second)
 	token, err := env.cipher.OTPToken(alias.ID, alias.APIKeyHash)
 	if err != nil {
 		t.Fatal(err)

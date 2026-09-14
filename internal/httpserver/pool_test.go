@@ -16,6 +16,8 @@ import (
 func TestPoolAPIIsolationCredentialsAndFreshCode(t *testing.T) {
 	env := newAdminAPITestEnv(t)
 	env.server.sync = nil
+	now := time.Now().UTC()
+	env.server.now = func() time.Time { return now }
 	ctx := context.Background()
 	if err := env.store.ConfigureMailArchive(t.TempDir(), 1<<20); err != nil {
 		t.Fatal(err)
@@ -111,10 +113,12 @@ func TestPoolAPIIsolationCredentialsAndFreshCode(t *testing.T) {
 	}, after); err != nil {
 		t.Fatal(err)
 	}
+	now = now.Add(3 * time.Second)
 	r := call("GET", path+"/code", "", key)
 	if r.Code != 200 || !strings.Contains(r.Body.String(), `"otp":"222222"`) {
 		t.Fatalf("fresh code: %s", r.Body.String())
 	}
+	now = now.Add(3 * time.Second)
 	r = call("GET", path+"/code?after="+url.QueryEscape(after.Add(time.Second).Format(time.RFC3339Nano)), "", key)
 	if !strings.Contains(r.Body.String(), `"no_code"`) {
 		t.Fatal("after ignored")

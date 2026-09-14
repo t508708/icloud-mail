@@ -136,6 +136,8 @@ func TestAliasDemandURLThroughIMAPAndStoreReturnsNewTargetOTP(t *testing.T) {
 	manager := syncer.New(env.store, env.cipher, fetcher, env.server.logger, time.Minute, 1)
 	manager.SetOnDemandOnly(true)
 	env.server.SetAliasDemandSync(manager.SyncAliasOnDemand)
+	now := time.Now().UTC()
+	env.server.now = func() time.Time { return now }
 	router, err := env.server.Router()
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +165,9 @@ func TestAliasDemandURLThroughIMAPAndStoreReturnsNewTargetOTP(t *testing.T) {
 		t.Fatalf("untouched alias archive changed: %v %v", rows, err)
 	}
 	assertOTP("/api/v1/otp", keyB.APIKey, "654321", "123456")
+	now = now.Add(3 * time.Second)
 	assertOTP(dto.OTPURLPath, "", "123456", "654321")
+	now = now.Add(3 * time.Second)
 	assertOTP(dto.DirectLinkPath, "", "123456", "654321")
 	if _, err := env.store.GetIMAPSyncState(ctx, account.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("target fetch advanced account-wide cursor: %v", err)

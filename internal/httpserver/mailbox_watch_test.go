@@ -67,6 +67,7 @@ func TestLegacySnapshotStaysFreshOnlyWhileWatchIsHealthy(t *testing.T) {
 		t.Fatalf("healthy watch snapshot status=%d", got.Code)
 	}
 	f.env.server.SetMailboxWatchHealth(func(int64) bool { return false })
+	f.advancePickupWindow()
 	if got := f.latest(t, f.rawKey); got.Code != http.StatusServiceUnavailable {
 		t.Fatalf("disconnected watch stale snapshot status=%d", got.Code)
 	}

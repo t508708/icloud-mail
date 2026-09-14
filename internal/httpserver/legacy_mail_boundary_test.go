@@ -154,15 +154,16 @@ func TestLegacyMailEndpointsEnforceSyncFreshnessBoundary(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			now := time.Date(2026, 8, 13, 4, 30, 0, 123456789, time.UTC)
-			fixture := newLegacyMailBoundaryFixture(t, now, test.syncedAt(now), now.Add(-time.Minute))
-			fixture.env.server.cfg.PollInterval = pollInterval
-			fixture.env.server.cfg.SyncTimeout = syncTimeout
-
-			responses := map[string]*httptest.ResponseRecorder{
-				"latest": fixture.latest(t, fixture.rawKey),
-				"recent": fixture.recent(t),
-			}
-			for endpoint, response := range responses {
+			for _, endpoint := range []string{"latest", "recent"} {
+				fixture := newLegacyMailBoundaryFixture(t, now, test.syncedAt(now), now.Add(-time.Minute))
+				fixture.env.server.cfg.PollInterval = pollInterval
+				fixture.env.server.cfg.SyncTimeout = syncTimeout
+				var response *httptest.ResponseRecorder
+				if endpoint == "latest" {
+					response = fixture.latest(t, fixture.rawKey)
+				} else {
+					response = fixture.recent(t)
+				}
 				if test.wantStatus == http.StatusOK {
 					if response.Code != http.StatusOK {
 						t.Fatalf("%s sync freshness status = %d, want %d; body=%s",
@@ -211,11 +212,14 @@ func TestLegacyMailAPIKeyRotationInvalidatesOldKeyAndDirectLink(t *testing.T) {
 	)
 	assertLegacyMailBoundaryAPIError(t, oldDirect, http.StatusUnauthorized, "INVALID_API_KEY")
 
+	assertLegacyMailBoundaryAPIError(t, fixture.latest(t, newKey), http.StatusTooManyRequests, "RATE_LIMITED")
+	fixture.advancePickupWindow()
 	newBearer := fixture.latest(t, newKey)
 	if newBearer.Code != http.StatusOK || !strings.Contains(newBearer.Body.String(), legacyMailBoundaryBody) {
 		t.Fatalf("rotated API key status = %d, want %d; body=%s",
 			newBearer.Code, http.StatusOK, newBearer.Body.String())
 	}
+	fixture.advancePickupWindow()
 	newDirect := serveV2Request(
 		fixture.router,
 		http.MethodGet,
@@ -260,17 +264,20 @@ func TestLegacyMailRecentConcurrentRequestsConsumeExactlyOnce(t *testing.T) {
 	var unexpectedBodies []string
 	for result := range results {
 		statuses[result.status]++
-		if result.status != http.StatusOK && result.status != http.StatusNotFound {
+		if result.status != http.StatusOK && result.status != http.StatusTooManyRequests {
 			unexpectedBodies = append(unexpectedBodies, result.body)
 		}
 	}
-	if statuses[http.StatusOK] != 1 || statuses[http.StatusNotFound] != requestCount-1 || len(statuses) != 2 {
-		t.Fatalf("concurrent recent statuses = %v, want one 200 and %d 404 responses; unexpected bodies=%q",
+	if statuses[http.StatusOK] != 1 || statuses[http.StatusTooManyRequests] != requestCount-1 || len(statuses) != 2 {
+		t.Fatalf("concurrent recent statuses = %v, want one 200 and %d 429 responses; unexpected bodies=%q",
 			statuses, requestCount-1, unexpectedBodies)
 	}
 	if got := notifications.Load(); got != 1 {
 		t.Fatalf("concurrent seen notifications = %d, want 1", got)
 	}
+	fixture.assertConsumptionState(t, 1, 1)
+	fixture.advancePickupWindow()
+	assertLegacyMailBoundaryAPIError(t, fixture.recent(t), http.StatusNotFound, "MAIL_NOT_FOUND")
 	fixture.assertConsumptionState(t, 1, 1)
 }
 
@@ -283,6 +290,7 @@ type legacyMailBoundaryFixture struct {
 	alias       domain.Alias
 	rawKey      string
 	directToken string
+	clock       *time.Time
 }
 
 func newLegacyMailBoundaryFixture(
@@ -292,7 +300,8 @@ func newLegacyMailBoundaryFixture(
 	t.Helper()
 	env := newAdminAPITestEnv(t)
 	env.server.sync = nil
-	env.server.now = func() time.Time { return now }
+	clock := now
+	env.server.now = func() time.Time { return clock }
 	env.server.cfg.Timezone = time.UTC
 	env.store.ConfigureAliasCredentialFactory(nil)
 
@@ -356,7 +365,12 @@ func newLegacyMailBoundaryFixture(
 	return legacyMailBoundaryFixture{
 		env: env, router: router, account: account, alias: alias,
 		rawKey: rawKey, directToken: directToken,
+		clock: &clock,
 	}
+}
+
+func (fixture legacyMailBoundaryFixture) advancePickupWindow() {
+	*fixture.clock = fixture.clock.Add(3 * time.Second)
 }
 
 func (fixture legacyMailBoundaryFixture) latest(t *testing.T, key string) *httptest.ResponseRecorder {

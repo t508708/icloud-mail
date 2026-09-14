@@ -19,6 +19,8 @@ import (
 func TestOTPV2ReturnsBareRepeatableHistoryForBearerAndDerivedURL(t *testing.T) {
 	env := newAdminAPITestEnv(t)
 	env.server.sync = nil
+	clock := time.Now().UTC()
+	env.server.now = func() time.Time { return clock }
 	env.server.cfg.Timezone = time.FixedZone("UTC+8", 8*60*60)
 	if err := env.store.ConfigureMailArchive(t.TempDir(), 1<<20); err != nil {
 		t.Fatalf("configure mail archive: %v", err)
@@ -105,6 +107,7 @@ func TestOTPV2ReturnsBareRepeatableHistoryForBearerAndDerivedURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	for attempt := 0; attempt < 2; attempt++ {
+		clock = clock.Add(3 * time.Second)
 		response := serveV2Request(
 			router,
 			http.MethodGet,
@@ -126,6 +129,7 @@ func TestOTPV2ReturnsBareRepeatableHistoryForBearerAndDerivedURL(t *testing.T) {
 	}
 
 	env.server.cfg.OTPReturnLatestOnly = true
+	clock = clock.Add(3 * time.Second)
 	latestOnlyBearer := serveV2Request(router, http.MethodGet, "/api/v1/otp", "", map[string]string{
 		"Authorization": "Bearer " + credentials.APIKey,
 	})
@@ -143,6 +147,7 @@ func TestOTPV2ReturnsBareRepeatableHistoryForBearerAndDerivedURL(t *testing.T) {
 		t.Fatalf("latest-only OTP response is not a bare object: %s", latestOnlyBearer.Body.String())
 	}
 
+	clock = clock.Add(3 * time.Second)
 	latestOnlyDerived := serveV2Request(
 		router,
 		http.MethodGet,

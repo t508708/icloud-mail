@@ -104,7 +104,7 @@ curl 'https://icloud-us.gooelv.com/api/v1/pool/claim' \
 | `POST /api/v1/pool/leases/LEASE_ID/release` | 释放尚未确认使用的邮箱，并轮换邮箱凭据 |
 | `POST /api/v1/pool/leases/LEASE_ID/renew` | JSON `{"ttl_seconds":1800}`，从当前时间续期 |
 
-`code` 可追加 `after=RFC3339`，查询起点取 after 与领取时间中较晚者；`data.success=true` 时读取 `data.otp` 和 `data.time`，否则 `data.code=no_code`、`data.retryable=true`。请求会触发该 alias 的按需读取并等待本次单邮箱 fetch 完成；同 alias 并发合并，完成后 10 秒去重，同主号最短 30 秒 fetch guard 可能增加等待时间。每次最多一批 128 封目标邮件，无后台续跑。首次读取最近 4096 个 UID 数值窗口，后续按该 alias 独立游标继续。建议间隔至少 10 秒轮询。
+`code` 可追加 `after=RFC3339`，查询起点取 after 与领取时间中较晚者；`data.success=true` 时读取 `data.otp` 和 `data.time`，否则 `data.code=no_code`、`data.retryable=true`。请求会触发该 alias 的按需读取；与该邮箱的 OTP、Bearer 和直达链接共用限流，请求处理中及完成后 3 秒内返回 `429 RATE_LIMITED`、`Retry-After: 3`。每主号最多容纳 2 个取件请求，全站最多同时处理 16 个、每秒接纳 100 次，超量不排队。限制按服务进程计数。同主号最短 30 秒 fetch guard 可能增加等待时间。每次最多一批 128 封目标邮件，无后台续跑。首次读取最近 4096 个 UID 数值窗口，后续按该 alias 独立游标继续。客户端应等上次响应结束后至少 3 秒再请求，429 时遵循 `Retry-After`。
 
 ## 状态与凭据
 
