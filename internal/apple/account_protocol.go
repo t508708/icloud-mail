@@ -283,11 +283,19 @@ func (c *Client) RefreshAccountSession(ctx context.Context, s AccountSession) (A
 	if s.SCNT == "" {
 		return s, operationError("account session", ErrInvalidSession, 0, nil)
 	}
-	refresh := func() error {
-		r, err := c.accountManagementCall(ctx, &s, http.MethodGet, "/account/manage/gs/ws/token", nil)
+	refresh := func(withoutSCNT bool) error {
+		tokenSession := s
+		if withoutSCNT {
+			tokenSession.SCNT = ""
+		}
+		r, err := c.accountManagementCall(ctx, &tokenSession, http.MethodGet, "/account/manage/gs/ws/token", nil)
 		if err != nil {
 			return err
 		}
+		if tokenSession.SCNT == "" {
+			return operationError("account management token", ErrInvalidSession, r.status, nil)
+		}
+		s = tokenSession
 		setAccountTTL(&s, r.body)
 		r, err = c.accountManagementCall(ctx, &s, http.MethodGet, "/account/manage", nil)
 		if err != nil {
@@ -315,10 +323,16 @@ func (c *Client) RefreshAccountSession(ctx context.Context, s AccountSession) (A
 		s.RefreshRejected = false
 		return nil
 	}
-	err := refresh()
+	err := refresh(false)
 	if err != nil && errors.Is(err, ErrInvalidSession) {
-		if warmErr := c.warmAccountPortal(ctx, &s); warmErr == nil {
-			err = refresh()
+		if warmErr := c.warmAccountPortal(ctx, &s); warmErr != nil {
+			return s, warmErr
+		}
+		// The reference recovery bootstraps a token from existing cookies
+		// without a stale SCNT, then falls back to the accepted checkpoint.
+		err = refresh(true)
+		if errors.Is(err, ErrInvalidSession) {
+			err = refresh(false)
 		}
 	}
 	return s, err
@@ -494,6 +508,14 @@ func (c *Client) CreateAccountAlias(ctx context.Context, s AccountSession, label
 		}
 	}
 	r, err := c.accountManagementCall(ctx, &s, http.MethodPost, "/account/manage/email/private/add", map[string]any{})
+	if r.status == http.StatusUnauthorized && errors.Is(err, ErrInvalidSession) {
+		// Only an explicit 401 before a candidate exists permits one retry.
+		// Never replay a timeout, an ambiguous result, or completion.
+		s, err = c.RefreshAccountSession(ctx, s)
+		if err == nil {
+			r, err = c.accountManagementCall(ctx, &s, http.MethodPost, "/account/manage/email/private/add", map[string]any{})
+		}
+	}
 	if err != nil {
 		return Alias{}, s, err
 	}
