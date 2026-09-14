@@ -1,6 +1,6 @@
 # iCloud 隐私邮箱归档 API v2
 
-本地开发版新增 Web 邮箱池：项目 Key、批量自动取号、幂等领取、确认/释放/续期、凭据联动轮换和按库存定时创建。使用说明见 [邮箱池与本机部署](docs/POOL.md)。本机 HTTP 端口为 `8788`，其余上游说明中的 `8080` 按需替换。
+包含 Web 控制面板、项目 Key、批量自动取号、幂等领取、确认/释放/续期、凭据联动轮换和定时创建。首次安装和交付包使用请先阅读 [交付与安装](DELIVERY.md)，邮箱池说明见 [邮箱池](docs/POOL.md)。复制 `.env.example` 后 HTTP 端口为 `8788`；下方未使用环境文件的原始 Compose 示例默认端口为 `8080`。
 
 本服务把 iCloud 隐私邮箱的新邮件归档到本地，并且只向外提供两种取件能力：
 
@@ -51,7 +51,7 @@ docker compose exec -T icloud-api cat /app/keys/oauth-token
 docker compose exec -T icloud-api cat /app/keys/public-imap-cert.pem
 ```
 
-`admin-path` 支持 `/admin/` 或 `/<32位小写十六进制>/admin/`。本部署使用短路径 `https://icloud-us.gooelv.com/admin/`，新安装可通过 `ICLOUD_API_ADMIN_PATH=/admin` 指定；未设置时生成随机路径。现有安装切换路径需先备份并停止应用，同时更新环境设置和 keys 卷中的 `admin-path` 文件，保留文件权限与属主，再启动。管理界面、静态资源和前端路由跟随配置路径，管理 API 的入口是去掉该值结尾 `/` 后再拼接 `/api/v1`。OpenAPI 的 `{admin_path}` 变量使用去掉首尾 `/` 的值。随机路径模式仍保留 `/admin/api/v1` 兼容 API；短路径模式使用同一个管理入口。两种模式均执行登录限流、会话认证和 CSRF 校验，Cookie 受管理路径限制。管理响应默认使用 `Cache-Control: no-store, private`，返回明文凭证的处理器会覆盖为 `no-store`。
+`admin-path` 支持 `/admin/` 或 `/<32位小写十六进制>/admin/`。新安装可通过 `ICLOUD_API_ADMIN_PATH=/admin` 指定短路径；未设置时生成随机路径。现有安装切换路径需先备份并停止应用，同时更新环境设置和 keys 卷中的 `admin-path` 文件，保留文件权限与属主，再启动。管理界面、静态资源和前端路由跟随配置路径，管理 API 的入口是去掉该值结尾 `/` 后再拼接 `/api/v1`。OpenAPI 的 `{admin_path}` 变量使用去掉首尾 `/` 的值。随机路径模式仍保留 `/admin/api/v1` 兼容 API；短路径模式使用同一个管理入口。两种模式均执行登录限流、会话认证和 CSRF 校验，Cookie 受管理路径限制。管理响应默认使用 `Cache-Control: no-store, private`，返回明文凭证的处理器会覆盖为 `no-store`。
 
 使用 `admin` 和首次生成的密码登录随机管理路径，添加 iCloud 主号后同步或手动登记隐私邮箱。管理端支持创建邮箱分组，并在“全部隐私邮箱”或主号详情中把单个、勾选的隐私邮箱移动到所选分组；删除分组不会删除邮箱，只会将其恢复为未分组。对已完成 Apple 登录且主号没有同步错误的 iCloud 隐私邮箱，可以在“全部隐私邮箱”中勾选后执行“从 Apple 删除”：服务会先调用 Apple 的停用/永久删除流程，只有 Apple 确认删除成功后才清理本地记录；明确失败的项目会保留对应本地记录并返回逐项错误。批量操作支持后台任务及状态轮询；任务中断后尚无结果的项目，其远端结果待核查，不承诺本地记录仍在，详见下方“批量 Apple 删除后台任务”。自定义邮箱不走此 Apple 删除流程。公开接口说明位于 <http://127.0.0.1:8080/docs/>，机器可读契约见 [`docs/openapi.yaml`](docs/openapi.yaml)。
 
@@ -285,7 +285,7 @@ location / {
 
 ## 归档与留存
 
-- 默认 `ICLOUD_API_MAIL_ON_DEMAND_ONLY=true`，不启动周期/启动时 IMAP 同步或 IDLE。真实已鉴权的 OTP Bearer、`?token=` 直链、legacy latest/recent、pool lease code 取件请求（包括浏览器直接访问/刷新）触发单 alias 读取；同 alias 并发合并，完成后 10 秒去重，同主号最短 30 秒 fetch guard 保留。
+- 默认 `ICLOUD_API_MAIL_ON_DEMAND_ONLY=true`，不启动周期/启动时 IMAP 同步或 IDLE。真实已鉴权的 OTP Bearer、`?token=` 直链、legacy latest/recent、pool lease code 取件请求（包括浏览器直接访问/刷新）触发单 alias 读取；同邮箱请求处理中及完成后 3 秒内返回 429，附 `Retry-After: 3`。每主号最多容纳 2 个取件请求，全站最多同时处理 16 个，每秒准入 100 次。同主号最短 30 秒 fetch guard 保留。
 - 单次最多处理一批 128 封目标邮件，无后台续跑；新 alias 首次访问只读取最近 4096 个 UID 数值窗口，之后按每 alias 独立游标继续，不会无限回扫。SEARCH recipient headers 后精确复核归属，只获取目标内容。public IMAPS 仅读本地归档；管理员显式手动同步仍可执行主号级增量同步。详见 [收信与资源设计](docs/MAIL-RECEPTION.md)。
 - 升级完成后只处理同步游标之后的新 UID；已读和未读邮件都会归档。
 - 增量取件单批最多处理 128 个目标 UID；每批原子保存邮件和游标，不后台续跑。
