@@ -22,7 +22,7 @@ exec 9>.local/project-heavy.lock
 flock 9
 available_kib=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
 load_one=$(awk '{print $1}' /proc/loadavg)
-if (( available_kib < 2097152 )) || ! awk -v load="$load_one" 'BEGIN {exit !(load <= 8)}'; then
+if (( available_kib < 2097152 )) || ! awk -v task_load="$load_one" 'BEGIN {exit !(task_load <= 8)}'; then
     printf '%s\n' 'Resource guard: retry when MemAvailable >= 2 GiB and load1 <= 8.' >&2
     exit 1
 fi
