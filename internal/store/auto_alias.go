@@ -168,10 +168,6 @@ func (s *Store) createAutoAliasCandidate(
 		}
 	}
 	if alias.Enabled {
-		if _, err := s.txExecContext(ctx, tx,
-			`DELETE FROM imap_sync_states WHERE account_id = ?`, alias.AccountID); err != nil {
-			return domain.Alias{}, domain.AppleWebSession{}, fmt.Errorf("reset IMAP cursor after automatic alias creation: %w", err)
-		}
 		if _, err := s.bumpAccountVersionTx(ctx, tx, alias.AccountID, accountVersion); err != nil {
 			return domain.Alias{}, domain.AppleWebSession{}, fmt.Errorf("advance account version after automatic alias creation: %w", err)
 		}
@@ -185,6 +181,11 @@ func (s *Store) createAutoAliasCandidate(
 	))
 	if err != nil {
 		return domain.Alias{}, domain.AppleWebSession{}, fmt.Errorf("read automatic alias after insert: %w", err)
+	}
+	if createdAlias.Enabled {
+		if err := s.recordAliasCreationEventTx(ctx, tx, createdAlias); err != nil {
+			return domain.Alias{}, domain.AppleWebSession{}, err
+		}
 	}
 	savedSession, err := scanAppleWebSession(s.txQueryRowContext(ctx, tx,
 		`SELECT `+appleWebSessionColumns+` FROM apple_web_sessions WHERE account_id = ?`, alias.AccountID,
@@ -290,10 +291,6 @@ func (s *Store) ConfirmPendingAutoAlias(
 	if err := requireAffected(result, "pending automatic alias"); err != nil {
 		return domain.Alias{}, domain.AppleWebSession{}, err
 	}
-	if _, err := s.txExecContext(ctx, tx,
-		`DELETE FROM imap_sync_states WHERE account_id = ?`, session.AccountID); err != nil {
-		return domain.Alias{}, domain.AppleWebSession{}, fmt.Errorf("reset IMAP cursor after automatic alias confirmation: %w", err)
-	}
 	if _, err := s.bumpAccountVersionTx(ctx, tx, session.AccountID, accountVersion); err != nil {
 		return domain.Alias{}, domain.AppleWebSession{}, fmt.Errorf("advance account version after automatic alias confirmation: %w", err)
 	}
@@ -303,6 +300,9 @@ func (s *Store) ConfirmPendingAutoAlias(
 	))
 	if err != nil {
 		return domain.Alias{}, domain.AppleWebSession{}, fmt.Errorf("read confirmed automatic alias: %w", err)
+	}
+	if err := s.recordAliasCreationEventTx(ctx, tx, confirmedAlias); err != nil {
+		return domain.Alias{}, domain.AppleWebSession{}, err
 	}
 	savedSession, err := scanAppleWebSession(s.txQueryRowContext(ctx, tx,
 		`SELECT `+appleWebSessionColumns+` FROM apple_web_sessions WHERE account_id = ?`, session.AccountID,

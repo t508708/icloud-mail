@@ -23,14 +23,30 @@ type seenDeleteCall struct {
 type seenWorkerRepo struct {
 	mu sync.Mutex
 
-	accounts     map[int64]domain.Account
-	tasks        []domain.SeenTask
-	listErr      error
-	getErr       error
-	deleteErr    error
-	listCalls    int
-	deletes      []seenDeleteCall
-	deleteNotify chan seenDeleteCall
+	accounts      map[int64]domain.Account
+	tasks         []domain.SeenTask
+	listErr       error
+	getErr        error
+	deleteErr     error
+	listCalls     int
+	deletes       []seenDeleteCall
+	failureWrites int
+	deleteNotify  chan seenDeleteCall
+}
+
+func (r *seenWorkerRepo) RecordMailboxSyncFailure(_ context.Context, id int64, version time.Time, message string, _ time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for index := range r.accounts {
+		account := r.accounts[index]
+		if account.ID == id && account.UpdatedAt.Equal(version) {
+			r.failureWrites++
+			account.LastSyncError = message
+			r.accounts[index] = account
+			return nil
+		}
+	}
+	return nil
 }
 
 func (r *seenWorkerRepo) GetAccount(_ context.Context, id int64) (domain.Account, error) {
@@ -240,6 +256,55 @@ func TestSeenWorkerGroupsTasksAndDeletesSuccessfulBatches(t *testing.T) {
 	sort.Slice(deletes, func(i, j int) bool { return deletes[i].accountID < deletes[j].accountID })
 	if !reflect.DeepEqual(deletes, wantDeletes) {
 		t.Fatalf("delete calls = %#v, want %#v", deletes, wantDeletes)
+	}
+}
+
+func TestSeenWorkerRetainsTasksForAuthenticationPausedAccount(t *testing.T) {
+	repo := &seenWorkerRepo{
+		accounts: map[int64]domain.Account{1: {ID: 1, Enabled: true, PasswordCiphertext: "one", LastSyncError: "AUTHENTICATIONFAILED"}},
+		tasks:    []domain.SeenTask{{AccountID: 1, UIDValidity: 10, UID: 4}},
+	}
+	marker := &seenMarkerStub{}
+	worker := newSeenWorkerForTest(repo, marker, &seenLockerStub{})
+	_, err := worker.processPending(context.Background())
+	if !errors.Is(err, domain.ErrIMAPAuthenticationPaused) {
+		t.Fatalf("error = %v", err)
+	}
+	tasks, deletes, _ := repo.snapshot()
+	if len(marker.snapshot()) != 0 || len(deletes) != 0 || len(tasks) != 1 {
+		t.Fatalf("paused account work changed: marker=%v deletes=%v tasks=%v", marker.snapshot(), deletes, tasks)
+	}
+}
+
+func TestSeenWorkerPersistsFirstAuthenticationFailureAndPausesRemainingTasks(t *testing.T) {
+	version := time.Now().UTC()
+	repo := &seenWorkerRepo{
+		accounts: map[int64]domain.Account{1: {ID: 1, Enabled: true, PasswordCiphertext: "one", UpdatedAt: version}},
+		tasks:    []domain.SeenTask{{AccountID: 1, UIDValidity: 10, UID: 4}},
+	}
+	marker := &seenMarkerStub{fn: func(context.Context, seenMarkerCall) error { return errors.New("IMAP AUTHENTICATIONFAILED") }}
+	worker := newSeenWorkerForTest(repo, marker, &seenLockerStub{})
+	if _, err := worker.processPending(context.Background()); err == nil {
+		t.Fatal("authentication failure was not returned")
+	}
+	repo.mu.Lock()
+	account := repo.accounts[1]
+	writes := repo.failureWrites
+	repo.mu.Unlock()
+	if writes != 1 || !domain.IsIMAPAuthenticationFailure(account.LastSyncError) {
+		t.Fatalf("failure persisted %d times with error %q", writes, account.LastSyncError)
+	}
+	worker.retryAfter[1] = time.Time{}
+	if _, err := worker.processPending(context.Background()); err == nil {
+		t.Fatal("paused account did not remain deferred")
+	}
+	calls := marker.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("marker calls = %d, want one before authentication pause", len(calls))
+	}
+	tasks, _, _ := repo.snapshot()
+	if len(tasks) != 1 {
+		t.Fatalf("seen task was removed after auth failure: %#v", tasks)
 	}
 }
 

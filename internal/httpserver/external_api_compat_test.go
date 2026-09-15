@@ -89,6 +89,7 @@ func TestExternalAliasResponseCredentialsMatchCommittedV2Bundle(t *testing.T) {
 	if legacy.Code != http.StatusOK || !strings.Contains(legacy.Body.String(), "legacy-compatible body") {
 		t.Fatalf("returned direct link status = %d; body=%s", legacy.Code, legacy.Body.String())
 	}
+	now = now.Add(3 * time.Second)
 	latest := serveV2Request(router, http.MethodGet, "/api/v1/mail/latest", "", map[string]string{
 		"Authorization": "Bearer " + payload.Data.APIKey,
 	})

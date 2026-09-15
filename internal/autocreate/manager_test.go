@@ -20,6 +20,12 @@ import (
 
 var errCreate = errors.New("upstream alias creation failed for secret@example.com")
 
+type testBudgetWaitError struct{ delay time.Duration }
+
+func (e testBudgetWaitError) Error() string             { return "local creation budget wait" }
+func (e testBudgetWaitError) DiagnosticCode() string    { return "APPLE_CREATION_BUDGET_WAIT" }
+func (e testBudgetWaitError) RetryDelay() time.Duration { return e.delay }
+
 type untrackedRemoteSideEffectTestError struct {
 	cause error
 }
@@ -448,10 +454,9 @@ func TestClaimLatencyCannotShortenActualAttemptGap(t *testing.T) {
 	now := time.Date(2026, 8, 8, 9, 0, 0, 0, time.UTC)
 	clock := newTestClock(now)
 	repo := newFakeRepository()
-	// The hook models a slow database CAS. The first generated plan uses a
-	// 40-minute first gap followed by five-minute gaps, so the next slot would
-	// otherwise be too close after a one-minute claim delay.
-	repo.claimHook = func() { clock.Advance(time.Minute) }
+	// The hook models a slow database CAS. Later gaps are at MinimumInterval,
+	// so a one-minute claim delay would otherwise shorten the next interval.
+	repo.claimHook = func() { clock.Advance(10 * time.Minute) }
 	creatorCalls := 0
 	manager := newManagerForTest(t, repo, clock, func(context.Context, int64) (domain.Alias, error) {
 		creatorCalls++
@@ -626,6 +631,50 @@ func TestRateLimitedFailureSkipsRemainingCycleAndStartsAfterCooldown(t *testing.
 	}
 }
 
+func TestLocalCreationBudgetWaitUsesItsRetryDelay(t *testing.T) {
+	clock := newTestClock(time.Date(2026, 8, 8, 9, 0, 0, 0, time.UTC))
+	repo := newFakeRepository()
+	delay := 17 * time.Minute
+	manager := newManagerForTest(t, repo, clock, func(context.Context, int64) (domain.Alias, error) {
+		return domain.Alias{}, testBudgetWaitError{delay: delay}
+	})
+	schedule := enableForTest(t, manager, 63)
+	clock.Set(*schedule.NextRunAt)
+	attempted := *schedule.NextRunAt
+	manager.runDue(context.Background())
+	current, err := manager.GetSchedule(context.Background(), 63)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.NextRunAt == nil || !current.NextRunAt.Equal(attempted.Add(delay)) || current.LastError != aliasCreationErrorReason("APPLE_CREATION_BUDGET_WAIT") {
+		t.Fatalf("budget wait schedule = %#v, want next=%v and visible budget status", current, attempted.Add(delay))
+	}
+}
+
+func TestAccountSessionErrorsDisableAutomaticSchedule(t *testing.T) {
+	for _, code := range []string{"APPLE_LOGIN_REQUIRED", "APPLE_SESSION_EXPIRED", "APPLE_ACCOUNT_LOGIN_REQUIRED", "APPLE_ACCOUNT_SESSION_EXPIRED", "APPLE_CREDENTIALS_INVALID", "APPLE_VERIFICATION_INVALID", "APPLE_FLOW_EXPIRED", "APPLE_ACCOUNT_ACTION_REQUIRED", "APPLE_HME_AUTH_FAILED", "APPLE_ACCOUNT_MISMATCH", "ACCOUNT_CHANGED", "IMAP_AUTHENTICATION_PAUSED"} {
+		t.Run(code, func(t *testing.T) {
+			clock := newTestClock(time.Date(2026, 8, 8, 9, 0, 0, 0, time.UTC))
+			repo := newFakeRepository()
+			calls := 0
+			manager := newManagerForTest(t, repo, clock, func(context.Context, int64) (domain.Alias, error) {
+				calls++
+				return domain.Alias{}, testDiagnosticError{code: code, detail: "requires account repair"}
+			})
+			schedule := enableForTest(t, manager, 61)
+			clock.Set(*schedule.NextRunAt)
+			manager.runDue(context.Background())
+			current, err := manager.GetSchedule(context.Background(), 61)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 || current.Enabled || current.NextRunAt != nil || current.LastError != failureMessage(testDiagnosticError{code: code, detail: "requires account repair"}) {
+				t.Fatalf("schedule was not disabled with visible error: calls=%d schedule=%#v", calls, current)
+			}
+		})
+	}
+}
+
 func TestRateLimitedAppleCauseBehindPersistenceErrorStillStartsCooldown(t *testing.T) {
 	clock := newTestClock(time.Date(2026, 8, 8, 9, 0, 0, 0, time.UTC))
 	repo := newFakeRepository()
@@ -715,7 +764,8 @@ func TestActualAttemptGapIsEnforcedWhenClockPollsEarly(t *testing.T) {
 	repo := newFakeRepository()
 	manager := newManagerForTest(t, repo, clock, nil)
 	enableForTest(t, manager, 7)
-	lastAttempt := now.Add(-time.Minute)
+	// Poll one second before the per-account minimum interval elapses.
+	lastAttempt := now.Add(-MinimumInterval + time.Second)
 	current := repo.schedules[7]
 	current.LastAttemptedAt = timePtr(lastAttempt)
 	current.NextRunAt = timePtr(now)

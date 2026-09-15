@@ -282,7 +282,10 @@ func TestExplicitRateLimitRejectionLogsNoRemoteSideEffectAndCooldown(t *testing.
 	clock.Set(attemptedAt)
 	manager.runDue(context.Background())
 
-	failed := requireAutoCreateEvent(t, logs, "run_failed")
+	failed := requireAutoCreateEvent(t, logs, "run_rate_limited")
+	if failed.Level != slog.LevelInfo || failed.Fields["auto_create_stage"] != "cooldown" {
+		t.Fatal("normal rate limit should be an informational cooldown")
+	}
 	wantNext := attemptedAt.Add(appleRateLimitCooldown)
 	if failed.Fields["error_code"] != "APPLE_RATE_LIMITED" ||
 		failed.Fields["http_status"] != "200" || failed.Fields["retryable"] != "false" ||
@@ -297,6 +300,12 @@ func TestExplicitRateLimitRejectionLogsNoRemoteSideEffectAndCooldown(t *testing.
 		t.Fatalf("rate-limit cooldown schedule = %#v err=%v", current, err)
 	}
 	assertFlowLogsDoNotContain(t, logs, upstream.ServiceCode)
+}
+
+func TestLocalBudgetWaitStatusIsRecognizedAsCooldown(t *testing.T) {
+	if !IsRateLimitStatus("APPLE_CREATION_BUDGET_WAIT") || !IsRateLimitStatus(aliasCreationErrorReason("APPLE_CREATION_BUDGET_WAIT")) {
+		t.Fatal("local budget wait should be recognized by persisted status and user-facing reason")
+	}
 }
 
 func TestJoinedGenericAppleDiagnosticRefinesToExplicitRateLimit(t *testing.T) {
@@ -423,6 +432,17 @@ func TestAliasCreationMissingForwardingTargetIsSpecificAndSafe(t *testing.T) {
 		t.Fatalf("schedule after forwarding failure = %#v err=%v", current, err)
 	}
 	assertFlowLogsDoNotContain(t, logs, "sensitive forwarding fixture")
+}
+
+func TestAliasCreationPendingConfirmationReasonDoesNotClaimCreation(t *testing.T) {
+	reason := aliasCreationErrorReason("APPLE_ALIAS_CONFIRMATION_PENDING")
+	want := "Apple 创建结果尚未完成目录确认；后续计划会继续确认，确认前不会重复创建"
+	if reason != want {
+		t.Fatalf("pending confirmation reason = %q, want %q", reason, want)
+	}
+	if strings.Contains(reason, "地址已创建") || strings.Contains(reason, "已创建隐私邮箱") {
+		t.Fatalf("pending confirmation reason claims confirmed creation: %q", reason)
+	}
 }
 
 func TestAliasCreationForwardingInitializationReportsRemoteMutation(t *testing.T) {

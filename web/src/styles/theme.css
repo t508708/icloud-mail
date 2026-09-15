@@ -1,0 +1,143 @@
+/* Local theme tokens shared by the workspace and Element Plus. */
+:root {
+  color-scheme: light;
+  --app-bg: #edf1f7;
+  --surface: #ffffff;
+  --surface-subtle: #f3f5f8;
+  --border: #e0e5ed;
+  --border-strong: #bdc6d3;
+  --text: #202631;
+  --text-secondary: #586577;
+  --text-muted: #657285;
+  --primary: #006bdf;
+  --on-primary: #ffffff;
+  --primary-dark: #005abb;
+  --primary-soft: #e5f0ff;
+  --success: #21753c;
+  --success-soft: #e7f5eb;
+  --warning: #8a590a;
+  --warning-soft: #fff3d8;
+  --danger: #be343a;
+  --danger-soft: #fff0f0;
+  --danger-border: #efc8cb;
+  --purple: #7850bb;
+  --purple-soft: #eee7fa;
+  --focus-ring: #007aff70;
+  --sidebar: var(--surface-subtle);
+  --sidebar-hover: #ffffff8c;
+  --glass-bg: #ffffffa8;
+  --glass-border: #ffffffdc;
+  --active-glass: #ffffffd9;
+  --loading-mask: #ffffffb8;
+  --table-header: #f6f8fb;
+  --row-hover: #eef5ff;
+  --ambient: radial-gradient(ellipse at 6% 0%, #c8ddf28c, transparent 48%), radial-gradient(ellipse at 92% 75%, #d1d9f16b, transparent 50%);
+  --glass-shadow: inset 0 1px 0 #ffffffb3, 0 8px 32px #2b3c5710, 0 1px 3px #2b3c5708;
+  --control-shadow: inset 0 1px 0 #ffffffa6, 0 2px 5px #26384f12;
+  --panel-shadow: 0 2px 10px #2b3c5705;
+}
+
+html.dark {
+  color-scheme: dark;
+  --app-bg: #11151d;
+  --surface: #1d232e;
+  --surface-subtle: #272f3c;
+  --border: #333d4c;
+  --border-strong: #536075;
+  --text: #eef2f9;
+  --text-secondary: #b4bfd0;
+  --text-muted: #9aa8bd;
+  --primary: #72b4ff;
+  --on-primary: #102137;
+  --primary-dark: #9bcbff;
+  --primary-soft: #253e5c;
+  --success: #7cdb99;
+  --success-soft: #243e31;
+  --warning: #f3c16c;
+  --warning-soft: #443a25;
+  --danger: #ff979d;
+  --danger-soft: #472b33;
+  --danger-border: #70414a;
+  --purple: #c1a3f6;
+  --purple-soft: #382e4e;
+  --focus-ring: #72b4ff8c;
+  --sidebar-hover: #ffffff0e;
+  --glass-bg: #222c3bc7;
+  --glass-border: #ffffff1c;
+  --active-glass: #53678245;
+  --loading-mask: #1d232ecc;
+  --table-header: #242c39;
+  --row-hover: #28384d;
+  --ambient: radial-gradient(ellipse at 6% 0%, #27426273, transparent 48%), radial-gradient(ellipse at 92% 75%, #3e365445, transparent 50%);
+  --glass-shadow: inset 0 1px 0 #ffffff0f, 0 12px 36px #00000026, 0 1px 3px #0000001a;
+  --control-shadow: inset 0 1px 0 #ffffff0f, 0 2px 6px #00000024;
+  --panel-shadow: 0 2px 10px #0000000d;
+}
+
+:root, html.dark {
+  --el-color-primary: var(--primary);
+  --el-color-primary-light-3: color-mix(in srgb, var(--el-color-primary) 70%, var(--surface));
+  --el-color-primary-light-5: color-mix(in srgb, var(--el-color-primary) 50%, var(--surface));
+  --el-color-primary-light-7: color-mix(in srgb, var(--el-color-primary) 30%, var(--surface));
+  --el-color-primary-light-8: color-mix(in srgb, var(--el-color-primary) 20%, var(--surface));
+  --el-color-primary-light-9: color-mix(in srgb, var(--el-color-primary) 10%, var(--surface));
+  --el-color-primary-dark-2: color-mix(in srgb, var(--el-color-primary) 80%, var(--text));
+  --el-color-success: var(--success);
+  --el-color-success-light-3: color-mix(in srgb, var(--el-color-success) 70%, var(--surface));
+  --el-color-success-light-5: color-mix(in srgb, var(--el-color-success) 50%, var(--surface));
+  --el-color-success-light-7: color-mix(in srgb, var(--el-color-success) 30%, var(--surface));
+  --el-color-success-light-8: color-mix(in srgb, var(--el-color-success) 20%, var(--surface));
+  --el-color-success-light-9: color-mix(in srgb, var(--el-color-success) 10%, var(--surface));
+  --el-color-success-dark-2: color-mix(in srgb, var(--el-color-success) 80%, var(--text));
+  --el-color-warning: var(--warning);
+  --el-color-warning-light-3: color-mix(in srgb, var(--el-color-warning) 70%, var(--surface));
+  --el-color-warning-light-5: color-mix(in srgb, var(--el-color-warning) 50%, var(--surface));
+  --el-color-warning-light-7: color-mix(in srgb, var(--el-color-warning) 30%, var(--surface));
+  --el-color-warning-light-8: color-mix(in srgb, var(--el-color-warning) 20%, var(--surface));
+  --el-color-warning-light-9: color-mix(in srgb, var(--el-color-warning) 10%, var(--surface));
+  --el-color-warning-dark-2: color-mix(in srgb, var(--el-color-warning) 80%, var(--text));
+  --el-color-danger: var(--danger);
+  --el-color-danger-light-3: color-mix(in srgb, var(--el-color-danger) 70%, var(--surface));
+  --el-color-danger-light-5: color-mix(in srgb, var(--el-color-danger) 50%, var(--surface));
+  --el-color-danger-light-7: color-mix(in srgb, var(--el-color-danger) 30%, var(--surface));
+  --el-color-danger-light-8: color-mix(in srgb, var(--el-color-danger) 20%, var(--surface));
+  --el-color-danger-light-9: color-mix(in srgb, var(--el-color-danger) 10%, var(--surface));
+  --el-color-danger-dark-2: color-mix(in srgb, var(--el-color-danger) 80%, var(--text));
+  --el-color-info: var(--text-secondary);
+  --el-color-info-light-3: color-mix(in srgb, var(--el-color-info) 70%, var(--surface));
+  --el-color-info-light-5: color-mix(in srgb, var(--el-color-info) 50%, var(--surface));
+  --el-color-info-light-7: color-mix(in srgb, var(--el-color-info) 30%, var(--surface));
+  --el-color-info-light-8: color-mix(in srgb, var(--el-color-info) 20%, var(--surface));
+  --el-color-info-light-9: color-mix(in srgb, var(--el-color-info) 10%, var(--surface));
+  --el-color-info-dark-2: color-mix(in srgb, var(--el-color-info) 80%, var(--text));
+  --el-bg-color: var(--surface);
+  --el-bg-color-page: var(--app-bg);
+  --el-bg-color-overlay: var(--surface);
+  --el-text-color-primary: var(--text);
+  --el-text-color-regular: var(--text-secondary);
+  --el-text-color-secondary: var(--text-muted);
+  --el-text-color-placeholder: var(--text-muted);
+  --el-text-color-disabled: color-mix(in srgb, var(--text-muted) 65%, var(--surface));
+  --el-border-color: var(--border-strong);
+  --el-border-color-light: var(--border);
+  --el-border-color-lighter: var(--border);
+  --el-border-color-extra-light: var(--border);
+  --el-fill-color: var(--surface-subtle);
+  --el-fill-color-light: var(--surface-subtle);
+  --el-fill-color-lighter: var(--surface-subtle);
+  --el-fill-color-extra-light: var(--surface-subtle);
+  --el-fill-color-blank: var(--surface);
+  --el-fill-color-dark: var(--border);
+  --el-fill-color-darker: var(--border-strong);
+  --el-mask-color: var(--loading-mask);
+  --el-box-shadow-light: var(--glass-shadow);
+}
+
+/* Respect transparency preferences and keep unsupported browsers legible. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root, html.dark { --glass-bg: var(--surface); --active-glass: var(--surface-subtle); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root, html.dark { --glass-bg: var(--surface); --active-glass: var(--surface-subtle); }
+  * { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+}

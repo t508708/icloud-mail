@@ -1,4 +1,6 @@
-export const LIVE_REFRESH_INTERVAL_MS = 5_000;
+export const LIVE_REFRESH_INTERVAL_MS = 30_000;
+export const LIVE_REFRESH_ACTIVE_INTERVAL_MS = 5_000;
+export const LIVE_REFRESH_MAX_INTERVAL_MS = 120_000;
 
 function globalTarget(name) {
   return typeof globalThis[name] === "undefined" ? null : globalThis[name];
@@ -22,14 +24,19 @@ export function createLiveRefresh(refresh, options = {}) {
     options.windowTarget === undefined
       ? globalTarget("window")
       : options.windowTarget;
+  const navigatorTarget = options.navigatorTarget === undefined
+    ? globalTarget("navigator")
+    : options.navigatorTarget;
   const setTimeoutFn = options.setTimeoutFn || globalThis.setTimeout;
   const clearTimeoutFn = options.clearTimeoutFn || globalThis.clearTimeout;
   const onError =
     typeof options.onError === "function" ? options.onError : () => {};
+  const getIntervalMs = typeof options.getIntervalMs === "function" ? options.getIntervalMs : null;
 
   let active = false;
   let timer = null;
   let inFlight = null;
+  let failures = 0;
 
   function isHidden() {
     return Boolean(documentTarget?.hidden);
@@ -43,11 +50,27 @@ export function createLiveRefresh(refresh, options = {}) {
 
   function schedule() {
     clearScheduled();
-    if (!active || isHidden() || inFlight) return;
+    if (!active || isHidden() || navigatorTarget?.onLine === false || inFlight) return;
+    let intervalMs = intervalMsDefault();
+    if (failures && intervalMs <= LIVE_REFRESH_MAX_INTERVAL_MS) {
+      intervalMs = Math.min(LIVE_REFRESH_MAX_INTERVAL_MS, intervalMs * 2 ** failures);
+    }
     timer = setTimeoutFn(() => {
       timer = null;
       void runRefresh();
     }, intervalMs);
+  }
+
+  function intervalMsDefault() {
+    let value = intervalMs;
+    if (getIntervalMs) {
+      try {
+        const raw = getIntervalMs();
+        const candidate = Number(raw);
+        if (typeof raw === "number" && Number.isFinite(candidate) && candidate > 0) value = candidate;
+      } catch { /* use default */ }
+    }
+    return value;
   }
 
   function reportError(error) {
@@ -60,14 +83,22 @@ export function createLiveRefresh(refresh, options = {}) {
 
   function runRefresh() {
     clearScheduled();
-    if (!active || isHidden()) return Promise.resolve(false);
+    if (!active || isHidden() || navigatorTarget?.onLine === false) return Promise.resolve(false);
     if (inFlight) return inFlight;
 
     const request = Promise.resolve()
       .then(refresh)
       .then(
-        () => true,
+        (result) => {
+          if (result === false) {
+            failures += 1;
+            return false;
+          }
+          failures = 0;
+          return true;
+        },
         (error) => {
+          failures += 1;
           reportError(error);
           return false;
         },
@@ -96,12 +127,17 @@ export function createLiveRefresh(refresh, options = {}) {
     }
   }
 
+  function handleOnline() { if (active) void runRefresh(); }
+  function handleOffline() { clearScheduled(); }
+
   function addListeners() {
     documentTarget?.addEventListener?.(
       "visibilitychange",
       handleVisibilityChange,
     );
     windowTarget?.addEventListener?.("focus", handleFocus);
+    windowTarget?.addEventListener?.("online", handleOnline);
+    windowTarget?.addEventListener?.("offline", handleOffline);
   }
 
   function removeListeners() {
@@ -110,6 +146,8 @@ export function createLiveRefresh(refresh, options = {}) {
       handleVisibilityChange,
     );
     windowTarget?.removeEventListener?.("focus", handleFocus);
+    windowTarget?.removeEventListener?.("online", handleOnline);
+    windowTarget?.removeEventListener?.("offline", handleOffline);
   }
 
   return {

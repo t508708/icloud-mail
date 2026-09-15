@@ -1,8 +1,14 @@
-# iCloud 隐私邮箱归档 API v2
+# iCloud Mail
+
+自托管的 iCloud 隐私邮箱管理、邮箱池与按需取码服务，提供本地化 Web 控制面板、浅色/深色主题和 Docker 部署。
+
+项目地址：<https://github.com/t508708/icloud-mail>。本项目基于 [mangobubu/icloud-api](https://github.com/mangobubu/icloud-api)；来源与当前许可状态见 [NOTICE.md](NOTICE.md)。
+
+包含 Web 控制面板、项目 Key、批量自动取号、幂等领取、确认/释放/续期、凭据联动轮换和定时创建。首次安装和交付包使用请先阅读 [交付与安装](DELIVERY.md)，邮箱池说明见 [邮箱池](docs/POOL.md)。复制 `.env.example` 后 HTTP 端口为 `8788`；下方未使用环境文件的原始 Compose 示例默认端口为 `8080`。
 
 本服务把 iCloud 隐私邮箱的新邮件归档到本地，并且只向外提供两种取件能力：
 
-1. `GET /api/v1/otp`：按邮箱返回持续累积的验证码历史。
+1. `GET /api/v1/otp`：按邮箱取码；使用示例配置时返回最新一条，未收到时返回 `[]`，也可配置返回验证码历史。
 2. 标准只读 IMAPS：按邮箱读取完整 MIME；正文已淘汰或不可用时返回保留原标题的占位邮件。
 
 `POST /oauth2/v2.0/token` 只为 IMAPS 的 XOAUTH2 登录签发一小时访问令牌，不构成第三种取件方式。服务签发的 API Key、IMAP 密码、client ID、refresh token 和 access token 都是本服务凭据，不是 Microsoft 凭据。
@@ -15,10 +21,12 @@
 - 管理多个 iCloud 主号及其隐私邮箱，继续支持目录同步和自动创建。
 - 升级后归档同步游标之后的全部新 UID，包括上游已读和未读邮件。
 - 新建隐私邮箱拥有独立、版本化的 API Key、IMAP 密码、client ID 和 refresh token；迁移前已经领取的旧 alias 保留 legacy API Key 和直达链接。
-- 通过派生取码 URL 或 Bearer API Key 重复读取最近 100 条验证码。
+- 通过派生取码 URL 或 Bearer API Key 触发按需取件；默认返回最新一条，也可读取最近 100 条验证码历史。同一邮箱取件共享 3 秒请求间隔。
 - 通过密码或 XOAUTH2 登录只读 IMAPS，读取完整 MIME、稳定本地 UID 和归档占位邮件。
 - 原始 MIME 按 SHA-256 去重保存到独立卷，容量超限时只淘汰最早正文，永久保留邮件元数据。
-- 管理界面和首选管理 API 使用首次启动生成的随机路径；固定 `/admin/api/v1` 仅作为旧客户端兼容 API 入口。
+- 管理界面支持配置为 `/admin/`；未配置时使用首次启动生成的随机路径。管理 API 保留固定 `/admin/api/v1` 兼容入口。
+
+Apple Account 新通道可独立登录，不要求先登录 iCloud Web 旧通道；等待中的批量任务不阻挡重新登录。新通道会话单独加密保存，旧通道退出或过期不清除新通道会话。停用的主号仍可登录配置，但保持暂停分配和创建。隐藏邮箱目录同步、创建前转发目标校验与创建后目录确认仍使用旧通道，不以新通道登录成功代替这些检查。目录缺少隐藏邮箱服务入口时会保留登录状态并单独说明原因。
 
 ```text
 iCloud 主号 INBOX
@@ -33,12 +41,15 @@ iCloud 主号 INBOX
 要求 Docker Engine、Docker Compose v2。直连 iCloud IMAP 时需要 iCloud 主号 App 专用密码；iCloud 转发第三方 IMAP 或自定义邮箱模式则填写对应邮箱服务的 IMAP 密码。
 
 ```bash
+git clone https://github.com/t508708/icloud-mail.git
+cd icloud-mail
+cp -n .env.example .env
 docker compose up -d --build --wait
 docker compose ps
-curl -fsS http://127.0.0.1:8080/healthz
+curl -fsS http://127.0.0.1:8788/healthz
 ```
 
-HTTP 默认只发布在 `127.0.0.1:8080`，IMAPS 默认只发布在 `127.0.0.1:1993`。首次启动会在 keys 卷中生成管理员密码、随机管理路径、外部登记接口的 OAuth token、主密钥，以及本地持久化 IMAPS 自签证书。
+以上示例将 HTTP 发布在 `127.0.0.1:8788`，IMAPS 发布在 `127.0.0.1:1993`，管理入口为 `/admin/`。云服务器可通过 SSH 隧道访问，或按 [公网部署](docs/PUBLIC.md) 配置 HTTPS 反向代理。首次启动会在 keys 卷中保存管理路径，并生成管理员密码、外部登记接口的 OAuth token、主密钥，以及本地持久化 IMAPS 自签证书。
 
 ```bash
 docker compose exec -T icloud-api cat /app/keys/admin-password
@@ -47,9 +58,9 @@ docker compose exec -T icloud-api cat /app/keys/oauth-token
 docker compose exec -T icloud-api cat /app/keys/public-imap-cert.pem
 ```
 
-`admin-path` 的值形如 `/<32位小写十六进制>/admin/`。管理界面、静态资源和前端路由跟随这个随机前缀，管理 API 的首选入口是去掉该值结尾 `/` 后再拼接 `/api/v1`。OpenAPI 的 `{admin_path}` 变量则使用去掉首尾 `/` 的值。为兼容升级前客户端，同一套 JSON 管理 API 也保留在固定 `/admin/api/v1`；固定 `/admin` 不提供管理界面。登录成功会为两个 API 路径签发同一会话的受限 Cookie，两个入口都执行相同的登录限流、会话认证和 CSRF 校验。管理响应默认使用 `Cache-Control: no-store, private`，返回明文凭证的处理器会覆盖为 `no-store`。随机路径只能降低未授权扫描噪声，不应被当作访问控制边界。
+`admin-path` 支持 `/admin/` 或 `/<32位小写十六进制>/admin/`。新安装可通过 `ICLOUD_API_ADMIN_PATH=/admin` 指定短路径；未设置时生成随机路径。现有安装切换路径需先备份并停止应用，同时更新环境设置和 keys 卷中的 `admin-path` 文件，保留文件权限与属主，再启动。管理界面、静态资源和前端路由跟随配置路径，管理 API 的入口是去掉该值结尾 `/` 后再拼接 `/api/v1`。OpenAPI 的 `{admin_path}` 变量使用去掉首尾 `/` 的值。随机路径模式仍保留 `/admin/api/v1` 兼容 API；短路径模式使用同一个管理入口。两种模式均执行登录限流、会话认证和 CSRF 校验，Cookie 受管理路径限制。管理响应默认使用 `Cache-Control: no-store, private`，返回明文凭证的处理器会覆盖为 `no-store`。
 
-使用 `admin` 和首次生成的密码登录随机管理路径，添加 iCloud 主号后同步或手动登记隐私邮箱。管理端支持创建邮箱分组，并在“全部隐私邮箱”或主号详情中把单个、勾选的隐私邮箱移动到所选分组；删除分组不会删除邮箱，只会将其恢复为未分组。对已完成 Apple 登录且主号没有同步错误的 iCloud 隐私邮箱，可以在“全部隐私邮箱”中勾选后执行“从 Apple 删除”：服务会先调用 Apple 的停用/永久删除流程，只有 Apple 确认删除成功后才清理本地记录；明确失败的项目会保留对应本地记录并返回逐项错误。批量操作支持后台任务及状态轮询；任务中断后尚无结果的项目，其远端结果待核查，不承诺本地记录仍在，详见下方“批量 Apple 删除后台任务”。自定义邮箱不走此 Apple 删除流程。公开接口说明位于 <http://127.0.0.1:8080/docs/>，机器可读契约见 [`docs/openapi.yaml`](docs/openapi.yaml)。
+使用 `admin` 和首次生成的密码登录管理路径，添加 iCloud 主号后同步或手动登记隐私邮箱。管理端支持创建邮箱分组，并在“全部隐私邮箱”或主号详情中把单个、勾选的隐私邮箱移动到所选分组；删除分组不会删除邮箱，只会将其恢复为未分组。对已完成 Apple 登录且主号没有同步错误的 iCloud 隐私邮箱，可以在“全部隐私邮箱”中勾选后执行“从 Apple 删除”：服务会先调用 Apple 的停用/永久删除流程，只有 Apple 确认删除成功后才清理本地记录；明确失败的项目会保留对应项并返回逐项错误。批量操作支持后台任务及状态轮询；任务中断后尚无结果的项目，其远端结果待核查，详见下方“批量 Apple 删除后台任务”。自定义邮箱不走此 Apple 删除流程。公开接口说明位于 <http://127.0.0.1:8788/docs/>，机器可读契约见 [`docs/openapi.yaml`](docs/openapi.yaml)。
 
 每个主号可配置上游隐式 TLS IMAP 主机、端口和登录用户名，默认是 `imap.mail.me.com:993`。已有隐私邮箱后仍可修改这三项，但这代表切换邮箱来源：服务会清除该主号旧来源的同步游标、v1 快照、消费与 `Seen` 状态、v2 归档和 OTP 历史，轮换公开 IMAPS 的 `UIDVALIDITY`，再从新来源建立不回填历史的基线。单纯修改 IMAP 密码（直连 iCloud 使用 App 专用密码，第三方转发使用第三方 IMAP 密码）或重新启用主号只重置同步状态，不删除已有邮件。已有隐私邮箱后主号邮箱地址仍不可修改。
 
@@ -66,6 +77,10 @@ docker compose exec -T icloud-api cat /app/keys/public-imap-cert.pem
 添加主号时也可以选择“自定义邮箱”。自定义模式单独保存邮箱后缀（例如 `example.com`），同一后缀只能配置一个主号；IMAP 密码使用 `imap_password` 提交并按原值加密保存。它不会调用 Apple，也不会改变 iCloud 隐私邮箱原有的每小时自动创建规则。在主号详情中输入生成数量即可批量生成随机地址，格式为 8–12 位小写英文字母和数字加 `@后缀`，同一批次和全局地址表都会阻止重复，地址也不能与主号的 IMAP 登录身份相同。单次最多生成 1000 个，可多次分批生成，`custom` 主号的累计数量不设上限。自定义地址的删除只清理本地记录，不会请求 Apple。
 
 ## 批量 Apple 删除后台任务
+
+“主号管理 → 管理”的隐私邮箱表格上方提供关键词、全部/启用/停用筛选、当前页全选及“从 iCloud 永久删除隐藏邮箱”按钮。选择仅限当前主号和当前页；修改筛选、翻页或切换主号会清空选择。选择“全部”分页时，系统会逐页取齐符合筛选的邮箱。批量删除经一次数量确认后在后台执行，页面展示进度、限流等待和逐项结果，刷新或离开后可恢复查询。待 Apple 目录确认的邮箱暂不参与选择，自定义邮箱隐藏 Apple 批量删除入口。
+
+列表接口 `GET /aliases` 支持 `enabled=true|false`，省略或留空返回全部状态，可与 `account_id`、`query` 和分页参数组合；总数按筛选后的记录计算。该状态是本项目记录的启用状态，核对 Apple 端是否停用请先同步 Apple 目录。主号自身的隐私邮箱总计保留未筛选总数。
 
 以下路径均相对于 `<admin-path>/api/v1`，固定兼容入口为 `/admin/api/v1`。提交和轮询都需要有效管理 Session；`DELETE` 还需 `X-CSRF-Token` 及同源校验。后台任务只脱离提交请求的连接生命周期，不免除管理会话和凭据轮换保护。
 
@@ -243,7 +258,7 @@ ICLOUD_API_PUBLIC_IMAP_SERVER_NAME=imap.example.com
 
 Compose 默认把 HTTP 和 IMAPS 都绑定在宿主机回环地址。对外服务时：
 
-1. 用 HTTPS 反向代理转发 `127.0.0.1:8080`，保留外部 `Host`、`Origin` 和协议。
+1. 用 HTTPS 反向代理转发 `127.0.0.1:8788`，保留外部 `Host`、`Origin` 和协议。
 2. 设置 `ICLOUD_API_COOKIE_SECURE=true`，并把 `ICLOUD_API_TRUSTED_PROXIES` 收紧为实际代理地址或网段。
 3. 通过防火墙受控开放 IMAPS；可把宿主机 `993` 映射到容器 `1993`，也可使用支持 TLS 透传的 TCP 代理。
 4. 将生产证书和私钥通过只读 bind mount、Compose secret 或受保护的 keys 卷提供给容器，再设置证书路径与服务器名称。
@@ -252,7 +267,7 @@ Nginx 的 HTTP 反向代理至少保留：
 
 ```nginx
 location / {
-    proxy_pass http://127.0.0.1:8080;
+    proxy_pass http://127.0.0.1:8788;
     proxy_set_header Host $http_host;
     proxy_set_header Origin $http_origin;
     proxy_set_header X-Real-IP $remote_addr;
@@ -277,9 +292,11 @@ location / {
 
 ## 归档与留存
 
+- 默认 `ICLOUD_API_MAIL_ON_DEMAND_ONLY=true`，不启动周期/启动时 IMAP 同步或 IDLE。真实已鉴权的 OTP Bearer、`?token=` 直链、legacy latest/recent、pool lease code 取件请求（包括浏览器直接访问/刷新）触发单 alias 读取；同邮箱请求处理中及完成后 3 秒内返回 429，附 `Retry-After: 3`。每主号最多容纳 2 个取件请求，全站最多同时处理 16 个，每秒准入 100 次。同主号最短 30 秒 fetch guard 保留。
+- 单次最多处理一批 128 封目标邮件，无后台续跑；新 alias 首次访问只读取最近 4096 个 UID 数值窗口，之后按每 alias 独立游标继续，不会无限回扫。SEARCH recipient headers 后精确复核归属，只获取目标内容。public IMAPS 仅读本地归档；管理员显式手动同步仍可执行主号级增量同步。详见 [收信与资源设计](docs/MAIL-RECEPTION.md)。
 - 升级完成后只处理同步游标之后的新 UID；已读和未读邮件都会归档。
-- 增量同步默认每批处理最多 32 个候选 UID；每批原子保存邮件和游标后自动续跑，减少大量正文逐封读取导致的整批超时重做。
-- 升级不会回填远端历史。v1 的最新快照只迁移标题和时间元数据，并分配稳定的本地 UID 1。
+- 增量取件单批最多处理 128 个目标 UID；每批原子保存邮件和游标，不后台续跑。
+- 旧版本迁移不会回填远端历史；v1 的最新快照只迁移标题和时间元数据，并分配稳定的本地 UID 1。新 alias 首访的最近 4096 UID 窗口是按需取件初始化，不代表无限回扫。
 - PostgreSQL 保存邮件元数据、SHA-256、alias 映射、本地稳定 UID 和 OTP；原始 MIME 保存在独立 `icloud_api_mail_archive` 卷。
 - 同一上游邮件投递给多个 alias 时只保存一份 MIME，各 alias 拥有自己的稳定邮箱 UID。
 - `ICLOUD_API_MAIL_CONTENT_LIMIT_BYTES` 默认 `10737418240`（10 GiB）。每批提交后按收件时间全局 FIFO 淘汰最早正文，标题、时间、发件人、Message-ID、本地 UID 和历史记录永久保留。
@@ -301,7 +318,10 @@ location / {
 | `ICLOUD_API_PUBLIC_IMAP_SERVER_NAME` | `localhost` | IMAPS TLS 名称 |
 | `ICLOUD_API_PUBLIC_IMAP_TLS_CERT_FILE` | 空（自动生成） | 生产证书在容器中的路径；证书和私钥需同时配置 |
 | `ICLOUD_API_PUBLIC_IMAP_TLS_KEY_FILE` | 空（自动生成） | 生产私钥在容器中的路径 |
-| `ICLOUD_API_POLL_INTERVAL` | `10s` | 自动同步周期 |
+| `ICLOUD_API_MAIL_ON_DEMAND_ONLY` | `true` | 按需取件；关闭后保留历史周期/IDLE 同步兼容行为 |
+| `ICLOUD_API_IMAP_IDLE_ENABLED` | `true` | 兼容模式下启用 IMAP IDLE 通知驱动收信 |
+| `ICLOUD_API_IMAP_FALLBACK_INTERVAL` | `15m` | 兼容模式下 IDLE 的补偿同步周期 |
+| `ICLOUD_API_POLL_INTERVAL` | `10s` | 兼容模式下关闭 IDLE 时的同步周期 |
 | `ICLOUD_API_IMAP_TIMEOUT` | `8s` | 单次上游 IMAP 操作时限 |
 | `ICLOUD_API_SYNC_TIMEOUT` | `70s` | 单个账号同步时限 |
 | `ICLOUD_API_SYNC_CONCURRENCY` | `3` | 同步并发数，范围 1–16 |
@@ -346,7 +366,7 @@ docker compose start icloud-api
 ```bash
 docker compose up -d --build --wait
 docker compose ps
-curl -fsS http://127.0.0.1:8080/healthz
+curl -fsS http://127.0.0.1:8788/healthz
 docker compose exec -T icloud-api cat /app/keys/admin-path
 ```
 

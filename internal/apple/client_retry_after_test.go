@@ -87,7 +87,8 @@ func TestClientRetryAfterErrorPaths(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				updated, err := operation.call(client, retryAfterTestSession())
+				session := retryAfterTestSession()
+				updated, err := operation.call(client, session)
 				wantKind := test.kind
 				// Preserve existing envelope classification; add only the delay.
 				if operation.name == "validate" && test.name == "HTTP 200 batch throttle" {
@@ -95,6 +96,9 @@ func TestClientRetryAfterErrorPaths(t *testing.T) {
 				}
 				if operation.name == "list" && test.name == "missing success" {
 					wantKind = ErrService
+				}
+				if operation.name == "list" && test.name == "session expired" {
+					wantKind = ErrHMEAuthentication
 				}
 				if !errors.Is(err, wantKind) {
 					t.Fatalf("error = %v, want %v", err, wantKind)
@@ -118,7 +122,11 @@ func TestClientRetryAfterErrorPaths(t *testing.T) {
 				if requests != 1 {
 					t.Fatalf("requests = %d, want 1 (hint must not replay)", requests)
 				}
-				if updated.SessionToken != "header-secret" {
+				if wantKind == ErrHMEAuthentication {
+					if updated.SessionToken != session.SessionToken {
+						t.Fatal("directory authentication failure overwrote saved credentials")
+					}
+				} else if updated.SessionToken != "header-secret" {
 					t.Fatal("session header was not preserved")
 				}
 				if failedBody != nil && (!failedBody.closed || !errors.Is(err, io.ErrUnexpectedEOF)) {

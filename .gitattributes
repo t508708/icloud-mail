@@ -1,3 +1,12 @@
 *.sh text eol=lf
 go.mod text eol=lf
 go.sum text eol=lf
+
+# Retain installation-specific operations in local Git, not release archives.
+/AGENTS.md export-ignore
+/docs/LOCAL-PUBLIC.md export-ignore
+/docs/SERVER-PRESSURE-20260913.md export-ignore
+/deploy/certbot export-ignore
+/deploy/nginx export-ignore
+/scripts/cloudflare-public.mjs export-ignore
+/scripts/deploy-public-certificate.sh export-ignore

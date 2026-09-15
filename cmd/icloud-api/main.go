@@ -111,6 +111,7 @@ func run() error {
 	fetcher.MaxBodyBytes = int(cfg.MaxBodyBytes)
 	fetcher.AllowWeakRecipientHeaders = cfg.AllowWeakRecipientHeaders
 	fetcher.ArchiveTempDir = db.MailArchiveTempDir()
+	fetcher.MaxIncrementalCandidates = 128
 
 	signalContext, stopSignal := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignal()
@@ -118,8 +119,24 @@ func run() error {
 	defer cancelRequests()
 	workerContext, cancelWorkers := context.WithCancel(context.Background())
 	defer cancelWorkers()
-	manager := syncer.New(db, cipher, fetcher, logger, cfg.PollInterval, cfg.SyncConcurrency)
+	syncInterval := cfg.PollInterval
+	if cfg.IMAPIdleEnabled {
+		syncInterval = cfg.IMAPFallbackInterval
+	}
+	manager := syncer.New(db, cipher, fetcher, logger, syncInterval, cfg.SyncConcurrency)
 	manager.SetSyncTimeout(cfg.SyncTimeout)
+	manager.SetMinimumFetchInterval(30 * time.Second)
+	manager.SetOnDemandOnly(cfg.MailOnDemandOnly)
+	mailboxEvents := syncer.NewMailboxEvents(db, cipher, fetcher.WatchMailbox, func(ctx context.Context, accountID int64) error {
+		for batch := 0; batch < 128; batch++ {
+			err := manager.SyncAccountFromNotification(ctx, accountID)
+			if !errors.Is(err, syncer.ErrSyncPending) {
+				return err
+			}
+		}
+		logger.Warn("通知同步达到续批上限，等待后续周期", "account_id", accountID, "operation", "continue_batch_limit")
+		return syncer.ErrSyncDeferred
+	}, logger)
 	appleClient, err := apple.NewClient(apple.Config{})
 	if err != nil {
 		return fmt.Errorf("初始化 Apple 客户端: %w", err)
@@ -128,6 +145,13 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("初始化隐私邮箱同步服务: %w", err)
 	}
+	manager.SetWebMailFetcher(func(ctx context.Context, account domain.Account, alias domain.Alias, known []domain.Alias) (domain.MailboxSyncResult, error) {
+		remote, err := hmeService.ReadAliasWebMailLocked(ctx, account, alias)
+		if err != nil {
+			return domain.MailboxSyncResult{}, err
+		}
+		return fetcher.ArchiveWebMail(ctx, account, alias, known, remote)
+	})
 	autoManager, err := autocreate.New(
 		db,
 		func(ctx context.Context, accountID int64) (domain.Alias, error) {
@@ -142,7 +166,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("初始化隐私邮箱自动创建服务: %w", err)
 	}
-	seenWorker := syncer.NewSeenWorker(db, cipher, fetcher, manager, logger, cfg.PollInterval)
+	if err := autoManager.UpgradeCadence(workerContext); err != nil {
+		return fmt.Errorf("更新隐私邮箱定时创建频率: %w", err)
+	}
+	seenWorker := syncer.NewSeenWorker(db, cipher, fetcher, manager, logger, time.Minute)
 	seenWorker.SetOperationTimeout(seenOperationTimeout(cfg.IMAPTimeout))
 	publicIMAPCertFile := cfg.PublicIMAPTLSCertFile
 	publicIMAPKeyFile := cfg.PublicIMAPTLSKeyFile
@@ -178,7 +205,17 @@ func run() error {
 	web.SetAccountLocker(manager.WithAccountLock)
 	web.SetApplicationLogSource(applicationLogs)
 	web.SetSyncProgressProvider(manager.AccountProgress)
+	if cfg.IMAPIdleEnabled && !cfg.MailOnDemandOnly {
+		web.SetMailboxWatchHealth(mailboxEvents.Healthy)
+	}
+	if cfg.MailOnDemandOnly {
+		web.SetAliasDemandSync(manager.SyncAliasOnDemand)
+		logger.Info("邮件收取使用按需模式", "operation", "mail_demand_mode", "periodic_fetch", false, "imap_idle_watch", false)
+	}
 	web.SetHMESyncService(hmeService)
+	if err := web.StartAliasCreationJobs(workerContext); err != nil {
+		return fmt.Errorf("初始化后台隐私邮箱创建任务: %w", err)
+	}
 	if err := web.StartAliasDeletionJobs(workerContext); err != nil {
 		return fmt.Errorf("初始化后台隐私邮箱删除任务: %w", err)
 	}
@@ -205,7 +242,26 @@ func run() error {
 	}
 
 	var background sync.WaitGroup
-	background.Add(4)
+	background.Add(7)
+	go func() {
+		defer background.Done()
+		hmeService.RunAccountSessionRenewal(workerContext, logger)
+	}()
+	if cfg.IMAPIdleEnabled && !cfg.MailOnDemandOnly {
+		background.Add(1)
+		go func() {
+			defer background.Done()
+			mailboxEvents.Run(workerContext)
+		}()
+	}
+	go func() {
+		defer background.Done()
+		web.RunAliasCreationJobs()
+	}()
+	go func() {
+		defer background.Done()
+		web.RunPoolMaintenance(workerContext)
+	}()
 	go func() {
 		defer background.Done()
 		web.RunAliasDeletionJobs()

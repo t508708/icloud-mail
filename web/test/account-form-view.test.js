@@ -47,6 +47,20 @@ test("account form exposes editable IMAP host and port with iCloud defaults", as
   assert.doesNotMatch(source, /model-value="imap\.mail\.me\.com:993（TLS）"\s+readonly/);
 });
 
+test("disabling a primary account requires confirmation and preserves its aliases and history", async () => {
+  const source = await readFile(viewPath, "utf8");
+  assert.match(source, /隐藏邮箱列表不显示下属邮箱，邮箱池入池候选也隐藏/);
+  assert.match(source, /storedEnabled\.value && !form\.enabled/);
+  assert.match(source, /ElMessageBox\.confirm\([\s\S]*?确认停用主号/);
+  assert.match(source, /恢复邮箱列表显示，并按停用前快照恢复原启用及池成员状态/);
+  assert.match(source, /原本单独停用的邮箱仍保持停用/);
+  assert.match(source, /不会删除邮箱、邮件或领取历史/);
+  assert.match(source, /confirmationCancelled\(error\)/);
+  assert.match(source, /if \(!viewActive \|\| submittedRouteKey !== routeKey\(\)\) return;[\s\S]*?const imapEndpoint/);
+  assert.match(source, /submittedAccountId = String\(route\.params\.id \|\| ""\)/);
+  assert.match(source, /主号已停用；收件已暂停，下属邮箱已从隐藏邮箱列表和入池候选中隐藏/);
+});
+
 test("account normalizer keeps custom IMAP endpoint and defaults missing values", () => {
   const custom = normalizeAccount({
     imap_host: "mail.example.test",
@@ -98,6 +112,21 @@ test("IMAP validation errors stay in flow before the endpoint hint", async () =>
     styles,
     /\.imap-service-fields \.el-form-item\s*\{[^}]*margin-bottom:\s*0;/s,
   );
+});
+
+test("account form keeps local responsive layout constraints", async () => {
+  const source = await readFile(viewPath, "utf8");
+
+  assert.match(source, /<section class="content-narrow page-stack account-form-page">/);
+  assert.match(source, /<style scoped>/);
+  assert.match(source, /\.account-form-page\s*\{[^}]*max-width:\s*960px;[^}]*margin-inline:\s*auto;/s);
+  assert.match(source, /\.account-form-page :deep\(\.form-grid\)\s*\{[^}]*align-items:\s*start;[^}]*row-gap:\s*20px;/s);
+  assert.match(source, /\.account-form-page :deep\(\.form-grid > \.el-form-item\)\s*\{[^}]*min-width:\s*0;[^}]*margin-bottom:\s*0;/s);
+  assert.match(source, /\.account-form-page \.form-actions\s*\{[^}]*margin-top:\s*20px;/s);
+  assert.match(source, /\.account-form-page :deep\(\.imap-service-fields\)\s*\{[^}]*minmax\(0, 1fr\) 112px;/s);
+  assert.match(source, /@media \(max-width: 720px\)\s*\{[^}]*minmax\(0, 1fr\) 88px;/s);
+  assert.match(source, /\.account-form-page :deep\(\.imap-service-fields \.el-form-item__error\)[\s\S]*?position:\s*static;/s);
+  assert.match(source, /\.account-form-page :deep\(\.mailbox-route-summary\)[\s\S]*?padding:\s*12px 14px;/s);
 });
 
 test("account form exposes custom mailbox suffix and keeps the iCloud branch", async () => {

@@ -177,6 +177,37 @@ func TestListAliasesPageOrdersFiltersAndReportsTotal(t *testing.T) {
 	})
 }
 
+func TestListAliasesPageFiltersEnabledBeforePaginationAndKeepsAccountIsolation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db := openTestStore(t)
+	first := createAccount(t, ctx, db, "Enabled first", "enabled-first@icloud.com")
+	second := createAccount(t, ctx, db, "Enabled second", "enabled-second@icloud.com")
+	for i, fixture := range []struct {
+		accountID int64
+		address   string
+		enabled   bool
+	}{{first.ID, "a-disabled@icloud.com", false}, {first.ID, "b-enabled@icloud.com", true}, {second.ID, "c-disabled@icloud.com", false}} {
+		_, err := db.CreateAlias(ctx, domain.Alias{AccountID: fixture.accountID, Address: fixture.address, APIKeyHash: []byte(fmt.Sprintf("enabled-filter-%d", i)), Enabled: fixture.enabled})
+		if err != nil {
+			t.Fatalf("create alias: %v", err)
+		}
+	}
+	for _, want := range []bool{false, true} {
+		page, err := db.ListAliasesPage(ctx, store.AliasListFilter{Enabled: &want, AccountID: &first.ID, Limit: 1})
+		if err != nil {
+			t.Fatalf("filter enabled=%v: %v", want, err)
+		}
+		if page.Total != 1 || len(page.Items) != 1 || page.Items[0].AccountID != first.ID || page.Items[0].Enabled != want {
+			t.Fatalf("filter enabled=%v page = total %d items %#v", want, page.Total, page.Items)
+		}
+	}
+	all, err := db.ListAliasesPage(ctx, store.AliasListFilter{Limit: 2, Offset: 1})
+	if err != nil || all.Total != 3 || len(all.Items) != 2 {
+		t.Fatalf("unset enabled page = %#v, err=%v", all, err)
+	}
+}
+
 func TestListAliasesPageSearchesAddressAndLabelBeforePagination(t *testing.T) {
 	t.Parallel()
 

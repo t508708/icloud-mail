@@ -145,6 +145,7 @@ export function normalizeAccount(raw = {}) {
       firstDefined(raw, "imap_username", "imapUsername", "IMAPUsername") ||
       "",
     enabled: Boolean(firstDefined(raw, "enabled", "Enabled")),
+    mailTransport: firstDefined(raw, "mail_transport", "mailTransport") === "webmail" ? "webmail" : "imap",
     lastSyncStatus:
       firstDefined(raw, "last_sync_status", "lastSyncStatus", "LastSyncStatus") ||
       "pending",
@@ -192,6 +193,13 @@ function normalizeSyncProgress(raw) {
 }
 
 export function normalizeAlias(raw = {}) {
+  const enabled = Boolean(firstDefined(raw, "enabled", "Enabled"));
+  const configuredEnabled = Boolean(
+    firstDefined(raw, "configured_enabled", "configuredEnabled", "ConfiguredEnabled") ?? enabled,
+  );
+  const accountEnabled = Boolean(
+    firstDefined(raw, "account_enabled", "accountEnabled", "AccountEnabled") ?? true,
+  );
   const lastSyncError =
     firstDefined(raw, "last_sync_error", "lastSyncError", "LastSyncError") ||
     "";
@@ -265,7 +273,9 @@ export function normalizeAlias(raw = {}) {
           "CredentialVersion",
         ),
       ) || 0,
-    enabled: Boolean(firstDefined(raw, "enabled", "Enabled")),
+    enabled,
+    configuredEnabled,
+    accountEnabled,
     lastSyncStatus:
       firstDefined(raw, "last_sync_status", "lastSyncStatus", "LastSyncStatus") ||
       "pending",
@@ -331,6 +341,26 @@ export function normalizeAutoCreation(raw = {}) {
     firstDefined(value, "planned_at", "plannedAt", "PlannedAt") ||
     plannedTimes[0] ||
     null;
+  const recentCreatedCountRaw = firstDefined(
+    value,
+    "recent_created_count",
+    "recentCreatedCount",
+    "RecentCreatedCount",
+  );
+  const recentCreatedCount =
+    Number.isSafeInteger(recentCreatedCountRaw) && recentCreatedCountRaw >= 0
+      ? recentCreatedCountRaw
+      : null;
+  const todayCreatedCountRaw = firstDefined(
+    value,
+    "today_created_count",
+    "todayCreatedCount",
+    "TodayCreatedCount",
+  );
+  const todayCreatedCount =
+    Number.isSafeInteger(todayCreatedCountRaw) && todayCreatedCountRaw >= 0
+      ? todayCreatedCountRaw
+      : null;
   return {
     enabled: Boolean(firstDefined(value, "enabled", "Enabled")),
     status: firstDefined(value, "status", "Status") || "",
@@ -338,6 +368,12 @@ export function normalizeAutoCreation(raw = {}) {
       firstDefined(value, "next_run_at", "nextRunAt", "NextRunAt") || null,
     plannedAt,
     plannedTimes,
+    recentCreatedCount,
+    todayCreatedCount,
+    recentCreatedSince:
+      firstDefined(value, "recent_created_since", "recentCreatedSince", "RecentCreatedSince") || null,
+    todayCreatedSince:
+      firstDefined(value, "today_created_since", "todayCreatedSince", "TodayCreatedSince") || null,
     lastAttemptedAt:
       firstDefined(
         value,
@@ -518,6 +554,9 @@ export async function getAccount(id, options = {}) {
 function normalizeAccountDetail(data = {}, options = {}) {
   const accountRaw = data?.account || data || {};
   const account = normalizeAccount(accountRaw);
+  if (firstDefined(data, "mail_transport", "mailTransport") !== undefined) {
+    account.mailTransport = firstDefined(data, "mail_transport", "mailTransport") === "webmail" ? "webmail" : "imap";
+  }
   const aliasPage = normalizeListPage(
     data,
     normalizeAlias,
@@ -583,6 +622,15 @@ export async function updateAccount(id, payload, csrfToken) {
   return normalizeAccount(data?.account || data || {});
 }
 
+export async function updateAccountMailTransport(id, transport, csrfToken) {
+  const data = await apiRequest(`/accounts/${encodeURIComponent(id)}/mail-transport`, {
+    method: "PUT",
+    body: { transport },
+    csrfToken,
+  });
+  return data?.transport === "webmail" ? "webmail" : "imap";
+}
+
 export function normalizeMailGroup(raw = {}) {
   return {
     id: firstDefined(raw, "id", "ID"),
@@ -643,11 +691,53 @@ export async function createRandomAliases(accountId, payload, csrfToken) {
   return normalizeRandomAliasResult(data?.data || data || {});
 }
 
+function normalizeAliasCreationJob(raw = {}) {
+  const job = raw && Object.hasOwn(raw, "job") ? raw.job : raw;
+  return job ? {
+    ...job,
+    target: Number(job.target) || 0,
+    completed: Number(job.completed) || 0,
+    status: job.status || "",
+    last_error: job.last_error || "",
+    next_run_at: job.next_run_at || null,
+    entries: Array.isArray(job.entries) ? job.entries : [],
+  } : null;
+}
+
+export async function createAliasCreationJob(accountId, payload, csrfToken) {
+  const data = await apiRequest(`/accounts/${encodeURIComponent(accountId)}/aliases/creation-job`, { method: "POST", body: payload, csrfToken });
+  return normalizeAliasCreationJob(data?.data || data);
+}
+export async function getAliasCreationJob(accountId, csrfToken) {
+  const data = await apiRequest(`/accounts/${encodeURIComponent(accountId)}/aliases/creation-job`, { method: "GET", csrfToken });
+  return normalizeAliasCreationJob(data?.data || data);
+}
+export async function stopAliasCreationJob(accountId, csrfToken) {
+  const data = await apiRequest(`/accounts/${encodeURIComponent(accountId)}/aliases/creation-job/stop`, { method: "POST", body: {}, csrfToken });
+  return normalizeAliasCreationJob(data?.data || data);
+}
+
 export function deleteAccount(id, csrfToken) {
   return apiRequest(`/accounts/${encodeURIComponent(id)}`, {
     method: "DELETE",
     csrfToken,
   });
+}
+
+export async function getAppleAccountAuth(id, csrfToken) {
+  const data = await apiRequest(`/accounts/${encodeURIComponent(id)}/apple-account-auth`, { method: "GET", csrfToken });
+  return appleSessionResult(data?.data || data || {});
+}
+export async function loginAppleAccountAuth(id, payload, csrfToken) {
+  const data = await apiRequest(`/accounts/${encodeURIComponent(id)}/apple-account-auth`, { method: "POST", body: payload, csrfToken });
+  return appleSessionResult(data?.data || data || {});
+}
+export async function verifyAppleAccountAuth(id, payload, csrfToken) {
+  const data = await apiRequest(`/accounts/${encodeURIComponent(id)}/apple-account-auth/verify`, { method: "POST", body: payload, csrfToken });
+  return appleSessionResult(data?.data || data || {});
+}
+export function deleteAppleAccountAuth(id, csrfToken) {
+  return apiRequest(`/accounts/${encodeURIComponent(id)}/apple-account-auth`, { method: "DELETE", csrfToken });
 }
 
 export async function syncAccount(id, csrfToken) {
@@ -865,6 +955,14 @@ export async function createAlias(accountId, payload, csrfToken) {
   );
 }
 
+export async function createAliasNow(accountId, csrfToken, channel = "auto") {
+  const data = await apiRequest(
+    `/accounts/${encodeURIComponent(accountId)}/aliases/create-now`,
+    { method: "POST", body: { channel }, csrfToken },
+  );
+  return normalizeAlias(data?.alias || data || {});
+}
+
 export function getAliases(accountId = "", options = {}) {
   return getAllAliases(accountId, options);
 }
@@ -876,6 +974,8 @@ export async function getAliasPage(accountId = "", options = {}) {
     query: options.query,
     without_latest_mail: options.withoutLatestMail === true ? "true" : "",
     with_latest_mail: options.withLatestMail === true ? "true" : "",
+    enabled:
+      typeof options.enabled === "boolean" ? String(options.enabled) : "",
   });
   const data = await apiRequest(`/aliases?${query}`, {
     signal: options.signal,

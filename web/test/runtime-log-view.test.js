@@ -56,7 +56,7 @@ test("all logs view supports filters, selectable pages, batched all-items loadin
   assert.match(source, /getAccountPage\(\{/);
   assert.match(source, /:remote-method="searchAccounts"/);
   assert.doesNotMatch(source, /加载更多|MAX_VISIBLE_LOGS|appendRuntimeLogPage/);
-  assert.match(source, /createLiveRefresh\(\(\) => loadLatestLogs\(\{ silent: true \}\)\)/);
+  assert.match(source, /createLiveRefresh\(\(\) => loadLatestLogs\(\{ silent: true \}\),\s*\{ intervalMs: 5_000 \}\)/);
   assert.match(source, /v-model="autoRefreshEnabled"/);
   assert.match(source, /@size-change="handlePageSizeChange"/);
   assert.match(source, /class="data-panel desktop-data-table virtual-list-table"/);

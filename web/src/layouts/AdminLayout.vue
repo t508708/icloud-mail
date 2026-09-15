@@ -1,5 +1,6 @@
 <template>
   <div class="admin-shell">
+    <a class="skip-link" href="#main-content">跳转到内容</a>
     <aside class="admin-sidebar" aria-label="后台导航">
       <AppBrand />
       <AdminNavigation />
@@ -33,11 +34,15 @@
           @click="drawerOpen = true"
         />
         <div class="admin-topbar__copy">
+          <span class="admin-topbar__eyebrow">工作空间</span>
           <h1>{{ page.title }}</h1>
-          <p v-if="page.subtitle">{{ page.subtitle }}</p>
+        </div>
+        <div class="admin-topbar__tools">
+          <ThemeControl />
+          <div class="admin-topbar__account"><span class="admin-avatar" aria-hidden="true">{{ auth.state.username.slice(0, 1).toUpperCase() }}</span><span class="admin-topbar__username">{{ auth.state.username }}</span></div>
         </div>
       </header>
-      <main class="admin-content">
+      <main class="admin-content" id="main-content">
         <router-view />
       </main>
     </div>
@@ -59,10 +64,12 @@ import { computed, defineComponent, h, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
 import AppBrand from "../components/AppBrand.vue";
+import ThemeControl from "../components/ThemeControl.vue";
 import { useAuth } from "../stores/auth.js";
 import { usePageHeader } from "../stores/page.js";
 import { getActiveAdminSection } from "../utils/adminNavigation.js";
 import { showRequestError } from "../utils/feedback.js";
+import { preloadRoute } from "../utils/routePreload.js";
 
 const route = useRoute();
 const router = useRouter();
@@ -74,6 +81,7 @@ const logoutLoading = ref(false);
 const menuItems = [
   { to: { name: "accounts" }, label: "主号管理", icon: Connection, section: "accounts" },
   { to: { name: "aliases" }, label: "隐私邮箱", icon: Message, section: "aliases" },
+  { to: { name: "pool" }, label: "邮箱池", icon: Tickets, section: "pool" },
   { to: { name: "audit" }, label: "操作记录", icon: Document, section: "audit" },
   { to: { name: "logs" }, label: "全部日志", icon: Tickets, section: "logs" },
   { to: { name: "security" }, label: "安全设置", icon: Lock, section: "security" },
@@ -88,7 +96,8 @@ const AdminNavigation = defineComponent({
       h(
         "nav",
         { class: "admin-nav", "aria-label": "主要导航" },
-        menuItems.map((item) =>
+        menuItems.flatMap((item, index) => [
+          ...(index === 0 || index === 3 ? [h("span", { class: "admin-nav__group" }, index === 0 ? "邮箱工作区" : "管理")] : []),
           h(
             RouterLink,
             {
@@ -96,12 +105,14 @@ const AdminNavigation = defineComponent({
               class: ["admin-nav__item", { "is-active": activeSection.value === item.section }],
               "aria-current": activeSection.value === item.section ? "page" : undefined,
               onClick: () => emit("navigate"),
+              onMouseenter: () => preloadRoute(router.resolve(item.to)),
+              onFocus: () => preloadRoute(router.resolve(item.to)),
             },
             {
-              default: () => [h(item.icon, { "aria-hidden": "true" }), h("span", item.label)],
+              default: () => [h("span", { class: ["admin-nav__icon", `admin-nav__icon--${item.section}`], "aria-hidden": "true" }, [h(item.icon)]), h("span", item.label)],
             },
           ),
-        ),
+        ]),
       );
   },
 });

@@ -308,11 +308,6 @@ func (s *Store) importAliases(
 		}
 	}
 	if createdEnabled {
-		if _, err := s.txExecContext(ctx, tx,
-			`DELETE FROM imap_sync_states WHERE account_id = ?`, accountID,
-		); err != nil {
-			return domain.AliasImportResult{}, nil, fmt.Errorf("reset IMAP cursor after alias import: %w", err)
-		}
 		if _, err := s.bumpAccountVersionTx(ctx, tx, accountID, accountVersion); err != nil {
 			return domain.AliasImportResult{}, nil, fmt.Errorf("advance account version after alias import: %w", err)
 		}

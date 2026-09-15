@@ -21,6 +21,7 @@
   <pre>[{"otp":"876543","time":"2026-08-11T12:00:00+08:00"},{"otp":"123456","time":"2026-08-11T11:00:00+08:00"}]</pre>
   <p>设置 <code>ICLOUD_API_OTP_RETURN_LATEST_ONLY=true</code> 后，有记录时只返回该数组第一项的裸 JSON 对象，也就是真正最新的有效 OTP。旧变量 <code>ICLOUD_API_OTP_RETURN_LAST_ONLY</code> 保留为兼容别名；同时设置时以正式变量为准。两种模式没有验证码时都返回 <code>200 []</code>。</p>
   <p>邮件主题、纯文本和 HTML 可读文本中，只有未与字母或数字相邻的 6 位 ASCII 数字会被识别为验证码；升级前保存的其他格式历史值也不会出现在 OTP API 响应中。</p>
+  <p class="note">同一邮箱的 HTTP 取件请求共用限流，换用取件链接、API Key 或邮箱池取码仍计入同一邮箱。请等待上次请求完成后至少 3 秒再请求；处理中、冷却中或服务繁忙时返回 <code>429 RATE_LIMITED</code>，按照响应头 <code>Retry-After</code> 指定的秒数重试，避免并发轮询。</p>
 
   <h2>访问令牌</h2>
   <p>用服务签发的 client ID 与 refresh token 换取一小时有效的 IMAPS XOAUTH2 访问令牌：</p>

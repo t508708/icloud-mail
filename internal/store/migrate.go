@@ -128,6 +128,21 @@ func (s *Store) migrateSQLite(ctx context.Context) error {
 			return fmt.Errorf("set schema version: %w", err)
 		}
 	}
+	if err := s.migratePool(ctx, tx); err != nil {
+		return err
+	}
+	if err := s.migrateAliasCreationEvents(ctx, tx); err != nil {
+		return err
+	}
+	if err := s.migrateAliasIMAPSync(ctx, tx); err != nil {
+		return err
+	}
+	if err := migrateAppleAccountSession(ctx, tx); err != nil {
+		return err
+	}
+	if err := migrateMailTransport(ctx, tx); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration: %w", err)
 	}
@@ -232,6 +247,21 @@ func (s *Store) migratePostgres(ctx context.Context) error {
 		if _, err := s.txExecContext(ctx, tx, statement); err != nil {
 			return fmt.Errorf("converge postgres schema: %w", err)
 		}
+	}
+	if err := s.migratePool(ctx, tx); err != nil {
+		return err
+	}
+	if err := s.migrateAliasCreationEvents(ctx, tx); err != nil {
+		return err
+	}
+	if err := s.migrateAliasIMAPSync(ctx, tx); err != nil {
+		return err
+	}
+	if err := migrateAppleAccountSession(ctx, tx); err != nil {
+		return err
+	}
+	if err := migrateMailTransport(ctx, tx); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit postgres migration: %w", err)

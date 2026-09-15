@@ -26,24 +26,35 @@ import (
 var publicDocsAssets embed.FS
 
 type Server struct {
-	store           *store.Store
-	cipher          *secure.Cipher
-	cfg             config.Config
-	logger          *slog.Logger
-	applicationLogs ApplicationLogSource
-	now             func() time.Time
-	sync            func(int64) error
-	syncProgress    func(int64) (domain.MailboxSyncProgress, bool)
-	hmeSync         HMESyncService
-	autoCreate      AliasAutoCreationService
-	lockAccount     func(context.Context, int64, func() error) error
-	seenNotify      func()
-	ready           func() bool
-	adminSPA        *adminSPA
+	store               *store.Store
+	cipher              *secure.Cipher
+	cfg                 config.Config
+	logger              *slog.Logger
+	applicationLogs     ApplicationLogSource
+	now                 func() time.Time
+	sync                func(int64) error
+	syncProgress        func(int64) (domain.MailboxSyncProgress, bool)
+	mailboxWatchHealthy func(int64) bool
+	hmeSync             HMESyncService
+	autoCreate          AliasAutoCreationService
+	lockAccount         func(context.Context, int64, func() error) error
+	seenNotify          func()
+	ready               func() bool
+	adminSPA            *adminSPA
 
 	mailSyncWakeMu       sync.Mutex
 	mailSyncWake         map[int64]time.Time
 	credentialRotationMu sync.RWMutex
+	poolMu               sync.Mutex
+	manualAliasMu        sync.Mutex
+	manualAliasesRunning map[int64]bool
+	manualProbesRunning  map[int64]bool
+	demandAliasSync      func(context.Context, int64) error
+	aliasDemandRateMu    sync.Mutex
+	aliasDemandRate      map[int64]aliasDemandRateState
+	accountPickupActive  map[int64]int
+	pickupRateCleanupAt  time.Time
+	aliasCreationJobs    aliasCreationJobRuntime
 	aliasDeletionJobs    aliasDeletionJobRuntime
 	// beforeCredentialRotationLock is a deterministic test seam. Production
 	// leaves it nil.
@@ -122,11 +133,23 @@ func (s *Server) withAccountLock(ctx context.Context, accountID int64, operation
 	return s.lockAccount(ctx, accountID, operation)
 }
 
-// requestMailboxSync coalesces external polling into a bounded background
-// sync. API handlers never wait for IMAP work; the cooldown prevents a client
-// polling every few seconds from creating a new login for every request.
+// SetMailboxWatchHealth must be called before serving requests. A healthy IDLE
+// subscription already keeps the archive current; only outages need API wakes.
+func (s *Server) SetMailboxWatchHealth(healthy func(int64) bool) {
+	s.mailboxWatchHealthy = healthy
+}
+
+func (s *Server) SetAliasDemandSync(sync func(context.Context, int64) error) {
+	s.demandAliasSync = sync
+}
+
+// requestMailboxSync is the compatibility path used when on-demand-only mode
+// is disabled. It coalesces external polling into a bounded background sync.
 func (s *Server) requestMailboxSync(accountID int64, now time.Time) {
 	if s == nil || s.sync == nil || accountID < 1 {
+		return
+	}
+	if s.mailboxWatchHealthy != nil && s.mailboxWatchHealthy(accountID) {
 		return
 	}
 	if now.IsZero() {
@@ -246,7 +269,7 @@ func (s *Server) Router() (*gin.Engine, error) {
 	if err := router.SetTrustedProxies(s.cfg.TrustedProxies); err != nil {
 		return nil, fmt.Errorf("配置受信代理: %w", err)
 	}
-	router.Use(s.requestContext(), s.securityHeaders(), s.recovery())
+	router.Use(s.requestContext(), s.securityHeaders(), s.recovery(), s.pickupAdmission())
 
 	router.GET("/healthz", s.health)
 	rootRedirect := func(c *gin.Context) { c.Redirect(http.StatusFound, "/docs/") }
@@ -259,6 +282,7 @@ func (s *Server) Router() (*gin.Engine, error) {
 
 	publicCredentialGuard := s.credentialRotationReadGuard()
 	router.GET("/api/v1/otp", publicCredentialGuard, s.otpHistory)
+	s.registerPoolRoutes(router.Group("/api/v1/pool", publicCredentialGuard))
 	legacyAPI := router.Group("/api/v1")
 	legacyAPI.GET("/mail/latest", publicCredentialGuard, s.apiKeyAuth(), s.latestMail)
 	recentAuth := s.apiKeyQueryAuth()

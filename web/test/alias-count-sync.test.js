@@ -7,7 +7,7 @@ const viewPath = new URL("../src/views/AccountDetailView.vue", import.meta.url);
 function functionBody(source, signature) {
   const start = source.indexOf(signature);
   assert.notEqual(start, -1, `missing ${signature}`);
-  const opening = source.indexOf("{", start);
+  const opening = source.indexOf("{", start + signature.length);
   assert.notEqual(opening, -1, `missing body for ${signature}`);
   let depth = 0;
   for (let index = opening; index < source.length; index += 1) {
@@ -41,7 +41,7 @@ test("automatic creation panel displays the current alias count", async () => {
 
 test("directory synchronization refreshes the current server-backed alias page", async () => {
   const source = await readFile(viewPath, "utf8");
-  const syncBody = functionBody(source, "async function performAliasesSync");
+  const syncBody = functionBody(source, "async function performAliasesSync({ afterAuthentication = false } = {})");
 
   assert.match(syncBody, /const result = await syncAccountAliases/);
   assert.match(syncBody, /const detailLoaded = await loadDetail\(\)/);

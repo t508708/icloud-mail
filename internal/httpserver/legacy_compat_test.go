@@ -115,6 +115,7 @@ func TestLegacyMailRoutesPreserveExistingKeyDirectLinkAndConsumption(t *testing.
 	}
 	legacyCompatAssertLatest(t, latest.Body.Bytes(), alias.Address, "77-9", message.Subject, message.TextBody)
 
+	syncedAt = syncedAt.Add(3 * time.Second)
 	firstRecent := serveV2Request(router, http.MethodGet,
 		"/api/v1/mail/recent?api_key="+url.QueryEscape(legacyDirectLink), "", nil)
 	if firstRecent.Code != http.StatusOK {
@@ -123,12 +124,14 @@ func TestLegacyMailRoutesPreserveExistingKeyDirectLinkAndConsumption(t *testing.
 	legacyCompatAssertRecent(t, firstRecent.Body.Bytes(), alias.Address, message.Subject, message.TextBody,
 		sentAt.In(env.server.cfg.Timezone).Format(time.RFC3339))
 
+	syncedAt = syncedAt.Add(3 * time.Second)
 	secondRecent := serveV2Request(router, http.MethodGet,
 		"/api/v1/mail/recent/?api_key="+url.QueryEscape(legacyDirectLink), "", nil)
 	legacyCompatAssertAPIError(t, secondRecent, http.StatusNotFound, "MAIL_NOT_FOUND")
 
 	// Consumption is scoped to the compact endpoint. The complete legacy
 	// snapshot remains repeatable even after the direct link has been used.
+	syncedAt = syncedAt.Add(3 * time.Second)
 	repeatedLatest := serveV2Request(router, http.MethodGet, "/api/v1/mail/latest", "", map[string]string{
 		"Authorization": "Bearer " + rawKey,
 	})

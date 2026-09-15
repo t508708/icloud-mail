@@ -1,69 +1,22 @@
 <template>
   <section
+    ref="aliasSelectionContainer"
+    @pointerdown.capture="aliasDrag.pointerDown"
     class="page-stack virtual-list-page"
     aria-labelledby="aliases-section-title"
   >
     <SectionHeader
       id="aliases-section-title"
       title="全部隐私邮箱"
-      description="敏感凭证不在列表展示；可通过复制操作导出取码或 IMAP 凭证。"
+      description="集中管理地址、分组与收件。凭据仅在主动复制时读取。"
     >
       <template #actions>
-        <el-button
-          :icon="CopyDocument"
-          :disabled="selectedAliases.length === 0"
-          @click="copySelectedAliases(ALIAS_EXPORT_OTP)"
-        >
-          勾选取码<span v-if="selectedAliases.length">
-            （{{ selectedAliases.length }}）
-          </span>
-        </el-button>
-        <el-button
-          :icon="CopyDocument"
-          :disabled="selectedAliases.length === 0"
-          @click="copySelectedAliases(ALIAS_EXPORT_IMAP)"
-        >
-          勾选 IMAP
-        </el-button>
-        <el-select
-          v-if="selectedAliasIds.length"
-          v-model="moveTargetGroupId"
-          class="alias-group-bulk-select"
-          :loading="groupsLoading || movingAliases || deletingAliases"
-          :disabled="movingAliases || deletingAliases || deletionJobBlocked"
-          placeholder="移动到分组"
-          aria-label="将勾选的隐私邮箱移动到分组"
-          @change="moveSelectedAliases"
-        >
-          <el-option label="未分组" value="none" />
-          <el-option
-            v-for="group in groups"
-            :key="group.id"
-            :label="group.name"
-            :value="String(group.id)"
-          />
-        </el-select>
-        <el-button
-          v-if="selectedAliasIds.length"
-          type="danger"
-          plain
-          :icon="Delete"
-          :loading="deletingAliases"
-          :disabled="
-            deletingAliases ||
-            deletionJobBlocked ||
-            movingAliases ||
-            exportingAll ||
-            rotatingAllCredentials
-          "
-          aria-label="从 Apple 永久删除勾选的隐私邮箱"
-          @click="deleteSelectedAliases"
-        >
-          从 Apple 删除（{{ selectedAliasIds.length }}）
-        </el-button>
         <el-button :icon="FolderAdd" @click="openGroupDialog()">
           管理分组
         </el-button>
+        <el-popover trigger="click" placement="bottom-end" :width="220">
+          <template #reference><el-button :icon="MoreFilled" aria-label="更多邮箱操作">更多操作</el-button></template>
+          <div class="alias-more-actions">
         <el-button
           type="danger"
           plain
@@ -94,6 +47,8 @@
         >
           全部 IMAP
         </el-button>
+          </div>
+        </el-popover>
         <el-tooltip content="刷新隐私邮箱列表" placement="bottom">
           <el-button
             :icon="Refresh"
@@ -256,8 +211,26 @@
       </div>
     </div>
 
+    <div class="alias-selection-toolbar" role="group" aria-label="跨页选择与批量操作">
+      <el-checkbox :model-value="allAliasesSelected" :indeterminate="someExportableAliasesSelected" :disabled="selectionBusy || !aliases.length" @change="setAllAliasesSelected">本页全选</el-checkbox>
+      <span class="selection-count">已选 {{ selectedAliasIds.length }}</span>
+      <el-button text :disabled="selectionBusy || !aliases.length" @click="invertCurrentPageSelection">反选本页</el-button>
+      <template v-if="selectedAliasIds.length">
+        <el-button text :disabled="selectionBusy" @click="clearAliasSelection">清空勾选</el-button>
+        <span class="alias-selection-toolbar__spacer" />
+        <el-button :icon="CopyDocument" :disabled="selectionBusy || !selectedAliases.length" @click="copySelectedAliases(ALIAS_EXPORT_OTP)">勾选取码</el-button>
+        <el-button :disabled="selectionBusy || !selectedAliases.length" @click="copySelectedAliases(ALIAS_EXPORT_IMAP)">勾选 IMAP</el-button>
+        <el-select v-model="moveTargetGroupId" class="alias-group-bulk-select" :loading="groupsLoading || movingAliases" :disabled="selectionBusy" placeholder="移动到分组" aria-label="将勾选的隐私邮箱移动到分组" @change="moveSelectedAliases">
+          <el-option label="未分组" value="none" />
+          <el-option v-for="group in groups" :key="group.id" :label="group.name" :value="String(group.id)" />
+        </el-select>
+        <el-button type="danger" plain :icon="Delete" :loading="deletingAliases" :disabled="selectionBusy" aria-label="从 Apple 永久删除勾选的隐私邮箱" @click="deleteSelectedAliases">从 Apple 删除（{{ selectedAliasIds.length }}）</el-button>
+      </template>
+      <span v-else class="alias-selection-toolbar__hint">勾选列拖动多选，支持跨页保留</span>
+    </div>
+
     <section
-      v-if="deletionJob || deletionState.recovering || deletionState.submitting || deletionState.uncertain"
+      v-if="deletionProgressVisible"
       class="data-panel alias-deletion-progress"
       aria-labelledby="alias-deletion-title"
     >
@@ -270,6 +243,13 @@
           :disabled="deletingAliases || deletionState.submitting"
           @click="refreshDeletionJob"
         >刷新任务状态</el-button>
+        <el-button
+          v-if="isAliasDeletionJobTerminal(deletionJob)"
+          text
+          :disabled="deletionState.uncertain"
+          aria-label="关闭删除任务提示"
+          @click="deletionVisibility.dismiss()"
+        >关闭</el-button>
       </div>
       <template v-if="deletionJob">
         <p role="status" aria-live="polite" aria-atomic="true">
@@ -413,7 +393,7 @@
               v-if="column.key === 'selection'"
               :model-value="allAliasesSelected"
               :indeterminate="someExportableAliasesSelected"
-              :disabled="aliases.length === 0"
+              :disabled="selectionBusy || aliases.length === 0"
               aria-label="勾选本页隐私邮箱"
               @change="setAllAliasesSelected"
             />
@@ -423,7 +403,9 @@
             <el-checkbox
               v-if="column.key === 'selection'"
               :model-value="isAliasSelected(row.id)"
-              :disabled="false"
+              :disabled="selectionBusy"
+              :data-selection-id="row.id"
+              :data-selection-disabled="selectionBusy"
               :aria-label="`勾选 ${row.address}`"
               @change="setAliasSelected(row, $event)"
             />
@@ -476,6 +458,7 @@
               >
                 等待目录确认
               </el-tag>
+              <el-tag v-else-if="!row.accountEnabled && row.configuredEnabled" type="info" effect="plain" size="small">随主号暂停</el-tag>
               <SyncStatus v-else :item="row" details />
             </template>
             <template v-else-if="column.key === 'actions'">
@@ -530,7 +513,9 @@
               <el-checkbox
                 class="mobile-alias-selection__checkbox"
                 :model-value="isAliasSelected(alias.id)"
-                :disabled="false"
+                :disabled="selectionBusy"
+                :data-selection-id="alias.id"
+                :data-selection-disabled="selectionBusy"
                 :aria-label="`勾选 ${alias.address}`"
                 @change="setAliasSelected(alias, $event)"
               />
@@ -547,6 +532,7 @@
             >
               等待目录确认
             </el-tag>
+            <el-tag v-else-if="!alias.accountEnabled && alias.configuredEnabled" type="info" effect="plain" size="small">随主号暂停</el-tag>
             <SyncStatus v-else :item="alias" details />
           </header>
           <dl class="mobile-kv-list">
@@ -648,6 +634,7 @@ import {
   EditPen,
   FolderAdd,
   Message,
+  MoreFilled,
   Refresh,
   RefreshLeft,
   Search,
@@ -688,6 +675,7 @@ import {
   isAliasDeletionJobActive,
   isAliasDeletionJobTerminal,
 } from "../utils/aliasDeletionJob.js";
+import { createAliasDeletionVisibility } from "../utils/aliasDeletionVisibility.js";
 import { ADMIN_BASE_PATH } from "../utils/runtimePath.js";
 import {
   createActionLock,
@@ -707,6 +695,7 @@ import {
 } from "../utils/feedback.js";
 import { formatTime } from "../utils/format.js";
 import { createLiveRefresh } from "../utils/liveRefresh.js";
+import { createCheckboxDragSelection } from "../utils/checkboxDragSelection.js";
 import {
   ALL_PAGE_SIZE,
   DEFAULT_PAGE_SIZE,
@@ -749,6 +738,9 @@ const appliedAliasQuery = ref("");
 const currentPage = ref(1);
 const total = ref(0);
 const selectedAliasIds = ref([]);
+const selectedAliasRecords = ref(new Map());
+const aliasSelectionContainer = ref(null);
+const selectionBusy = computed(() => loading.value || deletionJobBlocked.value || deletingAliases.value || movingAliases.value || exportingAll.value || rotatingAllCredentials.value);
 const loading = ref(false);
 const loadError = ref(null);
 const accountsLoading = ref(false);
@@ -764,9 +756,22 @@ const groupsLoadGate = createLatestRequestGate();
 let accountSearchTimer = null;
 let aliasAbortController = null;
 let viewActive = true;
+const aliasSelectionActive = ref(false);
+const aliasDrag = createCheckboxDragSelection({
+  getContainer: () => aliasSelectionContainer.value,
+  getSelected: () => selectedAliasIds.value,
+  isDisabled: () => selectionBusy.value,
+  onChange: updateAliasSelection,
+  onActiveChange: (active) => { aliasSelectionActive.value = active; },
+});
 
 const deletionState = ref({});
 const deletionResultsExpanded = ref(false);
+const deletionProgressVisible = ref(false);
+const deletionVisibility = createAliasDeletionVisibility({
+  onChange: (visible) => { deletionProgressVisible.value = visible; },
+});
+watch(() => deletionState.value, (state) => deletionVisibility.update(state), { immediate: true, deep: true });
 let deletionController = makeDeletionController();
 deletionState.value = deletionController.getState();
 const deletionJob = computed(() => deletionState.value.job);
@@ -794,6 +799,8 @@ const deletionStatusLabel = computed(() => {
 
 function makeDeletionController() {
   const username = auth.state.username;
+  let observedJobId = "";
+  let observedSubmission = false;
   return createAliasDeletionController({
     startJob: startAliasDeletionJob,
     getJob: getAliasDeletionJob,
@@ -802,13 +809,17 @@ function makeDeletionController() {
     onChange(next) {
       if (!viewActive || auth.state.username !== username) return;
       const previousJob = deletionState.value.job;
+      if (next.submitting || next.uncertain) observedSubmission = true;
+      if (isAliasDeletionJobActive(next.job)) observedJobId = next.job.jobId;
       deletionState.value = next;
       if (next.job && next.job.jobId !== previousJob?.jobId) {
         clearAliasSelection();
         deletionResultsExpanded.value = false;
       }
-      if (isAliasDeletionJobTerminal(next.job) &&
-          (next.job.jobId !== previousJob?.jobId || !isAliasDeletionJobTerminal(previousJob))) {
+      if (isAliasDeletionJobTerminal(next.job) && !next.blocked &&
+          (observedSubmission || observedJobId === next.job.jobId)) {
+        observedSubmission = false;
+        observedJobId = "";
         clearAliasSelection();
         void Promise.all([
           loadAliases({ silent: true }),
@@ -840,10 +851,7 @@ function acknowledgeDeletionState() {
 }
 
 const selectedAliases = computed(() => {
-  const selectedIds = new Set(selectedAliasIds.value);
-  return aliases.value.filter(
-    (alias) => selectedIds.has(alias.id) && isAliasExportable(alias),
-  );
+  return selectedAliasIds.value.map((id) => selectedAliasRecords.value.get(id)).filter(Boolean).filter(isAliasExportable);
 });
 
 const allAliasesSelected = computed(
@@ -1000,6 +1008,7 @@ async function loadGroups({ silent = false } = {}) {
     if (!silent && groupsLoadGate.isCurrent(ticket, "groups")) {
       groupsError.value = error;
     }
+    if (silent) return false;
   } finally {
     if (groupsLoadGate.isCurrent(ticket, "groups")) {
       groupsLoading.value = false;
@@ -1009,6 +1018,7 @@ async function loadGroups({ silent = false } = {}) {
 
 async function loadAliases({ silent = false } = {}) {
   if (rotatingAllCredentials.value) return;
+  if (silent && (aliasSelectionActive.value || loading.value || deletingAliases.value || movingAliases.value)) return;
   const accountId = selectedAccountId.value;
   const query = appliedAliasQuery.value;
   const groupId = appliedGroupId.value;
@@ -1064,10 +1074,9 @@ async function loadAliases({ silent = false } = {}) {
     }
     aliases.value = nextAliases;
     total.value = resolvedTotal;
-    const availableAliasIds = new Set(nextAliases.map((alias) => alias.id));
-    selectedAliasIds.value = selectedAliasIds.value.filter((id) =>
-      availableAliasIds.has(id),
-    );
+    const records = new Map(selectedAliasRecords.value);
+    nextAliases.forEach((alias) => { if (selectedAliasIds.value.includes(alias.id)) records.set(alias.id, alias); });
+    selectedAliasRecords.value = records;
     loadError.value = null;
   } catch (error) {
     if (
@@ -1080,6 +1089,7 @@ async function loadAliases({ silent = false } = {}) {
     ) {
       loadError.value = error;
     }
+    if (silent) return false;
   } finally {
     if (
       aliasAbortController === abortController &&
@@ -1097,10 +1107,13 @@ async function loadAliases({ silent = false } = {}) {
 }
 
 function clearAliasSelection() {
+  aliasDrag.stop();
   selectedAliasIds.value = [];
+  selectedAliasRecords.value = new Map();
 }
 
 function beginAliasMutation() {
+  aliasDrag.stop();
   aliasLoadGate.invalidate();
   groupsLoadGate.invalidate();
   aliasAbortController?.abort();
@@ -1158,8 +1171,8 @@ function handlePageChange(page) {
   if (pageSize.value === ALL_PAGE_SIZE) return;
   const nextPage = Math.max(1, Number(page) || 1);
   if (nextPage === currentPage.value) return;
+  aliasDrag.stop();
   currentPage.value = nextPage;
-  clearAliasSelection();
   aliases.value = [];
   loadError.value = null;
   void loadAliases();
@@ -1168,9 +1181,9 @@ function handlePageChange(page) {
 function handlePageSizeChange(value) {
   const nextPageSize = normalizePageSize(value);
   if (nextPageSize === pageSize.value) return;
+  aliasDrag.stop();
   pageSize.value = nextPageSize;
   currentPage.value = 1;
-  clearAliasSelection();
   aliases.value = [];
   total.value = 0;
   loadError.value = null;
@@ -1182,7 +1195,9 @@ const liveRefresh = createLiveRefresh(() => {
   return Promise.all([
     loadAliases({ silent: true }),
     loadGroups({ silent: true }),
-  ]);
+  ]).then((results) => results.includes(false) ? false : undefined);
+}, {
+  getIntervalMs: () => deletionWaits.value.length || ["queued", "running"].includes(deletionJob.value?.status) ? 5_000 : undefined,
 });
 
 function isAliasSelected(id) {
@@ -1190,6 +1205,7 @@ function isAliasSelected(id) {
 }
 
 function setAliasSelected(alias, selected) {
+  if (selectionBusy.value) return;
   const selectedIds = new Set(selectedAliasIds.value);
   if (selected) {
     selectedIds.add(alias.id);
@@ -1197,10 +1213,41 @@ function setAliasSelected(alias, selected) {
     selectedIds.delete(alias.id);
   }
   selectedAliasIds.value = [...selectedIds];
+  const records = new Map(selectedAliasRecords.value);
+  if (selected) records.set(alias.id, alias); else records.delete(alias.id);
+  selectedAliasRecords.value = records;
 }
 
 function setAllAliasesSelected(selected) {
-  selectedAliasIds.value = selected ? aliases.value.map((alias) => alias.id) : [];
+  if (selectionBusy.value) return;
+  const pageIds = new Set(aliases.value.map((alias) => alias.id));
+  const ids = selectedAliasIds.value.filter((id) => !pageIds.has(id));
+  if (selected) ids.push(...aliases.value.map((alias) => alias.id));
+  selectedAliasIds.value = [...new Set(ids)];
+  const records = new Map(selectedAliasRecords.value);
+  if (selected) aliases.value.forEach((alias) => records.set(alias.id, alias));
+  else pageIds.forEach((id) => records.delete(id));
+  selectedAliasRecords.value = records;
+}
+
+function updateAliasSelection(ids) {
+  const rows = new Map(aliases.value.map((alias) => [alias.id, alias]));
+  const records = new Map();
+  for (const id of ids) {
+    const row = rows.get(id) || selectedAliasRecords.value.get(id);
+    if (row) records.set(id, row);
+  }
+  selectedAliasRecords.value = records;
+  selectedAliasIds.value = [...records.keys()];
+}
+
+function invertCurrentPageSelection() {
+  if (selectionBusy.value) return;
+  const ids = new Set(selectedAliasIds.value);
+  for (const alias of aliases.value) {
+    if (ids.has(alias.id)) ids.delete(alias.id); else ids.add(alias.id);
+  }
+  updateAliasSelection([...ids]);
 }
 
 function batchDeleteAccountState(detail) {
@@ -1236,7 +1283,7 @@ async function deleteSelectedAliases() {
   const username = auth.state.username;
   const isCurrent = () => viewActive && deletionController === controller && auth.state.username === username;
   const selectedIds = [...selectedAliasIds.value];
-  const selected = aliases.value.filter((alias) => selectedIds.includes(alias.id));
+  const selected = selectedIds.map((id) => selectedAliasRecords.value.get(id)).filter(Boolean);
   if (selected.length !== selectedIds.length) {
     clearAliasSelection();
     showRequestError(
@@ -1713,7 +1760,9 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   viewActive = false;
+  aliasDrag.stop();
   deletionController.stop();
+  deletionVisibility.stop();
   if (accountSearchTimer !== null) {
     window.clearTimeout(accountSearchTimer);
     accountSearchTimer = null;
@@ -1727,6 +1776,22 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.alias-selection-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--glass-bg);
+}
+.selection-count, .alias-selection-toolbar__hint { color: var(--text-secondary); font-size: 12px; }
+.alias-selection-toolbar__hint { margin-left: auto; }
+.alias-selection-toolbar__spacer { flex: 1; }
+.alias-more-actions { display: grid; gap: 5px; }
+.alias-more-actions .el-button { width: 100%; justify-content: flex-start; }
+
 .alias-deletion-progress {
   display: grid;
   flex: 0 0 auto;
@@ -1777,9 +1842,9 @@ onBeforeUnmount(() => {
   align-items: end;
   gap: 14px;
   padding: 16px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
 }
 
 .alias-group-bulk-select {

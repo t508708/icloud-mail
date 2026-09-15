@@ -9,27 +9,31 @@ import (
 )
 
 const (
-	CodeLoginRequired            = "APPLE_LOGIN_REQUIRED"
-	CodeSessionExpired           = "APPLE_SESSION_EXPIRED"
-	CodeCredentialsInvalid       = "APPLE_CREDENTIALS_INVALID"
-	CodeVerificationInvalid      = "APPLE_VERIFICATION_INVALID"
-	CodeFlowExpired              = "APPLE_FLOW_EXPIRED"
-	CodeAccountActionRequired    = "APPLE_ACCOUNT_ACTION_REQUIRED"
-	CodeRateLimited              = "APPLE_RATE_LIMITED"
-	CodeUpstreamError            = "APPLE_UPSTREAM_ERROR"
-	CodeForwardingTargetMissing  = "APPLE_FORWARDING_TARGET_MISSING"
-	CodeAliasConfirmationPending = domain.AppleAliasConfirmationPending
-	CodeAccountMismatch          = "APPLE_ACCOUNT_MISMATCH"
-	CodeAccountChanged           = "ACCOUNT_CHANGED"
-	CodeAliasOwnershipConflict   = "ALIAS_OWNERSHIP_CONFLICT"
-	CodeAccountDisabled          = "ACCOUNT_DISABLED"
-	CodePersistenceError         = "AUTO_CREATION_PERSISTENCE_ERROR"
-	CodeCryptoError              = "AUTO_CREATION_CRYPTO_ERROR"
+	CodeLoginRequired               = "APPLE_LOGIN_REQUIRED"
+	CodeSessionExpired              = "APPLE_SESSION_EXPIRED"
+	CodeHMEUnavailable              = "APPLE_HME_UNAVAILABLE"
+	CodeHMEAuthentication           = "APPLE_HME_AUTH_FAILED"
+	CodeCredentialsInvalid          = "APPLE_CREDENTIALS_INVALID"
+	CodeVerificationInvalid         = "APPLE_VERIFICATION_INVALID"
+	CodeFlowExpired                 = "APPLE_FLOW_EXPIRED"
+	CodeAccountActionRequired       = "APPLE_ACCOUNT_ACTION_REQUIRED"
+	CodeRateLimited                 = "APPLE_RATE_LIMITED"
+	CodeUpstreamError               = "APPLE_UPSTREAM_ERROR"
+	CodeForwardingTargetMissing     = "APPLE_FORWARDING_TARGET_MISSING"
+	CodeAliasConfirmationPending    = domain.AppleAliasConfirmationPending
+	CodeAccountMismatch             = "APPLE_ACCOUNT_MISMATCH"
+	CodeAccountChanged              = "ACCOUNT_CHANGED"
+	CodeAliasOwnershipConflict      = "ALIAS_OWNERSHIP_CONFLICT"
+	CodeAccountDisabled             = "ACCOUNT_DISABLED"
+	CodePersistenceError            = "AUTO_CREATION_PERSISTENCE_ERROR"
+	CodeCryptoError                 = "AUTO_CREATION_CRYPTO_ERROR"
+	CodeMailboxAuthenticationPaused = "IMAP_AUTHENTICATION_PAUSED"
 )
 
 var (
 	ErrLoginRequired            = errors.New("Apple login required")
 	ErrSessionExpired           = errors.New("Apple session expired")
+	ErrHMEUnavailable           = errors.New("Hide My Email service unavailable")
 	ErrCredentialsInvalid       = errors.New("Apple credentials invalid")
 	ErrVerificationInvalid      = errors.New("Apple verification code invalid")
 	ErrFlowExpired              = errors.New("Apple verification flow expired")
@@ -213,6 +217,10 @@ func mapAppleError(err error, duringVerification bool) error {
 		return err
 	}
 	switch {
+	case errors.Is(err, apple.ErrHMEUnavailable):
+		return wrapError(CodeHMEUnavailable, ErrHMEUnavailable, err)
+	case errors.Is(err, apple.ErrHMEAuthentication):
+		return wrapError(CodeHMEAuthentication, ErrAccountActionRequired, err)
 	case errors.Is(err, apple.ErrInvalidSession):
 		return wrapError(CodeSessionExpired, ErrSessionExpired, err)
 	case errors.Is(err, apple.ErrAuthentication) && duringVerification:

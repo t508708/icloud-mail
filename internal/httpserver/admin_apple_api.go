@@ -346,9 +346,13 @@ func (s *Server) adminAPIAppleCreatedAliases(created []hmesync.CreatedAlias) ([]
 }
 
 type adminAPIAppleError struct {
-	Status  int
-	Code    string
-	Message string
+	Status                int
+	Code                  string
+	Message               string
+	UpstreamOperation     string
+	UpstreamStatus        int
+	UpstreamServiceCode   string
+	WebSessionDiagnostics *apple.WebSessionDiagnostics
 }
 
 func adminAPIAppleServiceUnavailable() adminAPIAppleError {
@@ -359,7 +363,16 @@ func adminAPIAppleServiceUnavailable() adminAPIAppleError {
 	}
 }
 
-func classifyAdminAPIAppleError(err error) adminAPIAppleError {
+func classifyAdminAPIAppleError(err error) (result adminAPIAppleError) {
+	defer func() {
+		var upstream *apple.Error
+		if errors.As(err, &upstream) {
+			result.UpstreamOperation = upstream.Op
+			result.UpstreamStatus = upstream.StatusCode
+			result.UpstreamServiceCode = upstream.ServiceCode
+			result.WebSessionDiagnostics = upstream.WebSession
+		}
+	}()
 	if errors.Is(err, context.DeadlineExceeded) {
 		return adminAPIAppleError{Status: http.StatusGatewayTimeout, Code: hmesync.CodeUpstreamError, Message: "Apple 服务响应超时，请稍后再试"}
 	}
@@ -376,6 +389,8 @@ func classifyAdminAPIAppleError(err error) adminAPIAppleError {
 			code = hmesync.CodeVerificationInvalid
 		case errors.Is(err, hmesync.ErrFlowExpired):
 			code = hmesync.CodeFlowExpired
+		case errors.Is(err, apple.ErrHMEAuthentication):
+			code = hmesync.CodeHMEAuthentication
 		case errors.Is(err, hmesync.ErrAccountActionRequired):
 			code = hmesync.CodeAccountActionRequired
 		case errors.Is(err, hmesync.ErrRateLimited):
@@ -395,6 +410,15 @@ func classifyAdminAPIAppleError(err error) adminAPIAppleError {
 		}
 	}
 	switch code {
+	case hmesync.CodeHMEAuthentication:
+		status := ""
+		var upstream *apple.Error
+		if errors.As(err, &upstream) && upstream.StatusCode > 0 {
+			status = "（HTTP " + strconv.Itoa(upstream.StatusCode) + "）"
+		}
+		return adminAPIAppleError{Status: http.StatusConflict, Code: code, Message: "Apple 账户验证已通过，但隐藏邮箱目录服务未接受此会话" + status + "。登录状态已保留，请先在对应区域的 iCloud 网页确认隐藏邮箱可以打开，再同步目录；区域与认证信息的诊断见该请求编号的操作日志"}
+	case hmesync.CodeHMEUnavailable:
+		return adminAPIAppleError{Status: http.StatusConflict, Code: code, Message: "Apple 登录已完成，但该会话未返回隐藏邮箱服务入口；请检查此账户的 iCloud+ 与网页版隐藏邮箱是否已开通。登录状态已保留"}
 	case hmesync.CodeLoginRequired:
 		return adminAPIAppleError{Status: http.StatusConflict, Code: code, Message: "请先连接 Apple 账户"}
 	case hmesync.CodeSessionExpired:
@@ -428,8 +452,13 @@ func (s *Server) adminAPIFinishAppleFailure(
 	apiErr adminAPIAppleError,
 ) {
 	s.logger.Warn("Apple 管理操作失败",
+		"account_id", accountID,
 		"action", action,
 		"code", apiErr.Code,
+		"upstream_operation", apiErr.UpstreamOperation,
+		"upstream_status", apiErr.UpstreamStatus,
+		"upstream_service_code", apiErr.UpstreamServiceCode,
+		"hme_request_diagnostics", apiErr.WebSessionDiagnostics,
 		"request_id", requestID(c),
 	)
 	s.audit(c, &adminSession.AdminID, adminSession.Username, action, "account", strconv.FormatInt(accountID, 10), "failed", apiErr.Code)

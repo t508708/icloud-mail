@@ -1,4 +1,6 @@
 /data/
+/.local/
+/compose.baota.yaml
 /*.db
 /*.db-shm
 /*.db-wal
@@ -6,6 +8,7 @@
 /icloud-api
 /icloud-api.exe
 /coverage.out
+/images/
 /.idea/
 /.vscode/
 /.env

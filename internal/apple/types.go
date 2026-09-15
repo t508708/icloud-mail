@@ -54,6 +54,7 @@ func DefaultEndpoints(region Region) (Endpoints, error) {
 // Session is the complete resumable Apple web session. It intentionally has
 // no password field and can be encrypted and persisted as JSON by callers.
 type Session struct {
+	Account                     *AccountSession    `json:"account_session,omitempty"`
 	Region                      Region             `json:"region"`
 	AppleID                     string             `json:"apple_id,omitempty"`
 	CountryCode                 string             `json:"country_code,omitempty"`
@@ -67,6 +68,8 @@ type Session struct {
 	DSID                        string             `json:"dsid,omitempty"`
 	PrimaryEmail                string             `json:"primary_email,omitempty"`
 	PremiumMailSettingsURL      string             `json:"premium_mail_settings_url,omitempty"`
+	MailURL                     string             `json:"mail_url,omitempty"`
+	MailGatewayURL              string             `json:"mail_gateway_url,omitempty"`
 	HSAVersion                  int                `json:"hsa_version,omitempty"`
 	HSAChallengeRequired        bool               `json:"hsa_challenge_required,omitempty"`
 	HSATrustedBrowser           bool               `json:"hsa_trusted_browser,omitempty"`
@@ -145,6 +148,12 @@ func (s *Session) applyAccount(response accountResponse) {
 	s.HideMyEmailFeatureAvailable = response.DSInfo.HideMyEmailFeatureAvailable
 	if premium, ok := response.Webservices["premiummailsettings"]; ok {
 		s.PremiumMailSettingsURL = strings.TrimRight(premium.URL, "/")
+	}
+	if mail, ok := response.Webservices["mail"]; ok {
+		s.MailURL = strings.TrimRight(mail.URL, "/")
+	}
+	if gateway, ok := response.Webservices["mccgateway"]; ok {
+		s.MailGatewayURL = strings.TrimRight(gateway.URL, "/")
 	}
 }
 

@@ -1,5 +1,5 @@
 <template>
-  <section class="page-stack">
+  <section ref="aliasSelectionContainer" class="page-stack" @pointerdown.capture="aliasDrag.pointerDown">
     <div v-if="loading && !account" class="data-panel loading-panel">
       <el-skeleton :rows="9" animated />
     </div>
@@ -20,7 +20,7 @@
       <el-dialog
         v-model="appleAuthVisible"
         class="apple-auth-dialog"
-        :title="appleAuthStep === 'verification' ? '输入双重认证验证码' : '登录 Apple 账户'"
+        :title="appleAuthStep === 'verification' ? '验证目录连接' : '登录目录连接 · iCloud Web'"
         width="min(520px, calc(100vw - 28px))"
         :close-on-click-modal="false"
         :close-on-press-escape="false"
@@ -134,34 +134,44 @@
       <section class="section-block" aria-labelledby="connection-title">
         <SectionHeader
           id="connection-title"
-          title="IMAP 邮件同步"
-          :description="`${account.imapUsername} · ${formatIMAPEndpoint(account)}`"
+          title="邮件接收"
+          description="按需获取邮件正文与验证码；访问取件地址或取件 API 时才读取对应邮箱，不随地址目录同步拉取邮件。"
         >
           <template #actions>
-            <el-button
-              :icon="Refresh"
-              :loading="syncLoading || syncActive"
-              :disabled="!account.enabled || syncActive || randomAliasLoading"
-              @click="syncNow"
-            >
-              {{ syncActive ? "同步处理中" : "同步邮件" }}
-            </el-button>
-            <el-button :icon="EditPen" @click="editAccount">编辑</el-button>
+            <el-radio-group v-if="canUseWebMail" :model-value="account.mailTransport" :disabled="!account.enabled || syncActive || mailTransportLoading || detailMutationPending()" aria-label="邮件接收通道" @change="changeMailTransport">
+              <el-radio-button value="imap">IMAP</el-radio-button><el-radio-button value="webmail">iCloud 网页收件</el-radio-button>
+            </el-radio-group>
+            <el-button :icon="EditPen" :disabled="manualAliasLoading" @click="editAccount">配置收件凭据</el-button>
           </template>
         </SectionHeader>
 
-        <dl class="detail-grid">
+        <div class="section-status-row">
+          <div>
+            <span class="section-status-row__label">收件状态</span>
+            <span v-if="account.enabled && account.mailTransport === 'webmail' && isIMAPAuthenticationFailure(account.lastSyncError)">网页收件待首次取件</span>
+            <SyncStatus v-else :item="account" />
+          </div>
+          <div>
+            <span class="section-status-row__label">最近邮件同步</span>
+            <strong>{{ formatTime(account.lastSyncedAt, { seconds: true }) }}</strong>
+          </div>
+        </div>
+
+        <div v-if="!account.enabled" class="account-paused-notice" role="status">
+          <strong>主号已停用</strong>
+          <span>收件连接已暂停；下属邮箱从隐藏邮箱列表和邮箱池入池候选中隐藏。重新启用后恢复邮箱列表显示，并按停用前快照恢复原启用及池成员状态；单独停用的邮箱仍保持停用。邮箱与历史记录未删除。</span>
+        </div>
+
+        <details class="settings-disclosure">
+          <summary>收件连接与高级操作</summary>
+          <dl class="detail-grid">
+          <div>
+            <dt>IMAP 收件连接</dt>
+            <dd>{{ account.imapUsername }} · {{ formatIMAPEndpoint(account) }}</dd>
+          </div>
           <div>
             <dt>收件规则</dt>
             <dd>{{ receiveRuleLabel }}</dd>
-          </div>
-          <div>
-            <dt>状态</dt>
-            <dd><SyncStatus :item="account" /></dd>
-          </div>
-          <div>
-            <dt>最近同步</dt>
-            <dd>{{ formatTime(account.lastSyncedAt, { seconds: true }) }}</dd>
           </div>
           <div v-if="!isCustomMailbox">
             <dt>主号邮箱</dt>
@@ -179,10 +189,26 @@
             <dt>备注</dt>
             <dd>{{ account.name || "-" }}</dd>
           </div>
-        </dl>
+          </dl>
+          <p v-if="account.mailTransport === 'webmail'" class="field-help">按需访问取件地址/API，使用 iCloud Web 目录登录态；不会使用 Apple Account 新建连接，也不会后台轮询。</p>
+          <p v-else class="field-help">IMAP 是邮件读取协议，不是 Apple 隐私邮箱的新旧创建通道。</p>
+          <el-button
+            v-if="account.mailTransport !== 'webmail'"
+            :icon="Refresh"
+            :loading="syncLoading || syncActive"
+            :disabled="!account.enabled || syncActive || randomAliasLoading || manualAliasLoading || isIMAPAuthenticationFailure(account.lastSyncError)"
+            @click="syncNow"
+          >
+            {{ syncActive ? "邮件同步处理中" : "手动同步主号邮件" }}
+          </el-button>
+        </details>
 
-        <div v-if="account.lastSyncError" class="inline-error" role="status">
-          <strong>最近错误</strong>
+        <div v-if="account.mailTransport === 'webmail' && isIMAPAuthenticationFailure(account.lastSyncError)" class="field-help">网页收件待首次取件；上次 IMAP 认证记录已保留在高级详情中。</div>
+        <div v-if="account.lastSyncError && !(account.mailTransport === 'webmail' && isIMAPAuthenticationFailure(account.lastSyncError))" class="inline-error" role="status">
+          <strong>{{ isIMAPAuthenticationFailure(account.lastSyncError) ? '收件认证未通过' : '最近收件异常' }}</strong>
+          <p v-if="isIMAPAuthenticationFailure(account.lastSyncError)">
+            邮件正文与验证码读取已暂停，地址目录同步不代表收件恢复。请在“配置收件凭据”中更新收件密码；iCloud IMAP 使用 App 专用密码，与 Apple 登录密码和新建连接会话不同。
+          </p>
           <div class="inline-error__content">
             <span>{{ account.lastSyncError }}</span>
             <SyncErrorLogDialog
@@ -191,6 +217,9 @@
             />
           </div>
         </div>
+        <details v-if="account.mailTransport === 'webmail' && isIMAPAuthenticationFailure(account.lastSyncError)" class="settings-disclosure">
+          <summary>上次 IMAP 认证记录</summary><div class="inline-error__content"><span>{{ account.lastSyncError }}</span><SyncErrorLogDialog :log="account.lastSyncErrorLog || account.lastSyncError" :account-id="account.id" /></div>
+        </details>
       </section>
 
       <section class="section-block" aria-labelledby="aliases-title">
@@ -199,18 +228,9 @@
           title="隐私邮箱"
           :description="isCustomMailbox
             ? '按邮箱后缀生成或手动登记地址；每个地址使用独立的完整凭证包。'
-            : '从 Apple 拉取 Hide My Email 地址目录；每个本地地址使用独立的完整凭证包。'"
+            : '仅同步隐藏邮箱地址、备注与启停状态，不下载邮件正文或验证码。取码由上方的按需收件处理。'"
         >
           <template #actions>
-            <el-button
-              v-if="!isCustomMailbox && appleSessionAuthenticated"
-              :icon="SwitchButton"
-              :loading="appleDisconnectLoading"
-              :disabled="appleAliasControlsDisabled || aliasesSyncLoading"
-              @click="disconnectAppleSession"
-            >
-              退出 Apple 登录
-            </el-button>
             <el-button
               v-if="!isCustomMailbox"
               type="primary"
@@ -219,21 +239,23 @@
               :disabled="appleAliasControlsDisabled || appleDisconnectLoading"
               @click="syncAliasesFromApple"
             >
-              同步隐私邮箱
+              同步地址目录
             </el-button>
           </template>
         </SectionHeader>
 
-        <div v-if="!isCustomMailbox" class="apple-session-strip">
-          <div class="apple-session-strip__identity">
-            <el-tag :type="appleSessionAuthenticated ? 'success' : 'info'" effect="plain">
-              {{ appleSessionAuthenticated ? "Apple 已登录" : "Apple 未登录" }}
-            </el-tag>
-            <span v-if="appleSession?.appleId">{{ appleSession.appleId }}</span>
-            <span v-if="appleSessionAuthenticated">
-              {{ appleSession.region === "cn" ? "中国大陆" : "全球" }}
-            </span>
-          </div>
+        <AppleConnectionPanel
+          v-if="!isCustomMailbox"
+          :account-id="account.id"
+          :apple-id-hint="appleSession?.appleId || account.email"
+          :web-authenticated="appleSessionAuthenticated"
+          :csrf-token="auth.state.csrfToken"
+          :busy="appleConnectionBlocked"
+          @busy="(busy) => (appleConnectionLoading = busy)"
+          @open-web-login="openAppleLogin()"
+          @disconnect-web="disconnectAppleSession"
+        />
+        <div v-if="!isCustomMailbox && aliasSyncSummary" class="apple-session-strip">
           <div v-if="aliasSyncSummary" class="apple-session-strip__summary">
             上次同步：共 {{ aliasSyncSummary.total }}，新建
             {{ aliasSyncSummary.createdCount }}，已存在
@@ -243,6 +265,23 @@
             {{ aliasSyncSummary.conflictCount }}
           </div>
         </div>
+
+      </section>
+
+      <section v-if="!isCustomMailbox" class="section-block alias-creation-row" aria-labelledby="batch-creation-title">
+        <AliasCreationPanel
+          :account-id="account.id"
+          :account-enabled="account.enabled"
+          :web-authenticated="appleSessionAuthenticated"
+          :connection-busy="appleConnectionLoading || appleAuthLoading || appleDisconnectLoading || aliasesSyncLoading"
+          :csrf-token="auth.state.csrfToken"
+          @busy="(busy) => (manualAliasLoading = busy)"
+          @operation-busy="(busy) => (batchOperationLoading = busy)"
+          @change="onAliasCreationChange"
+        />
+      </section>
+
+      <section class="section-block">
 
         <div
           v-if="autoCreation && !isCustomMailbox"
@@ -261,9 +300,14 @@
                   {{ autoCreationStatusLabel(autoCreation) }}
                 </el-tag>
               </div>
-              <p>
-                每小时 5 个 · 随机间隔 · 最短 5 分钟。签发后可通过邮箱列表中的复制操作导出完整凭证。
-              </p>
+              <div class="auto-creation-panel__status-line">
+                <span>最近尝试 {{ formatTime(autoCreation.lastAttemptedAt, { seconds: true }) }}</span>
+                <span v-if="autoCreation.recentCreatedCount !== null || autoCreation.todayCreatedCount !== null" title="已确认创建；手动、批量、自动创建汇总；今日按服务时区">
+                  <span v-if="autoCreation.recentCreatedCount !== null">近 1 小时成功 {{ autoCreation.recentCreatedCount }} 个</span>
+                  <span v-if="autoCreation.recentCreatedCount !== null && autoCreation.todayCreatedCount !== null"> · </span>
+                  <span v-if="autoCreation.todayCreatedCount !== null">今日成功 {{ autoCreation.todayCreatedCount }} 个</span>
+                </span>
+              </div>
             </div>
             <div class="auto-creation-panel__actions">
               <el-switch
@@ -278,7 +322,12 @@
             </div>
           </div>
 
-          <dl class="auto-creation-metrics">
+          <details class="settings-disclosure">
+            <summary>计划详情</summary>
+            <p>
+              后台批量与自动创建共享本地预算：滚动 1 小时最多 18 次，尝试至少间隔 2 分钟；手动探测使用独立 25 次/小时额度，不消耗后台额度，也不受后台 Apple 24 小时冷却阻挡，且不修改后台冷却或计划。失败和待确认尝试也计数。自动只选择本轮初始通道，限流后不会切换通道。Apple 明确限流后暂停至少 24 小时。这是本项目的保守上限，不代表 Apple 官方配额保证；一次多件请使用上方批量任务。
+            </p>
+            <dl class="auto-creation-metrics">
             <div>
               <dt>当前隐私邮箱</dt>
               <dd aria-live="polite" aria-atomic="true">
@@ -305,21 +354,22 @@
               <dt>最近尝试</dt>
               <dd>{{ formatTime(autoCreation.lastAttemptedAt, { seconds: true }) }}</dd>
             </div>
-            <div>
-              <dt>最近创建</dt>
-              <dd>
-                <span>{{ formatTime(autoCreation.lastCreatedAt, { seconds: true }) }}</span>
-                <small v-if="autoCreation.lastAliasAddress">
-                  {{ autoCreation.lastAliasAddress }}
-                </small>
-              </dd>
+            <div title="已确认创建；手动、批量、自动创建汇总；今日按服务时区">
+              <dt>近 1 小时成功</dt>
+              <dd>{{ autoCreation.recentCreatedCount === null ? '—' : `${autoCreation.recentCreatedCount} 个` }}</dd>
             </div>
-          </dl>
+            <div title="已确认创建；手动、批量、自动创建汇总；今日按服务时区">
+              <dt>今日成功</dt>
+              <dd>{{ autoCreation.todayCreatedCount === null ? '—' : `${autoCreation.todayCreatedCount} 个` }}</dd>
+            </div>
+            </dl>
+          </details>
 
-          <div v-if="autoCreation.lastError" class="auto-creation-error" role="status">
+          <div v-if="autoCreation.lastError && !isAutoCreationRateLimited(autoCreation)" class="auto-creation-error" role="status">
             <strong>最近错误</strong>
             <span>{{ autoCreationErrorMessage(autoCreation.lastError) }}</span>
           </div>
+
         </div>
 
         <div
@@ -386,6 +436,17 @@
               @clear="applyAliasSearch"
             />
           </label>
+          <el-select
+            v-model="aliasEnabledFilter"
+            class="account-alias-search__status"
+            aria-label="邮箱状态筛选"
+            placeholder="全部状态"
+            @change="applyAliasEnabledFilter"
+          >
+            <el-option label="全部状态" value="" />
+            <el-option label="启用" value="true" />
+            <el-option label="停用" value="false" />
+          </el-select>
           <div class="account-alias-search__actions">
             <el-button
               type="primary"
@@ -403,8 +464,37 @@
               清空
             </el-button>
           </div>
+          <div v-if="!isCustomMailbox" class="account-alias-search__selection">
+            <el-checkbox
+              :model-value="allAliasesSelected"
+              :indeterminate="someAliasesSelected"
+              :disabled="!selectableAliases.length || aliasSelectionBusy"
+              @change="setAllAliasesSelected"
+            >本页全选</el-checkbox>
+            <span class="account-alias-selected-count">已选 {{ selectedAliasIds.length }}</span>
+            <el-button text :disabled="aliasSelectionBusy" @click="invertCurrentPageSelection">反选本页</el-button>
+            <el-button
+              text
+              :disabled="!selectedAliasIds.length || aliasSelectionBusy"
+              @click="clearAliasSelection"
+            >清选</el-button>
+          </div>
+          <el-button
+            v-if="!isCustomMailbox"
+            class="account-alias-delete-button"
+            type="danger"
+            :disabled="!selectedAliasIds.length || loading || detailMutationPending()"
+            :loading="batchDeleteConfirming || deletionState.submitting"
+            @click="deleteSelectedAliases"
+          >从 iCloud 永久删除隐藏邮箱</el-button>
         </div>
 
+        <AliasDeletionProgress
+          v-if="!isCustomMailbox"
+          :state="deletionState"
+          @refresh="refreshDeletionJob"
+          @acknowledge="acknowledgeDeletionState"
+        />
         <div
           v-if="loading && aliases.length === 0"
           class="data-panel loading-panel"
@@ -431,15 +521,35 @@
           :aria-busy="loading"
         >
           <VirtualDataTable
-            :columns="aliasColumns"
+            :columns="visibleAliasColumns"
             :data="aliases"
             row-key="id"
             fill-height
             :row-height="64"
             :loading="loading"
           >
+            <template #header-cell="{ column }">
+              <el-checkbox
+                v-if="column.key === 'selection'"
+                :model-value="allAliasesSelected"
+                :indeterminate="someAliasesSelected"
+                :disabled="!selectableAliases.length || aliasSelectionBusy"
+                aria-label="勾选本页隐私邮箱"
+                @change="setAllAliasesSelected"
+              />
+              <template v-else>{{ column.title }}</template>
+            </template>
             <template #cell="{ column, rowData: row }">
-              <template v-if="column.key === 'address'">
+              <el-checkbox
+                v-if="column.key === 'selection'"
+                :model-value="selectedAliasIds.includes(row.id)"
+                :data-selection-id="row.id"
+                :data-selection-disabled="isAliasConfirmationPending(row) || aliasSelectionBusy"
+                :disabled="isAliasConfirmationPending(row) || aliasSelectionBusy"
+                :aria-label="`勾选 ${row.address}`"
+                @change="setAliasSelected(row, $event)"
+              />
+              <template v-else-if="column.key === 'address'">
                 <div class="primary-stack">
                   <strong>{{ row.address }}</strong>
                   <small>{{ row.label || "未填写用途备注" }}</small>
@@ -475,17 +585,19 @@
                 >
                   等待目录确认
                 </el-tag>
+                <el-tag v-else-if="!row.accountEnabled && row.configuredEnabled" type="info" effect="plain" size="small">随主号暂停</el-tag>
                 <SyncStatus v-else :item="row" details />
               </template>
               <template v-else-if="column.key === 'enabled'">
                 <el-switch
-                  v-if="!isAliasConfirmationPending(row)"
-                  :model-value="row.enabled"
+                  v-if="row.accountEnabled && !isAliasConfirmationPending(row)"
+                  :model-value="row.configuredEnabled"
                   :loading="Boolean(toggleLoading[row.id])"
                   :disabled="isAliasActionBusy(row)"
                   :aria-label="`启用隐私邮箱 ${row.address}`"
                   @change="(enabled) => toggleAlias(row, enabled)"
                 />
+                <span v-else-if="!row.configuredEnabled" class="muted-text">已停用</span>
               </template>
               <template v-else-if="column.key === 'actions'">
                 <div
@@ -553,6 +665,15 @@
         >
           <article v-for="alias in aliases" :key="alias.id" class="mobile-record">
             <header class="mobile-record__header">
+              <el-checkbox
+                v-if="!isCustomMailbox"
+                :model-value="selectedAliasIds.includes(alias.id)"
+                :data-selection-id="alias.id"
+                :data-selection-disabled="isAliasConfirmationPending(alias) || aliasSelectionBusy"
+                :disabled="isAliasConfirmationPending(alias) || aliasSelectionBusy"
+                :aria-label="`勾选 ${alias.address}`"
+                @change="setAliasSelected(alias, $event)"
+              />
               <div class="primary-stack">
                 <strong>{{ alias.address }}</strong>
                 <small>{{ alias.label || "未填写用途备注" }}</small>
@@ -565,6 +686,7 @@
               >
                 等待目录确认
               </el-tag>
+              <el-tag v-else-if="!alias.accountEnabled && alias.configuredEnabled" type="info" effect="plain" size="small">随主号暂停</el-tag>
               <SyncStatus v-else :item="alias" details />
             </header>
             <dl class="mobile-kv-list">
@@ -593,16 +715,18 @@
                   </el-select>
                 </dd>
               </div>
-              <div v-if="!isAliasConfirmationPending(alias)">
+              <div v-if="!alias.accountEnabled || !isAliasConfirmationPending(alias)">
                 <dt>启用</dt>
                 <dd>
                   <el-switch
-                    :model-value="alias.enabled"
+                    v-if="alias.accountEnabled && !isAliasConfirmationPending(alias)"
+                    :model-value="alias.configuredEnabled"
                     :loading="Boolean(toggleLoading[alias.id])"
                     :disabled="isAliasActionBusy(alias)"
                     :aria-label="`启用隐私邮箱 ${alias.address}`"
                     @change="(enabled) => toggleAlias(alias, enabled)"
                   />
+                  <span v-else>{{ alias.configuredEnabled ? "随主号暂停" : "已停用" }}</span>
                 </dd>
               </div>
             </dl>
@@ -767,7 +891,6 @@ import {
   Refresh,
   RefreshLeft,
   Search,
-  SwitchButton,
 } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
@@ -792,6 +915,8 @@ import {
   deleteAppleSession,
   getAccount,
   getAliasPage,
+  getAliasDeletionJob,
+  getLatestAliasDeletionJob,
   getAllAliases,
   getMailGroups,
   loginAppleSession,
@@ -802,8 +927,13 @@ import {
   syncAccount,
   syncAccountAliases,
   verifyAppleSession,
+  startAliasDeletionJob,
+  updateAccountMailTransport,
 } from "../api/admin.js";
 import EmptyState from "../components/EmptyState.vue";
+import AliasCreationPanel from "../components/AliasCreationPanel.vue";
+import AppleConnectionPanel from "../components/AppleConnectionPanel.vue";
+import AliasDeletionProgress from "../components/AliasDeletionProgress.vue";
 import ListPagination from "../components/ListPagination.vue";
 import RequestAlert from "../components/RequestAlert.vue";
 import SectionHeader from "../components/SectionHeader.vue";
@@ -829,23 +959,40 @@ import {
 } from "../utils/feedback.js";
 import { formatTime } from "../utils/format.js";
 import { formatIMAPEndpoint, mailboxReceiveRule } from "../utils/imap.js";
+import {
+  createAliasDeletionController,
+  createAliasDeletionStorage,
+  isAliasDeletionJobTerminal,
+  isAliasDeletionJobActive,
+} from "../utils/aliasDeletionJob.js";
+import { ADMIN_BASE_PATH } from "../utils/runtimePath.js";
 import { createLiveRefresh } from "../utils/liveRefresh.js";
 import {
   ALL_PAGE_SIZE,
   DEFAULT_PAGE_SIZE,
   normalizePageSize,
 } from "../utils/pagination.js";
+import { createCheckboxDragSelection } from "../utils/checkboxDragSelection.js";
 
 const route = useRoute();
 const router = useRouter();
 const auth = useAuth();
 const account = ref(null);
+const mailTransportLoading = ref(false);
 const aliases = ref([]);
 const currentPage = ref(1);
 const pageSize = ref(DEFAULT_PAGE_SIZE);
 const total = ref(0);
 const aliasQueryDraft = ref("");
 const appliedAliasQuery = ref("");
+const aliasEnabledFilter = ref("");
+const selectedAliasRecords = ref(new Map());
+const selectedAliasIds = computed(() => [...selectedAliasRecords.value.keys()]);
+const aliasSelectionContainer = ref(null);
+const aliasSelectionActive = ref(false);
+const deletionState = ref({ job: null, blocked: true, recovering: true });
+const batchDeleteConfirming = ref(false);
+let deletionController;
 const groups = ref([]);
 const groupsLoading = ref(false);
 const groupsError = ref(null);
@@ -871,6 +1018,9 @@ const autoCreationLoading = ref(false);
 const randomAliasCount = ref(1);
 const randomAliasLoading = ref(false);
 const randomAliasError = ref(null);
+const manualAliasLoading = ref(false);
+const batchOperationLoading = ref(false);
+const appleConnectionLoading = ref(false);
 const aliasSyncSummary = ref(null);
 const copyLoading = reactive({});
 const toggleLoading = reactive({});
@@ -891,10 +1041,37 @@ let resumeAutoCreationAfterAuth = false;
 
 const syncActive = computed(() => Boolean(account.value?.syncProgress?.active));
 const hasAliasSearch = computed(() =>
-  Boolean(aliasQueryDraft.value.trim() || appliedAliasQuery.value),
+  Boolean(aliasQueryDraft.value.trim() || appliedAliasQuery.value || aliasEnabledFilter.value),
 );
+const selectableAliases = computed(() => aliases.value.filter((alias) =>
+  String(alias.accountId) === detailRouteKey() && !isAliasConfirmationPending(alias),
+));
+const allAliasesSelected = computed(() => selectableAliases.value.length > 0 &&
+  selectableAliases.value.every((alias) => selectedAliasIds.value.includes(alias.id)),
+);
+const someAliasesSelected = computed(() => selectableAliases.value.some((a) => selectedAliasRecords.value.has(a.id)) && !allAliasesSelected.value);
+const aliasSelectionBusy = computed(() => loading.value || batchDeleteConfirming.value || deletionState.value.blocked);
+const aliasDrag = createCheckboxDragSelection({
+  getContainer: () => aliasSelectionContainer.value,
+  getSelected: () => selectedAliasIds.value,
+  isDisabled: (id) => aliasSelectionBusy.value || aliases.value.some((a) => a.id === id && isAliasConfirmationPending(a)),
+  onChange: (ids) => {
+    const next = new Map(selectedAliasRecords.value);
+    const selected = new Set(ids);
+    for (const row of selectableAliases.value) {
+      if (selected.has(row.id)) next.set(row.id, row); else next.delete(row.id);
+    }
+    selectedAliasRecords.value = next;
+  },
+  onActiveChange: (active) => { aliasSelectionActive.value = active; },
+});
 const isCustomMailbox = computed(
   () => account.value?.mailboxType === "custom",
+);
+const canUseWebMail = computed(() => !isCustomMailbox.value && mailboxReceiveRule(account.value || {}) !== "icloud-forwarded");
+const visibleAliasColumns = computed(() => isCustomMailbox.value
+  ? aliasColumns.filter((column) => column.key !== "selection")
+  : aliasColumns,
 );
 const receiveRuleLabel = computed(() => {
   switch (mailboxReceiveRule(account.value || {})) {
@@ -927,6 +1104,7 @@ const appleVerificationRules = {
   ],
 };
 const aliasColumns = Object.freeze([
+  { key: "selection", title: "", width: 48, minWidth: 48, align: "center" },
   {
     key: "address",
     dataKey: "address",
@@ -976,6 +1154,9 @@ const aliasColumns = Object.freeze([
 const appleSessionAuthenticated = computed(
   () => appleSession.value?.status === "authenticated",
 );
+const appleConnectionBlocked = computed(() => batchOperationLoading.value ||
+  appleAuthLoading.value || appleDisconnectLoading.value || aliasesSyncLoading.value ||
+  autoCreationLoading.value || randomAliasLoading.value || deletionState.value.blocked || batchDeleteConfirming.value);
 function appleVerificationActionLabel() {
   if (resumeAutoCreationAfterAuth) return "验证并开启";
   if (resumeAliasSyncAfterAuth) return "验证并同步";
@@ -985,8 +1166,10 @@ const autoCreationControlDisabled = computed(
   () =>
     autoCreationLoading.value ||
     randomAliasLoading.value ||
+    manualAliasLoading.value ||
     aliasesSyncLoading.value ||
     appleDisconnectLoading.value ||
+    appleConnectionLoading.value ||
     appleAuthLoading.value,
 );
 const autoCreationToggleDisabled = computed(
@@ -997,14 +1180,20 @@ const autoCreationToggleDisabled = computed(
 const appleAliasControlsDisabled = computed(
   () =>
     autoCreationLoading.value ||
+    manualAliasLoading.value ||
+    appleConnectionLoading.value ||
     appleAuthLoading.value,
 );
 
 const AUTO_CREATION_ERROR_MESSAGES = Object.freeze({
+  APPLE_CREATION_BUDGET_WAIT:
+    "本项目的主号共享创建预算正在等待恢复；这是本地节流，不表示 Apple 返回了限流。",
   APPLE_LOGIN_REQUIRED:
-    "Apple 账户尚未登录，请点击“同步隐私邮箱”并完成登录后重试",
+    "目录连接尚未登录，请点击“同步地址目录”并完成登录后重试",
   APPLE_SESSION_EXPIRED:
-    "Apple 登录已过期，请点击“同步隐私邮箱”并重新登录后重试",
+    "目录登录已过期，请点击“同步地址目录”并重新登录后重试",
+  APPLE_HME_AUTH_FAILED:
+    "账户验证已通过，但隐藏邮箱目录未接受此会话；登录状态已保留，请检查对应区域的 iCloud 网页隐藏邮箱服务",
   APPLE_CREDENTIALS_INVALID:
     "Apple 登录凭据无效，请退出 Apple 登录并重新登录后重试",
   APPLE_VERIFICATION_INVALID:
@@ -1014,11 +1203,11 @@ const AUTO_CREATION_ERROR_MESSAGES = Object.freeze({
   APPLE_ACCOUNT_ACTION_REQUIRED:
     "Apple 账户需要完成条款确认或其他账户操作，请前往 Apple 官网处理后重试",
   APPLE_RATE_LIMITED:
-    "Apple 请求过于频繁，自动创建已进入冷却，冷却后会继续执行",
+    "Apple 返回了限流；该创建计划已暂停至少 24 小时，不会自动切换到另一通道。",
   APPLE_UPSTREAM_ERROR:
     "Apple 服务暂时异常，请稍后再试；自动创建会按计划继续执行",
   APPLE_ALIAS_CONFIRMATION_PENDING:
-    "Apple 已创建隐私邮箱，正在等待目录确认；后续自动创建计划只会继续确认，不会重复创建",
+    "Apple 创建结果尚未完成目录确认；后续计划会继续确认，确认前不会重复创建",
   APPLE_ACCOUNT_MISMATCH:
     "Apple 登录账户或隐藏邮件地址的默认转发目标与当前主号不匹配，请确认登录了正确的 Apple 账户，并在 iCloud 设置中把‘转发到’改为当前主号后重新开启",
   APPLE_FORWARDING_TARGET_MISSING:
@@ -1038,9 +1227,40 @@ const AUTO_CREATION_ERROR_MESSAGES = Object.freeze({
 function autoCreationErrorMessage(value) {
   const original = String(value ?? "");
   const code = original.trim();
-  return Object.prototype.hasOwnProperty.call(AUTO_CREATION_ERROR_MESSAGES, code)
-    ? AUTO_CREATION_ERROR_MESSAGES[code]
-    : original;
+  if (Object.prototype.hasOwnProperty.call(AUTO_CREATION_ERROR_MESSAGES, code)) {
+    return AUTO_CREATION_ERROR_MESSAGES[code];
+  }
+  if (isLocalCreationBudgetWait(code)) {
+    return AUTO_CREATION_ERROR_MESSAGES.APPLE_CREATION_BUDGET_WAIT;
+  }
+  if (isAppleRateLimited(code)) {
+    return AUTO_CREATION_ERROR_MESSAGES.APPLE_RATE_LIMITED;
+  }
+  return original;
+}
+
+function isAutoCreationRateLimited(item) {
+  const error = String(item?.lastError || "").trim();
+  return isAppleRateLimited(error) ||
+    (item?.status === "cooldown" && !isLocalCreationBudgetWait(error));
+}
+
+function isLocalCreationBudgetWait(value) {
+  const message = String(value || "");
+  const code = message.toUpperCase();
+  return code.includes("APPLE_CREATION_BUDGET_WAIT") || message.includes("本地主号创建预算已用尽");
+}
+
+function isAppleRateLimited(value) {
+  const message = String(value || "");
+  const code = message.toUpperCase();
+  return code.includes("APPLE_RATE_LIMITED") || message.includes("Apple 请求被限流") || message.includes("Apple 请求过于频繁") || message.includes("Apple 返回了限流");
+}
+
+function isIMAPAuthenticationFailure(value) {
+  const message = String(value || "").toLowerCase();
+  return message.includes("imap_authentication_paused") ||
+    /imap.{0,40}(authentication|auth failed|login failed|invalid credentials)|(?:authentication|auth) (?:failed|rejected)|invalid credentials/.test(message);
 }
 
 function isAliasConfirmationPending(item) {
@@ -1083,6 +1303,9 @@ function normalizedAutoCreationStatus(item) {
 function autoCreationStatusLabel(item) {
   if (account.value && !account.value.enabled) return "主号已停用";
   if (!item?.enabled) return "已关闭";
+  if (isAutoCreationRateLimited(item)) {
+    return "限流冷却中";
+  }
   switch (normalizedAutoCreationStatus(item)) {
     case "running":
     case "creating":
@@ -1093,6 +1316,10 @@ function autoCreationStatusLabel(item) {
       return "最近失败";
     case "paused":
       return "已暂停";
+    case "cooldown":
+      return isLocalCreationBudgetWait(item?.lastError)
+        ? "等待本地主号共享预算"
+        : "创建等待中";
     case "login_required":
       return "需要 Apple 登录";
     case "pending":
@@ -1112,6 +1339,7 @@ function autoCreationStatusLabel(item) {
 
 function autoCreationStatusType(item) {
   if (!item?.enabled) return "info";
+  if (isAutoCreationRateLimited(item)) return "success";
   switch (normalizedAutoCreationStatus(item)) {
     case "running":
     case "creating":
@@ -1122,6 +1350,8 @@ function autoCreationStatusType(item) {
     case "failed":
       return "danger";
     case "paused":
+      return "info";
+    case "cooldown":
       return "info";
     case "login_required":
       return "warning";
@@ -1153,6 +1383,10 @@ function isCurrentAccount(accountId) {
     route.name === "account-detail" &&
     detailRouteKey() === String(accountId || "")
   );
+}
+
+function onAliasCreationChange(job) {
+  if (job && isCurrentAccount(job.account_id)) loadDetail();
 }
 
 function isAppleSessionInvalid(error) {
@@ -1207,7 +1441,72 @@ function detailRequestKey(
   selectedPageSize = pageSize.value,
   query = appliedAliasQuery.value,
 ) {
-  return `${accountId}\u0000${query}\u0000${page}\u0000${selectedPageSize}`;
+  return `${accountId}\u0000${query}\u0000${aliasEnabledFilter.value}\u0000${page}\u0000${selectedPageSize}`;
+}
+
+function clearAliasSelection() {
+  aliasDrag?.stop();
+  selectedAliasRecords.value = new Map();
+}
+
+function setAliasSelected(alias, checked) {
+  if (aliasSelectionBusy.value || !selectableAliases.value.some((item) => item.id === alias.id)) return;
+  const next = new Map(selectedAliasRecords.value);
+  if (checked) next.set(alias.id, alias); else next.delete(alias.id);
+  selectedAliasRecords.value = next;
+}
+
+function setAllAliasesSelected(checked) {
+  if (aliasSelectionBusy.value) return;
+  const next = new Map(selectedAliasRecords.value);
+  for (const alias of selectableAliases.value) checked ? next.set(alias.id, alias) : next.delete(alias.id);
+  selectedAliasRecords.value = next;
+}
+
+function invertCurrentPageSelection() {
+  if (aliasSelectionBusy.value) return;
+  const next = new Map(selectedAliasRecords.value);
+  for (const alias of selectableAliases.value) {
+    if (next.has(alias.id)) next.delete(alias.id); else next.set(alias.id, alias);
+  }
+  selectedAliasRecords.value = next;
+}
+
+function applyAliasEnabledFilter() {
+  resetAliasSearchResults();
+}
+
+async function deleteSelectedAliases() {
+  if (!viewActive || !auth.state.username || isCustomMailbox.value || loading.value || detailMutationPending()) return;
+  const ids = [...selectedAliasIds.value];
+  if (!ids.length) return;
+  const controller = deletionController;
+  const username = auth.state.username;
+  const contextKey = detailRequestKey();
+  batchDeleteConfirming.value = true;
+  beginDetailMutation();
+  try {
+    await ElMessageBox.confirm(
+      `将从 iCloud 永久删除所选的 ${ids.length} 个隐藏邮箱，并清除本项目中的对应记录。启用的邮箱会先停用，Apple 端删除后不可恢复。`,
+      "确认批量永久删除",
+      {
+        type: "warning",
+        confirmButtonText: "永久删除",
+        cancelButtonText: "取消",
+        confirmButtonClass: "el-button--danger",
+        autofocus: false,
+      },
+    );
+    if (!viewActive || controller !== deletionController || username !== auth.state.username ||
+        contextKey !== detailRequestKey() || deletionState.value.blocked ||
+        ids.length !== selectedAliasIds.value.length || !ids.every((id) => selectedAliasRecords.value.has(id))) return;
+    await controller.submit(ids, auth.state.csrfToken);
+  } catch (error) {
+    if (!confirmationCancelled(error)) showRequestError(error, "批量删除提交失败。");
+  } finally {
+    batchDeleteConfirming.value = false;
+    if (viewActive) void loadDetail({ silent: true });
+  }
 }
 
 function replaceAlias(updated) {
@@ -1218,12 +1517,17 @@ function replaceAlias(updated) {
 
 function detailMutationPending() {
   return (
+    mailTransportLoading.value ||
+    batchDeleteConfirming.value ||
+    deletionState.value.blocked ||
     syncLoading.value ||
     aliasesSyncLoading.value ||
     appleAuthLoading.value ||
+    appleConnectionLoading.value ||
     appleDisconnectLoading.value ||
     autoCreationLoading.value ||
     randomAliasLoading.value ||
+    manualAliasLoading.value ||
     createLoading.value ||
     accountDeleteLoading.value ||
     Object.keys(groupMoveLoading).length > 0 ||
@@ -1264,6 +1568,7 @@ async function loadMailGroups({ silent = false } = {}) {
 }
 
 async function loadDetail({ silent = false } = {}) {
+  if (silent && aliasSelectionActive.value) return false;
   if (
     silent &&
     (loading.value || detailMutationPending())
@@ -1274,6 +1579,7 @@ async function loadDetail({ silent = false } = {}) {
   const page = currentPage.value;
   const selectedPageSize = pageSize.value;
   const query = appliedAliasQuery.value;
+  const enabled = aliasEnabledFilter.value === "" ? undefined : aliasEnabledFilter.value === "true";
   const requestKey = detailRequestKey(accountId, page, selectedPageSize, query);
   const ticket = detailGate.begin(requestKey);
   detailAbortController?.abort();
@@ -1297,9 +1603,10 @@ async function loadDetail({ silent = false } = {}) {
         getAllAliases(accountId, {
           signal: abortController.signal,
           query,
+          enabled,
         }),
       ]);
-    } else if (query) {
+    } else if (query || enabled !== undefined) {
       [detail, aliasPage] = await Promise.all([
         // Keep the account request focused on metadata. Its alias count is
         // the unfiltered total used by the automatic-creation panel.
@@ -1312,6 +1619,7 @@ async function loadDetail({ silent = false } = {}) {
           limit: selectedPageSize,
           offset: (page - 1) * selectedPageSize,
           query,
+          enabled,
           signal: abortController.signal,
         }),
       ]);
@@ -1349,10 +1657,19 @@ async function loadDetail({ silent = false } = {}) {
       loadError.value = null;
       return await loadDetail({ silent });
     }
-    account.value = allItems && !query
+    account.value = allItems && !query && enabled === undefined
       ? { ...detail.account, aliasCount: resolvedTotal }
       : detail.account;
     aliases.value = nextAliases;
+    const validIds = new Set(selectableAliases.value.map((alias) => alias.id));
+    const nextSelected = new Map(selectedAliasRecords.value);
+    for (const id of [...nextSelected.keys()]) {
+      if (aliases.value.some((a) => a.id === id) && !validIds.has(id)) nextSelected.delete(id);
+    }
+    for (const alias of selectableAliases.value) {
+      if (nextSelected.has(alias.id)) nextSelected.set(alias.id, alias);
+    }
+    selectedAliasRecords.value = nextSelected;
     total.value = resolvedTotal;
     void loadMailGroups({ silent });
     appleSession.value = detail.appleSession;
@@ -1362,7 +1679,7 @@ async function loadDetail({ silent = false } = {}) {
       detail.account.mailboxType === "custom"
         ? `@${detail.account.emailSuffix}`
         : detail.account.email,
-      "管理 IMAP 连接、同步状态和所属隐私邮箱",
+      "管理按需收件凭据与隐私邮箱地址目录",
     );
     return true;
   } catch (error) {
@@ -1394,6 +1711,7 @@ function handlePageChange(page) {
   if (pageSize.value === ALL_PAGE_SIZE) return;
   const nextPage = Math.max(1, Number(page) || 1);
   if (nextPage === currentPage.value) return;
+  aliasDrag.stop();
   currentPage.value = nextPage;
   aliases.value = [];
   loadError.value = null;
@@ -1404,6 +1722,7 @@ function handlePageSizeChange(value) {
   const nextPageSize = normalizePageSize(value);
   if (nextPageSize === pageSize.value) return;
   pageSize.value = nextPageSize;
+  aliasDrag.stop();
   currentPage.value = 1;
   aliases.value = [];
   total.value = 0;
@@ -1414,6 +1733,7 @@ function handlePageSizeChange(value) {
 }
 
 function resetAliasSearchResults() {
+  clearAliasSelection();
   currentPage.value = 1;
   aliases.value = [];
   total.value = 0;
@@ -1431,16 +1751,19 @@ function applyAliasSearch() {
 }
 
 function clearAliasSearch() {
-  if (!aliasQueryDraft.value && !appliedAliasQuery.value) return;
+  if (!hasAliasSearch.value) return;
   aliasQueryDraft.value = "";
   appliedAliasQuery.value = "";
+  aliasEnabledFilter.value = "";
   resetAliasSearchResults();
 }
 
-const liveRefresh = createLiveRefresh(() => loadDetail({ silent: true }));
+const liveRefresh = createLiveRefresh(() => loadDetail({ silent: true }), {
+  getIntervalMs: () => syncActive.value || Boolean(deletionState.value?.job && ["queued", "running"].includes(deletionState.value.job.status)) ? 5_000 : undefined,
+});
 
 async function syncNow() {
-  if (syncLoading.value || syncActive.value || randomAliasLoading.value) return;
+  if (!account.value?.enabled || account.value.mailTransport === "webmail" || syncLoading.value || syncActive.value || randomAliasLoading.value || manualAliasLoading.value || isIMAPAuthenticationFailure(account.value.lastSyncError)) return;
   beginDetailMutation();
   const accountId = account.value.id;
   syncLoading.value = true;
@@ -1464,6 +1787,31 @@ async function syncNow() {
     await loadDetail();
   } finally {
     syncLoading.value = false;
+  }
+}
+
+async function changeMailTransport(transport) {
+  if (!canUseWebMail.value || mailTransportLoading.value || !account.value?.enabled || syncActive.value || detailMutationPending() || account.value.mailTransport === transport) return;
+  if (transport === "webmail" && !appleSessionAuthenticated.value) {
+    openAppleLogin();
+    return;
+  }
+  const accountId = account.value.id;
+  const previous = account.value.mailTransport;
+  beginDetailMutation();
+  mailTransportLoading.value = true;
+  account.value.mailTransport = transport;
+  try {
+    const next = await updateAccountMailTransport(accountId, transport, auth.state.csrfToken);
+    if (!isCurrentAccount(accountId)) return;
+    account.value.mailTransport = next;
+    await loadDetail();
+  } catch (error) {
+    if (!isCurrentAccount(accountId)) return;
+    account.value.mailTransport = previous;
+    showRequestError(error, "收件通道切换失败。");
+  } finally {
+    mailTransportLoading.value = false;
   }
 }
 
@@ -1538,14 +1886,14 @@ async function finishAppleAuthentication(result, accountId) {
   resumeAutoCreationAfterAuth = false;
   appleAuthVisible.value = false;
   resetAppleAuthForm();
-  successMessage("Apple 账户已登录。");
+  successMessage("目录连接已登录。");
   if (shouldResumeAutoCreation) {
     await nextTick();
     await performSetAutoCreation(true);
   }
   if (shouldResumeSync) {
     await nextTick();
-    await performAliasesSync();
+    await performAliasesSync({ afterAuthentication: true });
   }
 }
 
@@ -1711,7 +2059,7 @@ function syncAliasesFromApple() {
   performAliasesSync();
 }
 
-async function performAliasesSync() {
+async function performAliasesSync({ afterAuthentication = false } = {}) {
   if (
     aliasesSyncLoading.value ||
     autoCreationLoading.value ||
@@ -1747,13 +2095,17 @@ async function performAliasesSync() {
       ? `，新增 ${result.summary.createdCount} 个，可通过列表中的复制操作导出完整凭证`
       : "，没有新增地址";
     successMessage(
-      `隐私邮箱同步完成，Apple 共 ${result.summary.total} 个地址${createdNotice}${capacityNotice}。`,
+      `地址目录同步完成，Apple 共 ${result.summary.total} 个地址${createdNotice}${capacityNotice}；本次未读取邮件。`,
     );
   } catch (error) {
     if (!isCurrentAccount(accountId)) return;
     if (isAppleSessionInvalid(error)) {
       if (appleSession.value) {
         appleSession.value = { ...appleSession.value, status: "expired" };
+      }
+      if (afterAuthentication) {
+        showRequestError({ ...error, message: `旧通道登录验证已通过，但随后读取隐藏邮箱目录时会话校验失败。${error.message || "请查看操作记录中的请求编号。"}` });
+        return;
       }
       openAppleLogin({ error, resumeSync: true });
       return;
@@ -1778,8 +2130,8 @@ async function disconnectAppleSession() {
   appleDisconnectLoading.value = true;
   try {
     await ElMessageBox.confirm(
-      "退出后，下次同步隐私邮箱时需要重新登录 Apple 账户。",
-      "退出 Apple 登录",
+      "退出目录连接后，同步与管理目录需要重新登录；新建连接的会话保持不变。",
+      "退出目录连接",
       {
         type: "warning",
         confirmButtonText: "退出登录",
@@ -1792,11 +2144,11 @@ async function disconnectAppleSession() {
     if (!isCurrentAccount(accountId)) return;
     appleSession.value = null;
     aliasSyncSummary.value = null;
-    successMessage("Apple 登录已退出。");
+    successMessage("目录连接已退出，新建连接保持不变。");
   } catch (error) {
     if (confirmationCancelled(error)) return;
     if (!isCurrentAccount(accountId)) return;
-    showRequestError(error, "退出 Apple 登录失败，请稍后重试。");
+    showRequestError(error, "退出目录连接失败，请稍后重试。");
   } finally {
     appleDisconnectLoading.value = false;
     appleDisconnectLock.release();
@@ -1953,6 +2305,7 @@ function isCopying(alias) {
 function isAliasActionBusy(alias) {
   const id = alias?.id;
   return Boolean(
+    batchDeleteConfirming.value || deletionState.value.blocked ||
     isCopying(alias) ||
       toggleLoading[id] ||
       rotateLoading[id] ||
@@ -2028,8 +2381,9 @@ async function copyLegacyDirectLink(alias) {
 
 async function toggleAlias(alias, enabled) {
   if (
+    !alias.accountEnabled ||
     isAliasConfirmationPending(alias) ||
-    alias.enabled === enabled ||
+    alias.configuredEnabled === enabled ||
     !aliasActionLock.acquire(alias.id)
   ) {
     return;
@@ -2045,6 +2399,7 @@ async function toggleAlias(alias, enabled) {
     );
     if (!isCurrentAccount(accountId)) return;
     replaceAlias(updated);
+    if (aliasEnabledFilter.value !== "") await loadDetail();
     successMessage(enabled ? "隐私邮箱已启用。" : "隐私邮箱已停用。");
   } catch (error) {
     if (!isCurrentAccount(accountId)) return;
@@ -2188,23 +2543,81 @@ watch(
       total.value = 0;
       aliasQueryDraft.value = "";
       appliedAliasQuery.value = "";
+      aliasEnabledFilter.value = "";
+      clearAliasSelection();
       appleSession.value = null;
       autoCreation.value = null;
       aliasSyncSummary.value = null;
       randomAliasCount.value = 1;
       randomAliasError.value = null;
+      manualAliasLoading.value = false;
+      batchOperationLoading.value = false;
+      appleConnectionLoading.value = false;
       loadDetail();
     }
   },
 );
 
+function makeDeletionController() {
+  const username = auth.state.username;
+  let refreshedTerminal = "";
+  const seenActiveJobs = new Set();
+  return createAliasDeletionController({
+    startJob: startAliasDeletionJob,
+    getJob: getAliasDeletionJob,
+    getLatestJob: getLatestAliasDeletionJob,
+    storage: createAliasDeletionStorage(ADMIN_BASE_PATH, username),
+    onChange: (state) => {
+      if (!viewActive || auth.state.username !== username) return;
+      const previousJob = deletionState.value.job;
+      if (state.job && (isAliasDeletionJobActive(state.job) || state.uncertain || state.submitting)) {
+        seenActiveJobs.add(state.job.jobId);
+      }
+      deletionState.value = state;
+      if (state.job && state.job.jobId !== previousJob?.jobId) clearAliasSelection();
+      const terminalKey = isAliasDeletionJobTerminal(state.job)
+        ? `${state.job.jobId}:${state.job.status}:${state.job.processed}` : "";
+      // Accepting a result precedes clearing the controller's read/submission lock.
+      if (terminalKey && state.job && seenActiveJobs.has(state.job.jobId) && !state.blocked && terminalKey !== refreshedTerminal) {
+        refreshedTerminal = terminalKey;
+        seenActiveJobs.delete(state.job.jobId);
+        clearAliasSelection();
+        void loadDetail({ silent: true });
+      }
+    },
+  });
+}
+
+function refreshDeletionJob() {
+  return deletionController.refresh({ latest: true });
+}
+
+function acknowledgeDeletionState() {
+  if (!deletionController.acknowledgeUnmatched()) return;
+  clearAliasSelection();
+  void loadDetail();
+}
+
+watch(() => auth.state.username, () => {
+  deletionController?.stop();
+  deletionController = makeDeletionController();
+  deletionState.value = deletionController.getState();
+  clearAliasSelection();
+  if (viewActive && auth.state.username) void deletionController.start();
+}, { flush: "sync" });
+
 onMounted(() => {
+  deletionController = makeDeletionController();
+  deletionState.value = deletionController.getState();
+  void deletionController.start();
   loadDetail();
   liveRefresh.start({ immediate: false });
 });
 
 onBeforeUnmount(() => {
   viewActive = false;
+  aliasDrag.stop();
+  deletionController?.stop();
   liveRefresh.stop();
   detailGate.deactivate();
   detailAbortController?.abort();
@@ -2215,33 +2628,113 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.section-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 28px;
+  align-items: center;
+  margin: 4px 0 12px;
+  color: var(--text);
+}
+
+.section-status-row > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.section-status-row__label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.account-paused-notice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.account-paused-notice strong { color: var(--text); }
+
+.auto-creation-panel__status-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .section-status-row {
+    gap: 8px 16px;
+  }
+}
+
 .account-alias-search {
   display: flex;
-  align-items: flex-end;
-  gap: 14px;
-  padding: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;
 }
 
-.account-alias-search__field {
-  display: grid;
+.alias-creation-row {
   min-width: 0;
-  flex: 1 1 auto;
-  gap: 6px;
+}
+
+.account-alias-search__field {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1 1 200px;
+  gap: 8px;
 }
 
 .account-alias-search__field > span {
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.account-alias-search__status {
+  flex: 0 0 110px;
+  width: 110px;
 }
 
 .account-alias-search__actions {
   display: flex;
   flex: 0 0 auto;
   gap: 8px;
+}
+
+.account-alias-search__selection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-alias-selected-count {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.account-alias-search :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
+.account-alias-delete-button {
+  margin-left: auto;
 }
 
 .credential-value {
@@ -2263,15 +2756,26 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 720px) {
+  .alias-creation-row :deep(.creation-job-panel__controls) {
+    justify-content: flex-start;
+  }
+
   .account-alias-search {
-    flex-direction: column;
-    align-items: stretch;
     padding: 14px;
   }
 
+  .account-alias-search__field {
+    flex-basis: 100%;
+  }
+
   .account-alias-search__actions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    flex: 1;
+    justify-content: flex-end;
+  }
+
+  .account-alias-delete-button {
+    flex-basis: 100%;
+    margin-left: 0;
   }
 }
 </style>

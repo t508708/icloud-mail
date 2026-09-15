@@ -29,6 +29,13 @@ type SeenTaskRepository interface {
 	DeleteSeenTasks(context.Context, int64, uint32, []uint32) error
 }
 
+// SeenSyncFailureRecorder is optional for lightweight repositories. The store
+// implementation compares UpdatedAt before persisting, so stale credentials
+// cannot have their newer account state overwritten by an old IMAP failure.
+type SeenSyncFailureRecorder interface {
+	RecordMailboxSyncFailure(context.Context, int64, time.Time, string, time.Time) error
+}
+
 type SeenMarker interface {
 	MarkSeen(context.Context, domain.Account, string, uint32, []uint32) error
 }
@@ -334,6 +341,16 @@ func (w *SeenWorker) processAccount(ctx context.Context, work *seenAccountBatch)
 		if !account.Enabled {
 			return errors.New("account is disabled")
 		}
+		transport, err := accountMailTransport(operationCtx, w.repo, account.ID)
+		if err != nil {
+			return err
+		}
+		if transport == "webmail" {
+			return ErrSyncDeferred
+		}
+		if domain.IsIMAPAuthenticationFailure(account.LastSyncError) {
+			return domain.ErrIMAPAuthenticationPaused
+		}
 		password, err := w.cipher.Decrypt(account.PasswordCiphertext)
 		if err != nil {
 			return fmt.Errorf("decrypt IMAP credential: %w", err)
@@ -345,6 +362,13 @@ func (w *SeenWorker) processAccount(ctx context.Context, work *seenAccountBatch)
 			if err != nil {
 				var mismatch *mail.UIDValidityMismatchError
 				if !errors.As(err, &mismatch) {
+					if domain.IsIMAPAuthenticationFailure(err.Error()) {
+						if recorder, ok := w.repo.(SeenSyncFailureRecorder); ok && !account.UpdatedAt.IsZero() {
+							if recordErr := recorder.RecordMailboxSyncFailure(operationCtx, work.id, account.UpdatedAt, err.Error(), time.Now().UTC()); recordErr != nil {
+								w.logger.Error("记录 seen worker IMAP 认证失败状态失败", "account_id", work.id, "error", recordErr)
+							}
+						}
+					}
 					return fmt.Errorf("mark UIDs seen for UIDVALIDITY %d: %w", batch.uidValidity, err)
 				}
 				w.logger.Info(

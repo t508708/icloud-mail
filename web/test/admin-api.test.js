@@ -335,6 +335,9 @@ test("account detail normalizes automatic alias creation state", async () => {
         last_created_at: "2026-08-08T07:00:00Z",
         last_alias_address: "new@icloud.com",
         last_error: "",
+        recent_created_count: 2,
+        today_created_count: 5,
+        today_created_since: "2026-08-08T00:00:00Z",
       },
     });
 
@@ -350,6 +353,10 @@ test("account detail normalizes automatic alias creation state", async () => {
       "2026-08-08T09:15:00Z",
       "2026-08-08T09:35:00Z",
     ],
+    recentCreatedCount: 2,
+    todayCreatedCount: 5,
+    recentCreatedSince: null,
+    todayCreatedSince: "2026-08-08T00:00:00Z",
     lastAttemptedAt: "2026-08-08T08:00:00Z",
     lastCreatedAt: "2026-08-08T07:00:00Z",
     lastAliasAddress: "new@icloud.com",
@@ -371,6 +378,8 @@ test("account detail normalizes automatic alias creation state", async () => {
       LastAliasAddress: "pascal@icloud.com",
       LastError: "temporary failure",
       PendingKeyCount: -2,
+      RecentCreatedCount: 89,
+      TodayCreatedCount: 89,
     }),
     {
       enabled: true,
@@ -381,6 +390,10 @@ test("account detail normalizes automatic alias creation state", async () => {
         "2026-08-08T10:00:00Z",
         "2026-08-08T10:20:00Z",
       ],
+      recentCreatedCount: 89,
+      todayCreatedCount: 89,
+      recentCreatedSince: null,
+      todayCreatedSince: null,
       lastAttemptedAt: "2026-08-08T09:00:00Z",
       lastCreatedAt: "2026-08-08T08:00:00Z",
       lastAliasAddress: "pascal@icloud.com",
@@ -416,6 +429,10 @@ test("automatic alias creation toggle uses an encoded account URL and CSRF", asy
     nextRunAt: null,
     plannedAt: null,
     plannedTimes: [],
+    recentCreatedCount: null,
+    todayCreatedCount: null,
+    recentCreatedSince: null,
+    todayCreatedSince: null,
     lastAttemptedAt: null,
     lastCreatedAt: null,
     lastAliasAddress: "",
@@ -977,6 +994,37 @@ test("alias pages omit disabled latest-mail filters", async () => {
   for (const url of requests) {
     assert.equal(url.searchParams.has("without_latest_mail"), false);
     assert.equal(url.searchParams.has("with_latest_mail"), false);
+  }
+});
+
+test("alias pages preserve enabled=false", async () => {
+  let request;
+  globalThis.fetch = async (url) => {
+    request = new URL(url, "https://admin.invalid");
+    return jsonResponse({ items: [], pagination: { total: 0, limit: 20, offset: 0 } });
+  };
+  await getAliasPage(12, { enabled: false });
+  assert.equal(request.searchParams.get("enabled"), "false");
+});
+
+test("all alias pages retain account, status and query filters across offsets", async () => {
+  const requests = [];
+  globalThis.fetch = async (url) => {
+    const query = new URL(url, "https://admin.invalid").searchParams;
+    requests.push(query);
+    const offset = Number(query.get("offset"));
+    return jsonResponse({
+      items: [{ id: offset + 1, account_id: 12, enabled: false }],
+      pagination: { total: 3, limit: 1, offset, has_more: offset < 2 },
+    });
+  };
+  const aliases = await getAllAliases(12, { enabled: false, query: "filter" });
+  assert.deepEqual(aliases.map((alias) => alias.id), [1, 2, 3]);
+  assert.deepEqual(requests.map((query) => query.get("offset")), ["0", "1", "2"]);
+  for (const query of requests) {
+    assert.equal(query.get("account_id"), "12");
+    assert.equal(query.get("enabled"), "false");
+    assert.equal(query.get("query"), "filter");
   }
 });
 

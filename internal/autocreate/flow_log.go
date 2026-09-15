@@ -119,6 +119,13 @@ func explicitRateLimitRejection(err error) bool {
 	return visit(err)
 }
 
+// IsRateLimitStatus recognizes only the canonical persisted status.
+func IsRateLimitStatus(message string) bool {
+	value := strings.TrimSpace(message)
+	return value == "APPLE_RATE_LIMITED" || value == aliasCreationErrorReason("APPLE_RATE_LIMITED") ||
+		value == "APPLE_CREATION_BUDGET_WAIT" || value == aliasCreationErrorReason("APPLE_CREATION_BUDGET_WAIT")
+}
+
 func (flow aliasCreationFlow) markStarted() {
 	if flow.state == nil {
 		return
@@ -193,7 +200,8 @@ func (m *Manager) logAliasCreationProgress(
 	switch update.Phase {
 	case domain.AliasCreationPhaseCompleted,
 		domain.AliasCreationPhaseFailed,
-		domain.AliasCreationPhaseCancelled:
+		domain.AliasCreationPhaseCancelled,
+		domain.AliasCreationPhaseCooldown:
 		return
 	}
 	if flow.state == nil {
@@ -324,6 +332,12 @@ func (m *Manager) logAliasCreationFailureWithOperation(
 	flow.state.mu.Lock()
 	defer flow.state.mu.Unlock()
 	if flow.state.terminal {
+		return
+	}
+	if (info.code == "APPLE_RATE_LIMITED" || info.code == "APPLE_CREATION_BUDGET_WAIT") && failureRecorded {
+		flow.state.stage = domain.AliasCreationPhaseCooldown
+		flow.state.terminal = true
+		m.logAliasCreationFlowLocked(ctx, slog.LevelInfo, "自动创建隐私邮箱进入请求预算冷却", accountID, flow, flow.state.stage, flow.state.percent, "run_rate_limited", attributes...)
 		return
 	}
 	flow.state.stage = domain.AliasCreationPhaseFailed
@@ -558,7 +572,8 @@ func isKnownAliasCreationPhase(value domain.AliasCreationPhase) bool {
 		domain.AliasCreationPhaseSavingResult,
 		domain.AliasCreationPhaseCompleted,
 		domain.AliasCreationPhaseFailed,
-		domain.AliasCreationPhaseCancelled:
+		domain.AliasCreationPhaseCancelled,
+		domain.AliasCreationPhaseCooldown:
 		return true
 	default:
 		return false
@@ -681,6 +696,15 @@ func diagnoseAliasCreationError(err error) aliasCreationErrorInfo {
 	}
 	info.class = aliasCreationErrorClass(info.code)
 	info.reason = aliasCreationErrorReason(info.code)
+	if info.code == "APPLE_UPSTREAM_ERROR" && info.upstream != nil &&
+		info.upstream.Op == "validate Apple session" && info.retryable &&
+		!aliasCreationPendingConfirmation(err, info.code) && !aliasCreationUntrackedRemoteSideEffect(err) {
+		if info.upstream.StatusCode == 0 {
+			info.reason = "验证Apple会话时连接暂时异常，本次尚未发起创建；系统会按下一次计划自动重试，无需重新登录"
+		} else if info.upstream.StatusCode >= http.StatusInternalServerError {
+			info.reason = fmt.Sprintf("验证Apple会话时服务暂时异常（HTTP %d），本次尚未发起创建；系统会按下一次计划自动重试", info.upstream.StatusCode)
+		}
+	}
 	return info
 }
 
@@ -693,11 +717,15 @@ func isAllowedAliasCreationErrorCode(code string) bool {
 		"APPLE_INVALID_ALIAS_RESPONSE",
 		"APPLE_LOGIN_REQUIRED",
 		"APPLE_SESSION_EXPIRED",
+		"APPLE_ACCOUNT_LOGIN_REQUIRED",
+		"APPLE_ACCOUNT_SESSION_EXPIRED",
 		"APPLE_CREDENTIALS_INVALID",
 		"APPLE_VERIFICATION_INVALID",
 		"APPLE_FLOW_EXPIRED",
 		"APPLE_ACCOUNT_ACTION_REQUIRED",
+		"APPLE_HME_AUTH_FAILED",
 		"APPLE_RATE_LIMITED",
+		"APPLE_CREATION_BUDGET_WAIT",
 		"APPLE_UPSTREAM_ERROR",
 		"APPLE_ALIAS_CONFIRMATION_PENDING",
 		"APPLE_ACCOUNT_MISMATCH",
@@ -705,6 +733,7 @@ func isAllowedAliasCreationErrorCode(code string) bool {
 		"ACCOUNT_CHANGED",
 		"ALIAS_OWNERSHIP_CONFLICT",
 		"ACCOUNT_DISABLED",
+		"IMAP_AUTHENTICATION_PAUSED",
 		"AUTO_CREATION_UNAVAILABLE",
 		"AUTO_CREATE_PLAN_CORRECTION_FAILED",
 		"AUTO_CREATE_SCHEDULE_ERROR",
@@ -728,11 +757,12 @@ func aliasCreationErrorClass(code string) string {
 		return "crypto"
 	case code == "CONTEXT_CANCELED" || code == "CONTEXT_DEADLINE_EXCEEDED":
 		return "context"
-	case code == "APPLE_ACCOUNT_ACTION_REQUIRED" || code == "APPLE_ACCOUNT_MISMATCH" ||
+	case code == "APPLE_ACCOUNT_ACTION_REQUIRED" || code == "APPLE_HME_AUTH_FAILED" || code == "APPLE_ACCOUNT_MISMATCH" || code == "IMAP_AUTHENTICATION_PAUSED" ||
 		code == "APPLE_FORWARDING_TARGET_MISSING" ||
 		code == "ACCOUNT_CHANGED" || code == "ALIAS_OWNERSHIP_CONFLICT" || code == "ACCOUNT_DISABLED":
 		return "account_state"
 	case strings.HasPrefix(code, "APPLE_SESSION") || strings.HasPrefix(code, "APPLE_LOGIN") ||
+		code == "APPLE_ACCOUNT_LOGIN_REQUIRED" || code == "APPLE_ACCOUNT_SESSION_EXPIRED" ||
 		code == "APPLE_CREDENTIALS_INVALID" || code == "APPLE_VERIFICATION_INVALID" || code == "APPLE_FLOW_EXPIRED":
 		return "session"
 	case strings.HasPrefix(code, "APPLE_"):
@@ -815,8 +845,12 @@ func aliasCreationErrorReason(code string) string {
 	switch code {
 	case "APPLE_LOGIN_REQUIRED":
 		return "Apple 账户尚未登录，请先同步隐私邮箱并完成登录"
+	case "APPLE_ACCOUNT_LOGIN_REQUIRED":
+		return "Apple Account 新通道尚未登录，请先完成该通道登录"
 	case "APPLE_SESSION_EXPIRED":
 		return "Apple 登录会话已过期，请重新登录后再执行自动创建"
+	case "APPLE_ACCOUNT_SESSION_EXPIRED":
+		return "Apple Account 管理会话已过期，请重新登录新通道"
 	case "APPLE_CREDENTIALS_INVALID":
 		return "Apple 登录凭据无效，请重新登录 Apple 账户"
 	case "APPLE_VERIFICATION_INVALID":
@@ -825,14 +859,18 @@ func aliasCreationErrorReason(code string) string {
 		return "Apple 登录验证流程已过期，请重新登录 Apple 账户"
 	case "APPLE_ACCOUNT_ACTION_REQUIRED":
 		return "Apple 账户需要完成条款确认或其他账户操作"
+	case "APPLE_HME_AUTH_FAILED":
+		return "Apple 账户已通过验证，但隐藏邮箱目录未接受此会话；登录状态已保留，自动创建已暂停，请检查 iCloud 网页的隐藏邮箱服务"
 	case "APPLE_RATE_LIMITED":
 		return "Apple 请求被限流，当前周期剩余计划槽已跳过，冷却后会继续执行"
+	case "APPLE_CREATION_BUDGET_WAIT":
+		return "本地主号创建预算已用尽，冷却后将自动继续"
 	case "APPLE_ACCOUNT_MISMATCH":
 		return "Apple 登录账户或默认转发目标与当前主号不匹配"
 	case "APPLE_FORWARDING_TARGET_MISSING":
 		return "Apple 未能确认隐私邮箱的默认转发目标，本次未发起创建；请确认当前主号可作为转发邮箱，或先在 iCloud 手动创建一个隐私邮箱"
 	case "APPLE_ALIAS_CONFIRMATION_PENDING":
-		return "Apple 地址已创建但目录确认尚未完成，后续计划会继续确认"
+		return "Apple 创建结果尚未完成目录确认；后续计划会继续确认，确认前不会重复创建"
 	case "ALIAS_LIMIT_REACHED":
 		return "主号已达到隐私邮箱容量上限"
 	case "ACCOUNT_CHANGED":
@@ -841,6 +879,8 @@ func aliasCreationErrorReason(code string) string {
 		return "Apple 创建的隐私邮箱归属于其他主号"
 	case "ACCOUNT_DISABLED":
 		return "当前主号已停用，请先启用主号"
+	case "IMAP_AUTHENTICATION_PAUSED":
+		return "IMAP 认证异常，自动连接已暂停；更新收件凭据或重新启用主号后再试"
 	case "AUTO_CREATION_UNAVAILABLE":
 		return "自动创建服务未正确初始化"
 	case "AUTO_CREATE_PLAN_CORRECTION_FAILED":

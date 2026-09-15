@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -1169,6 +1170,120 @@ func TestSyncAccountWithTimeoutCancelsFetcherAndRecordsFailure(t *testing.T) {
 	if len(failures) != 1 || failures[0].message != wantMessage || !recordContextActive {
 		t.Fatalf("超时后的批量失败记录错误: calls=%#v active=%v", failures, recordContextActive)
 	}
+}
+
+func TestPersistentAuthenticationFailurePausesUntilAccountErrorCleared(t *testing.T) {
+	account := domain.Account{ID: 91, Enabled: true, PasswordCiphertext: "encrypted", LastSyncError: "IMAP AUTHENTICATIONFAILED"}
+	repo := newFakeRepo(account)
+	var fetches int
+	manager := New(repo, cipherFunc(fixedCipher), fetcherFunc(func(context.Context, domain.Account, string, []domain.Alias, *domain.IMAPSyncState) (domain.MailboxSyncResult, error) {
+		fetches++
+		return domain.MailboxSyncResult{}, nil
+	}), discardLogger(), time.Minute, 1)
+	err := manager.SyncAccountWithTimeout(context.Background(), account.ID)
+	if !errors.Is(err, domain.ErrIMAPAuthenticationPaused) || fetches != 0 || len(repo.failureCalls()) != 0 {
+		t.Fatalf("paused sync: err=%v fetches=%d failures=%v", err, fetches, repo.failureCalls())
+	}
+	repo.mu.Lock()
+	repo.accounts[0].LastSyncError = ""
+	repo.mu.Unlock()
+	if err := manager.SyncAccountWithTimeout(context.Background(), account.ID); err != nil {
+		t.Fatalf("sync after clearing account error: %v", err)
+	}
+	if fetches != 1 {
+		t.Fatalf("fetches = %d, want one after clearing error", fetches)
+	}
+}
+
+func TestHasMoreWithoutUIDProgressStopsCurrentRun(t *testing.T) {
+	account := domain.Account{ID: 92, Enabled: true, PasswordCiphertext: "encrypted"}
+	repo := newFakeRepo(account)
+	repo.states[account.ID] = domain.IMAPSyncState{AccountID: account.ID, UIDValidity: 7, LastUID: 20}
+	var fetches int
+	manager := New(repo, cipherFunc(fixedCipher), fetcherFunc(func(context.Context, domain.Account, string, []domain.Alias, *domain.IMAPSyncState) (domain.MailboxSyncResult, error) {
+		fetches++
+		return domain.MailboxSyncResult{State: domain.IMAPSyncState{AccountID: account.ID, UIDValidity: 7, LastUID: 20}, TargetUID: 40, HasMore: true}, nil
+	}), discardLogger(), time.Minute, 1)
+	if err := manager.SyncAccountWithTimeout(context.Background(), account.ID); !errors.Is(err, ErrSyncDeferred) {
+		t.Fatalf("sync with non-advancing pending cursor = %v, want ErrSyncDeferred", err)
+	}
+	if fetches != 1 || len(repo.applyCalls()) != 1 || len(repo.failureCalls()) != 0 {
+		t.Fatalf("fetches=%d apply batches=%d recorded failures=%d, want one fetch/apply and no failure", fetches, len(repo.applyCalls()), len(repo.failureCalls()))
+	}
+}
+
+func TestAutomaticRoundSkipsPersistedAuthenticationFailure(t *testing.T) {
+	account := domain.Account{ID: 95, Enabled: true, PasswordCiphertext: "encrypted", LastSyncError: "IMAP AUTHENTICATIONFAILED"}
+	repo := newFakeRepo(account)
+	var fetches atomic.Int32
+	manager := New(repo, cipherFunc(fixedCipher), fetcherFunc(func(context.Context, domain.Account, string, []domain.Alias, *domain.IMAPSyncState) (domain.MailboxSyncResult, error) {
+		fetches.Add(1)
+		return domain.MailboxSyncResult{}, nil
+	}), discardLogger(), time.Minute, 1)
+	if pending := manager.syncAllRound(context.Background(), nil); len(pending) != 0 {
+		t.Fatalf("paused account scheduled continuations: %v", pending)
+	}
+	if fetches.Load() != 0 || len(repo.failureCalls()) != 0 {
+		t.Fatalf("paused account did work: fetches=%d failure records=%d", fetches.Load(), len(repo.failureCalls()))
+	}
+}
+
+func TestMinimumFetchIntervalWaitIsContextCancellable(t *testing.T) {
+	account := domain.Account{ID: 93, Enabled: true, PasswordCiphertext: "encrypted"}
+	repo := newFakeRepo(account)
+	var fetches atomic.Int32
+	manager := New(repo, cipherFunc(fixedCipher), fetcherFunc(func(context.Context, domain.Account, string, []domain.Alias, *domain.IMAPSyncState) (domain.MailboxSyncResult, error) {
+		fetches.Add(1)
+		return domain.MailboxSyncResult{}, nil
+	}), discardLogger(), time.Minute, 1)
+	manager.SetMinimumFetchInterval(time.Hour)
+	if err := manager.SyncAccountWithTimeout(context.Background(), account.ID); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	if err := manager.SyncAccountWithTimeout(ctx, account.ID); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("throttled sync error = %v, want context deadline", err)
+	}
+	if fetches.Load() != 1 {
+		t.Fatalf("fetch count = %d, want 1", fetches.Load())
+	}
+}
+
+func TestAutomaticRunCapsPendingBatchesAt128(t *testing.T) {
+	account := domain.Account{ID: 94, Enabled: true, PasswordCiphertext: "encrypted"}
+	repo := newFakeRepo(account)
+	var fetches atomic.Int32
+	waiting := make(chan struct{}, 1)
+	manager := New(repo, cipherFunc(fixedCipher), fetcherFunc(func(context.Context, domain.Account, string, []domain.Alias, *domain.IMAPSyncState) (domain.MailboxSyncResult, error) {
+		call := fetches.Add(1)
+		return domain.MailboxSyncResult{State: domain.IMAPSyncState{AccountID: account.ID, UIDValidity: 7, LastUID: uint32(call)}, TargetUID: 1000, HasMore: true}, nil
+	}), discardLogger(), time.Hour, 1)
+	manager.waitInterval = func(ctx context.Context, _ time.Duration) bool {
+		select {
+		case waiting <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); manager.Run(ctx) }()
+	select {
+	case <-waiting:
+	case <-time.After(3 * time.Second):
+		cancel()
+		<-done
+		t.Fatalf("automatic run did not yield after batch cap; fetches=%d", fetches.Load())
+	}
+	if got := fetches.Load(); got != 128 {
+		cancel()
+		<-done
+		t.Fatalf("fetches before yielding = %d, want 128", got)
+	}
+	cancel()
+	<-done
 }
 
 func TestSyncAccountWithTimeoutStartsFreshWorkBudgetAfterQueueing(t *testing.T) {

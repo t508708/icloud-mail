@@ -19,7 +19,7 @@ const deleteFunctions = source.slice(
   source.indexOf("function batchDeleteAccountState("),
   source.indexOf("async function copyAliases("),
 );
-const progressTemplate = source.match(/<section\s+v-if="deletionJob \|\| deletionState\.recovering[\s\S]*?<\/section>/)[0];
+const progressTemplate = source.match(/<section\s+v-if="deletionProgressVisible"[\s\S]*?<\/section>/)[0];
 const progressComputeds = source.slice(
   source.indexOf("const deletionJob = computed("),
   source.indexOf("function makeDeletionController("),
@@ -36,8 +36,9 @@ async function renderProgress(rawJob, statePatch = {}) {
     template: progressTemplate,
     setup: () => ({
       ...values, deletionState, deletionResultsExpanded: ref(true), deletingAliases: false,
+      deletionProgressVisible: true, deletionVisibility: { dismiss() {} },
       ALIAS_DELETION_OPERATION_LABELS, formatAliasDeletionResultMessage,
-      isAliasDeletionJobActive, formatTime, Refresh: null,
+      isAliasDeletionJobActive, isAliasDeletionJobTerminal, formatTime, Refresh: null,
       refreshDeletionJob() {}, acknowledgeDeletionState() {},
     }),
   });
@@ -98,6 +99,7 @@ function harness(overrides = {}) {
     successMessage: () => assert.fail("submission is not evidence of successful deletion"),
     ...overrides,
   };
+  dependencies.selectedAliasRecords ??= { value: new Map(dependencies.aliases.value.map((alias) => [alias.id, alias])) };
   const extracted = Function(...Object.keys(dependencies), `
     "use strict";
     ${deleteFunctions}
@@ -208,7 +210,7 @@ test("rejected submissions show the request error without claiming mailbox outco
 
 test("page lifecycle starts recovery, stops polling, and isolates controllers on username changes", () => {
   assert.match(source, /onMounted\(\(\) => \{\s*if \(auth\.state\.username\) void deletionController\.start\(\)/);
-  assert.match(source, /onBeforeUnmount\(\(\) => \{\s*viewActive = false;\s*deletionController\.stop\(\)/);
+  assert.match(source, /onBeforeUnmount\(\(\) => \{\s*viewActive = false;\s*aliasDrag\.stop\(\);\s*deletionController\.stop\(\)/);
   assert.match(source, /watch\(\(\) => auth\.state\.username, \(\) => \{\s*deletionController\.stop\(\);\s*deletionController = makeDeletionController\(\)/);
   assert.match(source, /createAliasDeletionStorage\(ADMIN_BASE_PATH, username\)/);
   assert.match(source, /auth\.state\.username !== username/);
@@ -235,7 +237,7 @@ test("terminal transitions clear selection and reload lists once, late cross-use
   const dependencies = {
     auth, viewActive: true, deletionState: state, deletionResultsExpanded: { value: false },
     startAliasDeletionJob() {}, getAliasDeletionJob() {}, getLatestAliasDeletionJob() {},
-    createAliasDeletionStorage() {}, ADMIN_BASE_PATH: "/admin", isAliasDeletionJobTerminal,
+    createAliasDeletionStorage() {}, ADMIN_BASE_PATH: "/admin", isAliasDeletionJobTerminal, isAliasDeletionJobActive,
     createAliasDeletionController: (value) => { options = value; return {}; },
     clearAliasSelection: () => refreshes.push("clear"),
     loadAliases: async () => refreshes.push("aliases"),

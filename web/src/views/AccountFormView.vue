@@ -1,5 +1,5 @@
 <template>
-  <section class="content-narrow page-stack">
+  <section class="content-narrow page-stack account-form-page">
     <div v-if="loading" class="form-panel loading-panel">
       <el-skeleton :rows="7" animated />
     </div>
@@ -121,7 +121,7 @@
               />
             </el-form-item>
           </div>
-          <p class="field-help">默认使用 imap.mail.me.com:993（TLS）。</p>
+          <p class="field-help">iCloud 默认使用 imap.mail.me.com:993。固定启用 TLS 1.2 或更高版本并校验证书，不自动切换端口。</p>
         </el-form-item>
 
         <el-form-item
@@ -139,13 +139,14 @@
           <p class="field-help">
             {{ usesGenericIMAPPassword ? "第三方/自定义邮箱的 IMAP 密码只会加密保存，后续不会回显。" : "Apple App 专用密码只会加密保存，后续不会回显。" }}
           </p>
+          <p v-if="appPasswordShapeUnusual" class="field-help" role="status">当前输入与常见 App 专用密码格式不同。请确认使用此 Apple 账户生成的 16 位字母专用密码，可保留分组连字符；Apple 登录密码用于下方连接登录。</p>
         </el-form-item>
 
         <el-form-item v-if="isEdit" class="form-span account-enabled-field">
           <div class="switch-field">
             <div>
               <strong>启用主号同步</strong>
-              <p>停用后，此主号下所有隐私邮箱的全部取件凭证会立即失效。</p>
+              <p>停用后隐藏邮箱列表不显示下属邮箱，邮箱池入池候选也隐藏；重新启用后恢复显示及原池状态，不删除邮箱或领取历史。</p>
             </div>
             <el-switch
               v-model="form.enabled"
@@ -175,6 +176,7 @@
 
 <script setup>
 import { Back, Check, Close, Refresh } from "@element-plus/icons-vue";
+import { ElMessageBox } from "element-plus";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
@@ -189,7 +191,7 @@ import {
   createActionLock,
   createLatestRequestGate,
 } from "../utils/asyncState.js";
-import { successMessage } from "../utils/feedback.js";
+import { confirmationCancelled, successMessage } from "../utils/feedback.js";
 import {
   DEFAULT_IMAP_HOST,
   DEFAULT_IMAP_PORT,
@@ -208,6 +210,7 @@ const submitting = ref(false);
 const loadError = ref(null);
 const submitError = ref(null);
 const aliasCount = ref(0);
+const storedEnabled = ref(true);
 const loadGate = createLatestRequestGate();
 const submitLock = createActionLock();
 let viewActive = true;
@@ -231,6 +234,7 @@ const receiveRule = computed(() => mailboxReceiveRule(form));
 const usesGenericIMAPPassword = computed(
   () => isCustomMailbox.value || receiveRule.value === "icloud-forwarded",
 );
+const appPasswordShapeUnusual = computed(() => !usesGenericIMAPPassword.value && Boolean(form.imapPassword.trim()) && !/^(?:[a-z]{16}|[a-z]{4}(?:-[a-z]{4}){3})$/i.test(form.imapPassword.trim()));
 const receiveRuleLabel = computed(() => {
   switch (receiveRule.value) {
     case "custom":
@@ -383,6 +387,7 @@ function resetForm() {
     enabled: true,
   });
   aliasCount.value = 0;
+  storedEnabled.value = true;
   loadError.value = null;
   submitError.value = null;
   formRef.value?.clearValidate();
@@ -412,6 +417,7 @@ async function loadAccount() {
       imapPassword: "",
       enabled: account.enabled,
     });
+    storedEnabled.value = Boolean(account.enabled);
     aliasCount.value = account.aliasCount;
   } catch (error) {
     if (!loadGate.isCurrent(ticket, routeKey())) return;
@@ -432,6 +438,15 @@ async function submit() {
     submitError.value = null;
     const valid = await formRef.value?.validate().catch(() => false);
     if (!valid || submittedRouteKey !== routeKey()) return;
+
+    if (isEdit.value && storedEnabled.value && !form.enabled) {
+      await ElMessageBox.confirm(
+        "停用会暂停此主号的收件连接，并从隐藏邮箱列表和邮箱池入池候选中隐藏下属邮箱。重新启用后，恢复邮箱列表显示，并按停用前快照恢复原启用及池成员状态；原本单独停用的邮箱仍保持停用。不会删除邮箱、邮件或领取历史。",
+        "确认停用主号",
+        { type: "warning", confirmButtonText: "停用主号", cancelButtonText: "取消" },
+      );
+    }
+    if (!viewActive || submittedRouteKey !== routeKey()) return;
 
     const imapEndpoint = normalizeIMAPEndpoint(form.imapHost, form.imapPort);
     const payload = {
@@ -458,10 +473,17 @@ async function submit() {
       : await createAccount(payload, auth.state.csrfToken);
     if (!viewActive || submittedRouteKey !== routeKey()) return;
     form.imapPassword = "";
-    successMessage(isEdit.value ? "主号设置已保存。" : "主号已添加。");
+    successMessage(
+      isEdit.value && !form.enabled
+        ? "主号已停用；收件已暂停，下属邮箱已从隐藏邮箱列表和入池候选中隐藏，原状态及历史记录保留。"
+        : isEdit.value
+          ? "主号设置已保存。"
+          : "主号已添加。",
+    );
     await router.replace({ name: "account-detail", params: { id: account.id } });
   } catch (error) {
     if (!viewActive || submittedRouteKey !== routeKey()) return;
+    if (confirmationCancelled(error)) return;
     form.imapPassword = "";
     submitError.value = error;
     formRef.value?.clearValidate("imapPassword");
@@ -499,3 +521,58 @@ onBeforeUnmount(() => {
   form.imapPassword = "";
 });
 </script>
+
+<style scoped>
+.account-form-page {
+  width: 100%;
+  max-width: 960px;
+  margin-inline: auto;
+}
+
+.account-form-page :deep(.form-grid) {
+  align-items: start;
+  row-gap: 20px;
+}
+
+.account-form-page :deep(.form-grid > .el-form-item) {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.account-form-page :deep(.el-input__wrapper),
+.account-form-page :deep(.el-select .el-select__wrapper),
+.account-form-page :deep(.el-button) {
+  min-height: 38px;
+}
+
+.account-form-page :deep(.imap-service-fields) {
+  grid-template-columns: minmax(0, 1fr) 112px;
+}
+
+.account-form-page .form-actions {
+  margin-top: 20px;
+}
+
+.account-form-page :deep(.imap-service-fields .el-form-item) {
+  margin-bottom: 0;
+}
+
+.account-form-page :deep(.imap-service-fields .el-form-item__error) {
+  position: static;
+  flex: 0 0 100%;
+  width: 100%;
+}
+
+.account-form-page :deep(.mailbox-route-summary) {
+  padding: 12px 14px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+@media (max-width: 720px) {
+  .account-form-page :deep(.imap-service-fields) {
+    grid-template-columns: minmax(0, 1fr) 88px;
+  }
+}
+</style>

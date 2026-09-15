@@ -1,6 +1,7 @@
 const SOURCE_LABELS = Object.freeze({
   manual: "手动同步",
   automatic: "自动同步",
+  notification: "来信通知同步",
 });
 
 const STAGE_LABELS = Object.freeze({
@@ -39,6 +40,7 @@ function normalizedSource(value) {
   if (source === "manual") {
     return "manual";
   }
+  if (source === "notification") return "notification";
   return "";
 }
 

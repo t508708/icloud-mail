@@ -1,0 +1,6 @@
+# Load the release image archive before starting with this overlay.
+services:
+  icloud-api:
+    image: icloud-api:handoff-2026.09.14
+  postgres:
+    image: icloud-api-postgres:handoff-2026.09.14

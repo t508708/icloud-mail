@@ -21,8 +21,6 @@ import (
 const (
 	defaultChallengeTTL         = 10 * time.Minute
 	defaultVerificationAttempts = 5
-	autoCreateLabel             = "自动创建"
-	autoCreateNote              = "icloud-api 自动创建"
 	autoCreatePersistTimeout    = 5 * time.Second
 	autoCreateRecoveryTimeout   = 10 * time.Second
 	aliasDeletePersistTimeout   = 5 * time.Second
@@ -107,6 +105,8 @@ type Service struct {
 	accountFlows                 map[int64]string
 	operationMu                  sync.Mutex
 	operationLock                map[int64]*operationLock
+	accountAuthChallenges        map[int64]accountAuthChallenge
+	creationCooldowns            map[int64]map[string]time.Time
 }
 
 func New(repo Repository, cipher SessionCipher, client AppleClient, locker AccountLocker, options ...Option) (*Service, error) {
@@ -195,6 +195,9 @@ func (s *Service) StartAuth(
 		return AuthResult{Status: StatusVerificationRequired, ChallengeID: flow.id, Session: info}, nil
 	}
 
+	if err := s.attachManagementForWebLogin(ctx, accountID, &session); err != nil {
+		return AuthResult{}, err
+	}
 	record, err := s.persistSession(ctx, accountID, identityOf(account), session)
 	if err != nil {
 		return AuthResult{}, err
@@ -249,6 +252,9 @@ func (s *Service) VerifyAuth(
 		return AuthResult{}, mapped
 	}
 	normalizeSession(&session, flow.appleID, flow.region, s.now())
+	if err := s.attachManagementForWebLogin(ctx, accountID, &session); err != nil {
+		return AuthResult{}, err
+	}
 	record, err := s.persistSession(ctx, accountID, flow.identity, session)
 	if err != nil {
 		s.deleteChallenge(challengeID)
@@ -296,7 +302,7 @@ func (s *Service) ClearAuth(ctx context.Context, accountID int64) error {
 	defer release()
 	s.deleteAccountChallenge(accountID)
 	return s.locker.WithAccountLock(ctx, accountID, func() error {
-		err := s.repo.DeleteAppleWebSession(ctx, accountID)
+		err := s.deleteWebSessionPreservingAccount(ctx, accountID)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
@@ -337,6 +343,11 @@ func (s *Service) SyncAliases(ctx context.Context, accountID int64) (SyncResult,
 	list, updated, err := s.client.ListAliases(ctx, validated)
 	if err != nil {
 		mapped := mapAppleError(err, false)
+		if errors.Is(err, apple.ErrHMEAuthentication) {
+			if checkpointErr := s.preserveValidatedDirectorySession(ctx, account, record, session, validated, false); checkpointErr != nil {
+				return SyncResult{}, errors.Join(wrapPersistenceError(checkpointErr), mapped)
+			}
+		}
 		if errors.Is(mapped, ErrSessionExpired) {
 			s.expireSession(ctx, accountID)
 		}
@@ -489,7 +500,7 @@ func (s *Service) checkpointAliasDeletionSession(ctx context.Context, accountID 
 func (s *Service) expireAliasDeletionSession(ctx context.Context, accountID int64, sessionErr error) error {
 	persistContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), aliasDeletePersistTimeout)
 	defer cancel()
-	err := s.repo.DeleteAppleWebSession(persistContext, accountID)
+	err := s.expireWebSessionPreservingTrust(persistContext, accountID)
 	if errors.Is(err, store.ErrNotFound) {
 		err = nil
 	}
@@ -513,6 +524,25 @@ func (s *Service) deleteLocalAliasAfterApple(ctx context.Context, repo AliasDele
 // retries reserve because repeating that remote side effect could create
 // duplicates; only the read-only directory confirmation is retried.
 func (s *Service) CreateAutoAlias(ctx context.Context, accountID int64) (createdAlias domain.Alias, resultErr error) {
+	return s.CreateAliasWithChannel(ctx, accountID, "auto")
+}
+
+// CreateAliasWithChannel shares the same publication and reconciliation path
+// for both Apple creation APIs. Only the remote reservation step differs.
+func (s *Service) CreateAliasWithChannel(ctx context.Context, accountID int64, channel string) (createdAlias domain.Alias, resultErr error) {
+	return s.createAliasWithChannel(ctx, accountID, channel, false)
+}
+
+// ProbeAliasWithChannel runs one user-triggered attempt without changing the
+// background cooldown or schedule. Publication and account gates are identical.
+func (s *Service) ProbeAliasWithChannel(ctx context.Context, accountID int64, channel string) (domain.Alias, error) {
+	return s.createAliasWithChannel(ctx, accountID, channel, true)
+}
+
+func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, channel string, probe bool) (createdAlias domain.Alias, resultErr error) {
+	if channel != "auto" && channel != "apple_account" && channel != "icloud_web" {
+		return domain.Alias{}, errors.New("invalid alias creation channel")
+	}
 	currentPercent := autoCreatePreparingPercent
 	pendingConfirmationTracked := false
 	reportProgress := func(phase domain.AliasCreationPhase, percent, attempt int) {
@@ -604,10 +634,10 @@ func (s *Service) CreateAutoAlias(ctx context.Context, accountID int64) (created
 		if releaseAccount != nil {
 			// The production locker is deliberately non-reentrant. The account
 			// lock already protects this deletion across the remote operation.
-			deleteErr = s.repo.DeleteAppleWebSession(cleanupContext, accountID)
+			deleteErr = s.expireWebSessionPreservingTrust(cleanupContext, accountID)
 		} else {
 			deleteErr = s.locker.WithAccountLock(cleanupContext, accountID, func() error {
-				err := s.repo.DeleteAppleWebSession(cleanupContext, accountID)
+				err := s.expireWebSessionPreservingTrust(cleanupContext, accountID)
 				if errors.Is(err, store.ErrNotFound) {
 					return nil
 				}
@@ -633,6 +663,9 @@ func (s *Service) CreateAutoAlias(ctx context.Context, accountID int64) (created
 	}
 	if !account.Enabled {
 		return domain.Alias{}, wrapError(CodeAccountDisabled, ErrAccountDisabled, nil)
+	}
+	if domain.IsIMAPAuthenticationFailure(account.LastSyncError) {
+		return domain.Alias{}, wrapError(CodeMailboxAuthenticationPaused, domain.ErrIMAPAuthenticationPaused, nil)
 	}
 	reportProgress(domain.AliasCreationPhaseCheckingCapacity, autoCreateCheckingCapacityPercent, 0)
 	pendingConfirmation, pendingErr := getPending(ctx, accountID)
@@ -663,6 +696,35 @@ func (s *Service) CreateAutoAlias(ctx context.Context, accountID int64) (created
 	if trustedDSID == "" {
 		return domain.Alias{}, expireAutoSession(wrapError(CodeSessionExpired, ErrSessionExpired,
 			errors.New("stored Apple session omitted the account identifier")))
+	}
+	// Claim before the first upstream request. Manual probes use a separate
+	// ledger; background jobs share a budget across channels and schedulers.
+	if probe {
+		budget, ok := s.repo.(appleCreationProbeRepository)
+		if !ok {
+			return domain.Alias{}, errors.New("manual probe persistence is unavailable")
+		}
+		if err := budget.ClaimAppleCreationProbe(ctx, accountID, s.now()); err != nil {
+			return domain.Alias{}, err
+		}
+	} else if budget, ok := s.repo.(appleCreationBudgetRepository); ok {
+		if err := budget.ClaimAppleCreationAttempt(ctx, accountID, s.now()); err != nil {
+			if errors.Is(err, store.ErrAccountDisabled) {
+				return domain.Alias{}, wrapError(CodeAccountDisabled, ErrAccountDisabled, err)
+			}
+			return domain.Alias{}, err
+		}
+		defer func() {
+			if !errors.Is(resultErr, ErrRateLimited) && !apple.IsRateLimited(resultErr) {
+				return
+			}
+			persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), autoCreatePersistTimeout)
+			defer cancel()
+			until := s.now().Add(max(24*time.Hour, apple.RetryDelay(resultErr)))
+			if err := budget.PauseAppleCreation(persistCtx, accountID, until); err != nil {
+				resultErr = errors.Join(resultErr, wrapPersistenceError(err))
+			}
+		}()
 	}
 	reportProgress(domain.AliasCreationPhaseValidatingSession, autoCreateValidatingSessionPercent, 0)
 	validated, err := s.client.Validate(ctx, session)
@@ -705,6 +767,11 @@ func (s *Service) CreateAutoAlias(ctx context.Context, accountID int64) (created
 	settings, listedSession, err := s.client.ListAliases(ctx, validated)
 	if err != nil {
 		mapped := mapAppleError(err, false)
+		if errors.Is(err, apple.ErrHMEAuthentication) {
+			if checkpointErr := s.preserveValidatedDirectorySession(ctx, account, record, session, validated, releaseAccount != nil); checkpointErr != nil {
+				return domain.Alias{}, errors.Join(wrapPersistenceError(checkpointErr), mapped)
+			}
+		}
 		if errors.Is(mapped, ErrSessionExpired) {
 			mapped = expireAutoSession(mapped)
 		}
@@ -981,10 +1048,13 @@ func (s *Service) CreateAutoAlias(ctx context.Context, accountID int64) (created
 	}
 
 	reportProgress(domain.AliasCreationPhaseReserving, autoCreateReservingPercent, 0)
-	created, updated, createErr := autoClient.CreateAlias(ctx, listedSession, autoCreateLabel, autoCreateNote)
+	created, updated, createErr := s.createRemoteAliasWithMode(ctx, accountID, listedSession, autoClient, channel, probe)
 	var mappedCreateErr error
 	if createErr != nil {
-		mappedCreateErr = mapAppleError(createErr, false)
+		mappedCreateErr = createErr
+		if Code(createErr) == "" {
+			mappedCreateErr = mapAppleError(createErr, false)
+		}
 	}
 
 	// Once reserve may have reached Apple, a valid generated HME is the durable
@@ -1018,7 +1088,10 @@ func (s *Service) CreateAutoAlias(ctx context.Context, accountID int64) (created
 	}
 	label := strings.TrimSpace(created.Label)
 	if label == "" {
-		label = autoCreateLabel
+		label = strings.TrimSpace(address)
+		if at := strings.LastIndexByte(label, '@'); at >= 0 {
+			label = label[:at]
+		}
 	}
 	sessionForConfirmation := updated
 	if !hasAppleSessionState(sessionForConfirmation) {
@@ -1353,6 +1426,25 @@ func (s *Service) persistSession(ctx context.Context, accountID int64, expected 
 	return saved, err
 }
 
+// Keep only the successfully validated checkpoint, not the directory failure's
+// headers. A directory authorization failure is independent of account login.
+func (s *Service) preserveValidatedDirectorySession(ctx context.Context, account domain.Account, record domain.AppleWebSession, previous, validated apple.Session, accountLocked bool) error {
+	if !sameEmail(validated.AppleID, record.AppleID) {
+		return wrapError(CodeAccountMismatch, ErrAccountMismatch, nil)
+	}
+	if err := validateSessionDSID(previous.DSID, validated); err != nil {
+		return err
+	}
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), autoCreatePersistTimeout)
+	defer cancel()
+	if accountLocked {
+		_, err := s.saveSession(persistCtx, account.ID, validated)
+		return err
+	}
+	_, err := s.persistSession(persistCtx, account.ID, identityOf(account), validated)
+	return err
+}
+
 func (s *Service) removeSessionForIdentity(ctx context.Context, accountID int64, expected accountIdentity) error {
 	return s.locker.WithAccountLock(ctx, accountID, func() error {
 		current, err := s.repo.GetAccount(ctx, accountID)
@@ -1362,7 +1454,7 @@ func (s *Service) removeSessionForIdentity(ctx context.Context, accountID int64,
 		if !sameIdentity(identityOf(current), expected) {
 			return wrapError(CodeAccountChanged, ErrAccountChanged, nil)
 		}
-		err = s.repo.DeleteAppleWebSession(ctx, accountID)
+		err = s.expireWebSessionPreservingTrust(ctx, accountID)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
@@ -1412,6 +1504,13 @@ func (s *Service) loadSession(ctx context.Context, accountID int64) (domain.Appl
 	if err != nil {
 		return record, apple.Session{}, wrapError(CodeSessionExpired, ErrSessionExpired, err)
 	}
+	managed, managedErr := s.readAccountManagementSession(ctx, accountID)
+	if managedErr != nil && !errors.Is(managedErr, store.ErrNotFound) && Code(managedErr) != CodeAccountSessionExpired {
+		return record, apple.Session{}, managedErr
+	}
+	if managedErr == nil && sameEmail(managed.AppleID, session.AppleID) {
+		session.Account = managed
+	}
 	return record, session, nil
 }
 
@@ -1450,7 +1549,7 @@ func (s *Service) previousSession(ctx context.Context, accountID int64, appleID 
 
 func (s *Service) expireSession(ctx context.Context, accountID int64) {
 	_ = s.locker.WithAccountLock(ctx, accountID, func() error {
-		err := s.repo.DeleteAppleWebSession(ctx, accountID)
+		err := s.expireWebSessionPreservingTrust(ctx, accountID)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}

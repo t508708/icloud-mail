@@ -30,11 +30,15 @@ type recentMailData struct {
 // the durable legacy latest_messages row loaded by authentication.
 func (s *Server) availableMailboxSnapshot(c *gin.Context) (domain.MailboxBinding, time.Time, bool) {
 	binding := mustBinding(c)
+	var ok bool
+	binding, ok = s.refreshDemandMailbox(c, binding)
+	if !ok {
+		return domain.MailboxBinding{}, time.Time{}, false
+	}
 	now := time.Now().UTC()
 	if s.now != nil {
 		now = s.now().UTC()
 	}
-	s.requestMailboxSync(binding.Account.ID, now)
 	if err := s.store.TouchAliasAccess(c.Request.Context(), binding.Alias.ID, now); err != nil {
 		s.logger.Warn("更新 API 最近访问时间失败", "alias_id", binding.Alias.ID, "error", err, "request_id", requestID(c))
 	}
@@ -43,8 +47,9 @@ func (s *Server) availableMailboxSnapshot(c *gin.Context) (domain.MailboxBinding
 	if minimumFreshness > staleAfter {
 		staleAfter = minimumFreshness
 	}
+	watchHealthy := s.mailboxWatchHealthy != nil && s.mailboxWatchHealthy(binding.Account.ID)
 	if binding.Alias.LastSyncStatus != domain.SyncStatusOK || binding.Alias.LastSyncedAt == nil ||
-		binding.Alias.LastSyncedAt.After(now) || now.Sub(*binding.Alias.LastSyncedAt) > staleAfter {
+		binding.Alias.LastSyncedAt.After(now) || (!watchHealthy && now.Sub(*binding.Alias.LastSyncedAt) > staleAfter) {
 		s.writeAPIError(c, http.StatusServiceUnavailable, "SYNC_UNAVAILABLE", "邮箱同步暂不可用")
 		return domain.MailboxBinding{}, time.Time{}, false
 	}
@@ -52,6 +57,12 @@ func (s *Server) availableMailboxSnapshot(c *gin.Context) (domain.MailboxBinding
 }
 
 func (s *Server) latestMail(c *gin.Context) {
+	initial := mustBinding(c)
+	release, ok := s.beginMailboxPickup(c, initial.Account.ID, initial.Alias.ID)
+	if !ok {
+		return
+	}
+	defer release()
 	binding, _, ok := s.availableMailboxSnapshot(c)
 	if !ok {
 		return
@@ -86,6 +97,12 @@ func (s *Server) latestMail(c *gin.Context) {
 }
 
 func (s *Server) recentMail(c *gin.Context) {
+	initial := mustBinding(c)
+	release, ok := s.beginMailboxPickup(c, initial.Account.ID, initial.Alias.ID)
+	if !ok {
+		return
+	}
+	defer release()
 	binding, now, ok := s.availableMailboxSnapshot(c)
 	if !ok {
 		return

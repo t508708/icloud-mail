@@ -145,9 +145,8 @@ func (s *Store) ApplyMailboxSync(
 		return fmt.Errorf("recheck enabled aliases before mailbox publish: %w", err)
 	}
 	if !aliasesMatch {
-		// Account and alias mutations invalidate the cursor while holding the
-		// same account lock. A result collected for an older alias set must not
-		// recreate that cursor or mark aliases it never observed as healthy.
+		// Alias mutations preserve the cursor but invalidate this publication's
+		// recipient set. Do not mark aliases it never observed as healthy.
 		return nil
 	}
 

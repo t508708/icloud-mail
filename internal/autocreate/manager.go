@@ -22,20 +22,20 @@ import (
 )
 
 const (
-	// CreationsPerCycle is the number of attempts in one hourly schedule.
-	CreationsPerCycle = 5
+	// CreationsPerCycle is this project's configured hourly ceiling, not an
+	// Apple-published quota or guarantee.
+	CreationsPerCycle = domain.AppleCreationHourlyLimit
 
 	// MinimumInterval is the smallest permitted interval between attempts.
-	MinimumInterval = 5 * time.Minute
+	MinimumInterval = domain.AppleCreationMinInterval
 
 	// CycleDuration is the duration covered by one generated plan.
 	CycleDuration = time.Hour
 
-	// appleRateLimitCooldown clears Apple's observed 30-60 minute reserve
-	// batch window before another generated address is submitted.
-	appleRateLimitCooldown = 61 * time.Minute
+	// appleRateLimitCooldown is a conservative pause after explicit upstream throttling.
+	appleRateLimitCooldown = 24 * time.Hour
 
-	defaultPollInterval                  = 30 * time.Second
+	defaultPollInterval                  = 5 * time.Second
 	defaultOverdueGrace                  = 2 * time.Minute
 	terminalStatePersistTimeout          = 5 * time.Second
 	appleServiceCodeFingerprintHexLength = 16
@@ -162,6 +162,17 @@ func WithOverdueGrace(grace time.Duration) Option {
 	}
 }
 
+// WithConcurrency limits accounts processed by one polling cycle.
+func WithConcurrency(n int) Option {
+	return func(m *Manager) error {
+		if n < 1 || n > 16 {
+			return errors.New("concurrency must be between 1 and 16")
+		}
+		m.concurrency = n
+		return nil
+	}
+}
+
 // Manager owns the in-process polling loop. Durability and cross-process
 // coordination are provided by Repository's compare-and-swap methods.
 type Manager struct {
@@ -174,6 +185,7 @@ type Manager struct {
 	wait         WaitFunc
 	pollInterval time.Duration
 	overdueGrace time.Duration
+	concurrency  int
 	randomMu     sync.Mutex
 	runSeq       atomic.Uint64
 }
@@ -212,6 +224,7 @@ func New(repo Repository, creator Creator, logger *slog.Logger, options ...Optio
 		wait:         waitForInterval,
 		pollInterval: defaultPollInterval,
 		overdueGrace: defaultOverdueGrace,
+		concurrency:  3,
 	}
 	for _, option := range options {
 		if option == nil {
@@ -237,6 +250,18 @@ func (m *Manager) Run(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// UpgradeCadence runs before the polling loop. A durable marker ensures that
+// restarting the service never resets an already running plan or cooldown.
+func (m *Manager) UpgradeCadence(ctx context.Context) error {
+	upgrader, ok := m.repo.(interface {
+		UpgradeAliasCreationCadence(context.Context, string, time.Time, func(time.Time) ([]time.Time, error)) error
+	})
+	if !ok {
+		return nil
+	}
+	return upgrader.UpgradeAliasCreationCadence(ctx, "18-per-hour-independent-probes-v4", m.now(), m.newPlan)
 }
 
 // GetSchedule returns a persisted schedule. An absent row means the feature
@@ -300,12 +325,52 @@ func (m *Manager) runDue(ctx context.Context) {
 		}
 		return
 	}
+	seen := make(map[int64]struct{}, len(schedules))
+	jobs := make(chan domain.AliasCreationSchedule)
+	workers := m.concurrency
+	if workers < 1 {
+		workers = 3
+	}
+	if workers > len(schedules) {
+		workers = len(schedules)
+	}
+	if workers == 0 {
+		return
+	}
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case s, ok := <-jobs:
+					if !ok {
+						return
+					}
+					m.processDue(ctx, s)
+				}
+			}
+		}()
+	}
 	for _, schedule := range schedules {
 		if ctx.Err() != nil {
-			return
+			break
 		}
-		m.processDue(ctx, schedule)
+		if _, ok := seen[schedule.AccountID]; ok {
+			continue
+		}
+		seen[schedule.AccountID] = struct{}{}
+		select {
+		case jobs <- schedule:
+		case <-ctx.Done():
+			break
+		}
 	}
+	close(jobs)
+	wg.Wait()
 }
 
 func (m *Manager) processDue(ctx context.Context, schedule domain.AliasCreationSchedule) {
@@ -370,9 +435,21 @@ func (m *Manager) processDue(ctx context.Context, schedule domain.AliasCreationS
 	if !claimed {
 		return
 	}
+	if gate, ok := m.repo.(interface {
+		PoolCreationAllowed(context.Context, int64) (bool, error)
+	}); ok {
+		allowed, err := gate.PoolCreationAllowed(ctx, schedule.AccountID)
+		if err != nil {
+			m.logAutomaticScheduleError(ctx, schedule.AccountID, "check_pool_inventory", domain.AliasCreationPhasePreparing, expected, err)
+			return
+		}
+		if !allowed {
+			return
+		}
+	}
 	// Claim time is persisted before the remote side effect. Re-read the clock
 	// after the CAS so database latency cannot leave the next deadline inside
-	// five minutes of the post-claim start boundary.
+	// MinimumInterval of the post-claim start boundary.
 	attemptedAt := claimAt
 	actualAt := m.now()
 	flow := m.newAliasCreationFlow(actualAt)
@@ -508,7 +585,13 @@ func (m *Manager) processDue(ctx context.Context, schedule domain.AliasCreationS
 			// Start the cooldown at the observed failure time. The claim timestamp
 			// can precede Apple's response by several seconds, which would otherwise
 			// shorten the provider's rolling window.
-			cooldownPlan, cooldownPlanErr := m.newPlanStartingAt(m.now().Add(appleRateLimitCooldown))
+			delay := appleRateLimitCooldown
+			if diagnoseAliasCreationError(createErr).code == "APPLE_CREATION_BUDGET_WAIT" {
+				delay = max(MinimumInterval, localCreationBudgetRetryDelay(createErr))
+			} else if retryDelay := apple.RetryDelay(createErr); retryDelay > delay {
+				delay = retryDelay
+			}
+			cooldownPlan, cooldownPlanErr := m.newPlanStartingAt(m.now().Add(delay))
 			if cooldownPlanErr == nil {
 				expectedNext := nextRunAt.UTC()
 				cooldownContext, cancelCooldownContext := context.WithTimeout(logContext, terminalStatePersistTimeout)
@@ -546,6 +629,9 @@ func (m *Manager) processDue(ctx context.Context, schedule domain.AliasCreationS
 		case errors.Is(createErr, ErrCapacityReached):
 			disableOperation = "disable_creation_schedule"
 			disableMessage = "达到容量上限后关闭自动创建失败"
+		case disableAliasCreationAfterError(createErr):
+			disableOperation = "disable_creation_schedule_after_account_error"
+			disableMessage = "账户或会话异常后关闭自动创建失败"
 		case aliasCreationUntrackedRemoteSideEffect(createErr):
 			disableOperation = "pause_after_untracked_remote_side_effect"
 			disableMessage = "远端地址可能已创建但本地候选未保存，暂停自动创建失败"
@@ -607,6 +693,18 @@ func (m *Manager) processDue(ctx context.Context, schedule domain.AliasCreationS
 		nextRunAt,
 		resultRecorded,
 	)
+}
+
+func disableAliasCreationAfterError(err error) bool {
+	switch diagnoseAliasCreationError(err).code {
+	case "APPLE_LOGIN_REQUIRED", "APPLE_SESSION_EXPIRED", "APPLE_ACCOUNT_LOGIN_REQUIRED",
+		"APPLE_ACCOUNT_SESSION_EXPIRED", "APPLE_CREDENTIALS_INVALID",
+		"APPLE_VERIFICATION_INVALID", "APPLE_FLOW_EXPIRED", "APPLE_ACCOUNT_ACTION_REQUIRED", "APPLE_HME_AUTH_FAILED",
+		"APPLE_ACCOUNT_MISMATCH", "ACCOUNT_DISABLED", "ACCOUNT_CHANGED", "IMAP_AUTHENTICATION_PAUSED":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Manager) correctPlanAfterClaim(
@@ -721,14 +819,14 @@ func (m *Manager) newPlanStartingAt(first time.Time) ([]time.Time, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Keep five attempts in the following hour, but make the first deadline the
+	// Keep the configured attempts in the following hour, with the first deadline
 	// exact end of the cooldown instead of adding another random scheduling gap.
 	planned[0] = first.UTC()
 	return planned, nil
 }
 
-// generatePlan creates five cumulative deadlines. The five random gaps are
-// integer minutes, each at least five minutes, and add up to one hour.
+// generatePlan spreads the configured deadlines across an hour. Randomized
+// gaps respect MinimumInterval and total exactly one hour.
 func generatePlan(anchor time.Time, random RandomSource) ([]time.Time, error) {
 	if random == nil {
 		return nil, errors.New("random source is required")
@@ -740,13 +838,13 @@ func generatePlan(anchor time.Time, random RandomSource) ([]time.Time, error) {
 	for index := range gaps {
 		gaps[index] = MinimumInterval
 	}
-	remaining := int((CycleDuration - minimumCycleDuration) / time.Minute)
+	remaining := int((CycleDuration - minimumCycleDuration) / time.Second)
 	for index := 0; index < remaining; index++ {
 		bucket := random.IntN(CreationsPerCycle)
 		if bucket < 0 || bucket >= CreationsPerCycle {
 			return nil, fmt.Errorf("%w: %d", errInvalidRandom, bucket)
 		}
-		gaps[bucket] += time.Minute
+		gaps[bucket] += time.Second
 	}
 	planned := make([]time.Time, CreationsPerCycle)
 	next := anchor.UTC()
@@ -792,7 +890,16 @@ func aliasCreationRequiresRateLimitCooldown(err error) bool {
 	// classified error, but also inspect wrapped Apple causes. A reserve can
 	// return a rate-limit response while a session checkpoint fails, in which
 	// case hmesync joins the persistence error before APPLE_RATE_LIMITED.
-	return diagnoseAliasCreationError(err).code == "APPLE_RATE_LIMITED" || apple.IsRateLimited(err)
+	code := diagnoseAliasCreationError(err).code
+	return code == "APPLE_RATE_LIMITED" || code == "APPLE_CREATION_BUDGET_WAIT" || apple.IsRateLimited(err)
+}
+
+func localCreationBudgetRetryDelay(err error) time.Duration {
+	var retry interface{ RetryDelay() time.Duration }
+	if errors.As(err, &retry) && retry != nil {
+		return retry.RetryDelay()
+	}
+	return MinimumInterval
 }
 
 func (m *Manager) logAutomaticScheduleError(
@@ -892,6 +999,12 @@ func safeAppleOperation(value string) string {
 		"delete Hide My Email alias",
 		"decode delete Hide My Email alias",
 		"create Hide My Email alias",
+		"account GET /account/manage/gs/ws/token",
+		"account GET /account/manage",
+		"account GET /account/manage/forwardemail",
+		"account refresh backoff",
+		"account POST /account/manage/email/private/add",
+		"account PUT /account/manage/email/private/add/complete",
 		"reserve alias":
 		return value
 	default:

@@ -72,16 +72,19 @@ func TestV2URLTokensArePurposeBoundAtRouter(t *testing.T) {
 	if otp.Code != http.StatusOK || strings.TrimSpace(otp.Body.String()) != "[]" {
 		t.Fatalf("purpose-bound OTP link status = %d; body=%s", otp.Code, otp.Body.String())
 	}
+	now = now.Add(3 * time.Second)
 	otpByAPIKey := serveV2Request(router, http.MethodGet, "/api/v1/otp", "", map[string]string{
 		"Authorization": "Bearer " + credentials.APIKey,
 	})
 	if otpByAPIKey.Code != http.StatusOK || strings.TrimSpace(otpByAPIKey.Body.String()) != "[]" {
 		t.Fatalf("existing API Key OTP status = %d; body=%s", otpByAPIKey.Code, otpByAPIKey.Body.String())
 	}
+	now = now.Add(3 * time.Second)
 	recent := serveV2Request(router, http.MethodGet, dto.DirectLinkPath, "", nil)
 	if recent.Code != http.StatusOK || !strings.Contains(recent.Body.String(), "purpose-bound body") {
 		t.Fatalf("purpose-bound recent link status = %d; body=%s", recent.Code, recent.Body.String())
 	}
+	now = now.Add(3 * time.Second)
 	latestByAPIKey := serveV2Request(router, http.MethodGet, "/api/v1/mail/latest", "", map[string]string{
 		"Authorization": "Bearer " + credentials.APIKey,
 	})
@@ -95,6 +98,7 @@ func TestV2URLTokensArePurposeBoundAtRouter(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("publish API Key compatibility message: %v", err)
 	}
+	now = now.Add(3 * time.Second)
 	recentByAPIKey := serveV2Request(
 		router,
 		http.MethodGet,

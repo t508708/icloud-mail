@@ -58,3 +58,18 @@ test("admin DTO normalizers expose only the frontend contract", () => {
   assert.equal("apiKeyHash" in alias, false);
   assert.equal("credentialCiphertext" in alias, false);
 });
+
+test("alias normalization preserves configured state when the primary account pauses it", () => {
+  const paused = normalizeAlias({ enabled: false, configured_enabled: true, account_enabled: false });
+  assert.equal(paused.enabled, false);
+  assert.equal(paused.configuredEnabled, true);
+  assert.equal(paused.accountEnabled, false);
+
+  const individuallyDisabled = normalizeAlias({ enabled: false, configured_enabled: false, account_enabled: false });
+  assert.equal(individuallyDisabled.configuredEnabled, false);
+  assert.equal(individuallyDisabled.accountEnabled, false);
+
+  const legacy = normalizeAlias({ enabled: true });
+  assert.equal(legacy.configuredEnabled, true);
+  assert.equal(legacy.accountEnabled, true);
+});

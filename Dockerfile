@@ -28,7 +28,7 @@ COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund --registry="${NPM_REGISTRY}"
 
 COPY web/ ./
-RUN npm run build
+RUN NODE_OPTIONS=--max-old-space-size=512 npm run build
 
 FROM ${DOCKER_HUB_MIRROR}/library/golang:1.26-alpine AS go-builder
 
@@ -42,7 +42,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build \
+RUN GOMAXPROCS=2 GOMEMLIMIT=512MiB CGO_ENABLED=0 GOOS=linux go build -p 2 \
     -trimpath \
     -ldflags="-s -w" \
     -o /out/icloud-api \

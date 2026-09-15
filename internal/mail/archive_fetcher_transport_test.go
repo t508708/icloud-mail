@@ -256,6 +256,7 @@ type archiveIMAPFixture struct {
 	blockUID      imap.UID
 	bodyStarted   chan struct{}
 	releaseBody   chan struct{}
+	searchPolicy  func(*imap.SearchCriteria) error
 }
 
 func startArchiveIMAPFixture(t *testing.T, messageCount int, blockUID imap.UID) *archiveIMAPFixture {
@@ -326,6 +327,18 @@ func (fixture *archiveIMAPFixture) initialState(t *testing.T) domain.IMAPSyncSta
 type archiveIMAPSession struct {
 	imapserver.Session
 	fixture *archiveIMAPFixture
+}
+
+func (session *archiveIMAPSession) Search(kind imapserver.NumKind, criteria *imap.SearchCriteria, options *imap.SearchOptions) (*imap.SearchData, error) {
+	session.fixture.mu.Lock()
+	policy := session.fixture.searchPolicy
+	session.fixture.mu.Unlock()
+	if policy != nil {
+		if err := policy(criteria); err != nil {
+			return nil, err
+		}
+	}
+	return session.Session.Search(kind, criteria, options)
 }
 
 func (session *archiveIMAPSession) Select(mailbox string, options *imap.SelectOptions) (*imap.SelectData, error) {
