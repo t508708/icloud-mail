@@ -42,8 +42,17 @@ func TestAccountCreationRefreshesBeforeIdleDeadline(t *testing.T) {
 	})
 	now := time.Now()
 	alias, session, err := c.CreateAccountAlias(context.Background(), AccountSession{SCNT: "old", APIKey: "old", AuthenticatedAt: now.Add(-14 * time.Minute), ExpiresAt: now.Add(time.Minute)}, "label", "")
-	if err != nil || alias.HME != "renewed@icloud.com" || len(calls) != 5 || !session.ExpiresAt.After(now.Add(14*time.Minute)) || session.RefreshedAt.IsZero() || session.UpdatedAt.IsZero() {
+	if err != nil || alias.HME != "renewed@icloud.com" || len(calls) != 5 || !session.ExpiresAt.After(now.Add(14*time.Minute)) || session.RefreshedAt.IsZero() || session.UpdatedAt.IsZero() || session.RenewalJitterSeconds < 240 || session.RenewalJitterSeconds > 360 {
 		t.Fatalf("renewal flow failed: calls=%v error=%v", calls, err)
+	}
+}
+
+func TestRandomRenewalJitterStaysWithinFourToSixMinutes(t *testing.T) {
+	for range 1000 {
+		seconds := randomRenewalJitterSeconds()
+		if seconds < 240 || seconds > 360 {
+			t.Fatalf("random renewal interval = %d seconds", seconds)
+		}
 	}
 }
 
