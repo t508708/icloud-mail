@@ -26,6 +26,12 @@ Web 主入口使用 Cloudflare 已激活的免费 Universal SSL（`*.gooelv.com`
 
 首次接入仍需在 Web 主号管理中添加 Apple 账号、App 专用密码并完成登录，然后配置入池和定时创建。
 
+## GitHub 源码发布
+
+公开仓库为 `https://github.com/t508708/icloud-mail`，由 GitHub fork 保留 `mangobubu/icloud-api` 的公开上游历史。公开同步目录是本项目下 `.local/github-publication/icloud-mail`，此目录有独立 Git 元数据和 GitHub noreply 作者地址；主工作区继续保留完整本机历史与原 `origin`，不要从主工作区推送分支、全部 refs 或本机标签到公开仓库。
+
+更新公开仓库时，先提交主工作区的源码改动，使用 `git archive HEAD` 按 `.gitattributes` 规则导出到独立临时目录；审查新增/删除文件、凭据扫描和测试后，再同步至公开仓库并提交。增量同步应处理已删除源码文件，保留公开目录的 `.git`。跳过本机运维文件、`.env`、`.local`、镜像、邮件和证书；发布操作不重建线上服务。GitHub 令牌仅用于当次进程内存，不保存到 Git remote、文件或项目记忆。
+
 ## 服务与证书
 
 `.env` 通过 `COMPOSE_FILE=compose.baota.yaml` 加载单文件编排，兼容宝塔的文件检查。它由 `bash scripts/render-baota-compose.sh` 合并 `compose.yaml` 和 `compose.public.yaml` 生成，保留证书目录挂载；更新这两个源文件后需重新生成。所有正常的 `docker compose` 命令都会使用该配置。HTTP 应用保持 `127.0.0.1:8788`，IMAPS 应用保持 `127.0.0.1:1993`。受信代理配置为当前 Docker 网桥网关 `172.22.0.1/32`，重建网络后需核对该地址。
