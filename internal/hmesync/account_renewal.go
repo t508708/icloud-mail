@@ -19,7 +19,9 @@ func (s *Service) RunAccountSessionRenewal(ctx context.Context, logger *slog.Log
 	if !ok {
 		return
 	}
-	ticker := time.NewTicker(time.Minute)
+	// Leave scheduling headroom around the four-minute renewal deadline.
+	// This tick only reads local state; requests are sent only when due.
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for ctx.Err() == nil {
 		accounts, err := repo.ListAccounts(ctx)
@@ -37,10 +39,15 @@ func (s *Service) RunAccountSessionRenewal(ctx context.Context, logger *slog.Log
 			err := s.keepAliveAccountSession(callCtx, account.ID, true, logger)
 			cancel()
 			if err != nil && ctx.Err() == nil && logger != nil {
-				attrs := []any{"account_id", account.ID, "operation", "apple_account_session_renew", "error_code", Code(mapAppleError(err, false))}
+				mapped := mapAppleError(err, false)
+				code := Code(mapped)
+				if errors.Is(err, apple.ErrInvalidSession) {
+					code = CodeAccountSessionExpired
+				}
+				attrs := []any{"account_id", account.ID, "operation", "apple_account_session_renew", "error_code", code}
 				var upstream *apple.Error
 				if errors.As(err, &upstream) {
-					attrs = append(attrs, "http_status", upstream.StatusCode)
+					attrs = append(attrs, "http_status", upstream.StatusCode, "upstream_operation", upstream.Op, "service_code", upstream.ServiceCode)
 				}
 				logger.Warn("Apple Account 会话续期暂未完成", attrs...)
 			}
