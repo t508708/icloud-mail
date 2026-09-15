@@ -28,12 +28,14 @@ Web 主入口使用 Cloudflare 已激活的免费 Universal SSL（`*.gooelv.com`
 
 ## 服务与证书
 
-`.env` 通过 `COMPOSE_FILE=compose.yaml:compose.public.yaml` 加载证书目录挂载；所有正常的 `docker compose` 命令都会使用该配置。HTTP 应用保持 `127.0.0.1:8788`，IMAPS 应用保持 `127.0.0.1:1993`。受信代理配置为当前 Docker 网桥网关 `172.22.0.1/32`，重建网络后需核对该地址。
+`.env` 通过 `COMPOSE_FILE=compose.baota.yaml` 加载单文件编排，兼容宝塔的文件检查。它由 `bash scripts/render-baota-compose.sh` 合并 `compose.yaml` 和 `compose.public.yaml` 生成，保留证书目录挂载；更新这两个源文件后需重新生成。所有正常的 `docker compose` 命令都会使用该配置。HTTP 应用保持 `127.0.0.1:8788`，IMAPS 应用保持 `127.0.0.1:1993`。受信代理配置为当前 Docker 网桥网关 `172.22.0.1/32`，重建网络后需核对该地址。
+
+2026-09-15 切换记录保存在 `.local/baota-compose-20260915/`，包括原环境文件、容器与镜像元数据、停写后的数据库备份。原数据库运行镜像已无可用本地引用，因此先用 `docker commit` 保存为 `icloud-api-postgres:baota-runtime-20260915`，再将 `icloud-api-postgres:local` 指向该运行版本。切换前 `local` 指向的交付镜像仍保留为 `icloud-api-postgres:before-baota-20260915` 和 `icloud-api-postgres:handoff-2026.09.14`。已核对重建前后的数据库程序、入口脚本校验和、环境变量及全部挂载一致。
 
 本机 `.env` 的公网设置如下，其余数据库和构建设置保留：
 
 ```dotenv
-COMPOSE_FILE=compose.yaml:compose.public.yaml
+COMPOSE_FILE=compose.baota.yaml
 ICLOUD_API_ADMIN_PATH=/admin
 ICLOUD_API_PUBLIC_IMAP_SERVER_NAME=imap-icloud.us.gooelv.com
 ICLOUD_API_PUBLIC_IMAP_TLS_CERT_FILE=/app/public-tls/fullchain.pem

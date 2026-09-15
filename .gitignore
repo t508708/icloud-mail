@@ -1,5 +1,6 @@
 /data/
 /.local/
+/compose.baota.yaml
 /*.db
 /*.db-shm
 /*.db-wal

@@ -74,3 +74,26 @@ openssl s_client -connect imap.example.com:993 \
 ```
 
 应用首次生成的自签 IMAPS 证书只用于本地试用。每个新安装使用自己的域名、证书和数据卷。
+
+## 宝塔容器编排的单文件入口
+
+部分宝塔版本把 Docker 返回的多个配置路径当成一个文件名，出现 `[.../compose.yaml,.../compose.public.yaml] 文件不存在`。使用单文件入口可解决这个兼容问题：
+
+```sh
+# 默认合并基础配置和公网证书挂载，保留环境变量占位符。
+bash scripts/render-baota-compose.sh
+# 镜像包安装则使用下面这条生成命令：
+# bash scripts/render-baota-compose.sh compose.yaml compose.offline.yaml compose.public.yaml
+```
+
+在 `.env` 中将 `COMPOSE_FILE` 设置为 `compose.baota.yaml`，保留原来的 `COMPOSE_PROJECT_NAME`。初次切换需重建全部项目容器，Docker 才会更新宝塔读取的配置路径；会有短暂服务中断：
+
+```sh
+docker compose stop icloud-api
+docker compose up -d --force-recreate --no-build --pull never --wait --wait-timeout 120
+docker compose ls
+```
+
+操作前确认本地镜像标签指向要运行的版本。重建沿用原项目数据卷；`docker compose ls` 中本项目的 `ConfigFiles` 应只显示 `compose.baota.yaml` 的绝对路径。然后刷新宝塔容器编排页。
+
+后续通过普通 `docker compose` 命令管理，避免再传多个 `-f`。更新基础编排或覆盖文件后，先重新运行生成命令，再部署；生成会覆盖在宝塔直接编辑的单文件内容。`compose.baota.yaml` 是本地生成文件，已排除版本控制。
