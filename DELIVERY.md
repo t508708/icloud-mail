@@ -1,10 +1,58 @@
-# 朋友安装说明
+# 安装与交付
 
-本交付对应源码标签 `handoff-2026.09.14`，运行基线为 `baseline-2026.09.14=af953a9`。交付包包含完整源码；完整版另含 `images/linux-amd64.tar.gz`，其中只有两张 Docker 镜像，不含数据库、密钥或业务数据。
+公开仓库：<https://github.com/t508708/icloud-mail>。源码包含 Web 控制面板、Go 服务、测试和 Docker 构建配置，不含账号、邮件、密码、证书或现有服务器的数据。
 
-## 离线镜像版（amd64）
+## 源码构建安装
 
-要求 Docker Engine、Docker Compose v2。建议至少 2 核、4 GB 内存；磁盘空间应按邮件归档量预留。
+要求 Docker Engine、Docker Compose v2（支持所用 Compose 配置）。建议至少 2 核、4 GB 内存；磁盘空间按邮件归档量预留。
+
+```sh
+git clone https://github.com/t508708/icloud-mail.git
+cd icloud-mail
+cp -n .env.example .env
+docker compose up -d --build --wait
+docker compose ps
+curl -fsS http://127.0.0.1:8788/healthz
+```
+
+构建阶段需要访问 Docker 基础镜像、Go 模块和 npm 依赖源。复制示例配置后，HTTP 发布到 `127.0.0.1:8788`，IMAPS 发布到 `127.0.0.1:1993`。前端 JS/CSS 随镜像本地提供；运行时仍需访问 Apple/iCloud 或配置的上游 IMAP 服务。
+
+## 首次登录
+
+首次空安装自动生成管理员密码、OAuth Token、主密钥、管理路径和 IMAPS 自签证书，保存在 `icloud_api_keys` 卷。获取管理员密码和路径：
+
+```sh
+docker compose exec -T icloud-api cat /app/keys/admin-password
+docker compose exec -T icloud-api cat /app/keys/admin-path
+```
+
+用户名为 `admin`。使用 `.env.example` 时管理入口为 `http://127.0.0.1:8788/admin/`。首次接入在主号管理中添加 Apple 账号并完成连接；直连 iCloud IMAP 使用 Apple App 专用密码，第三方 IMAP 使用该服务自己的凭据。
+
+云服务器可在自己的电脑建立 SSH 隧道：
+
+```sh
+ssh -N -L 127.0.0.1:8788:127.0.0.1:8788 USER@SERVER
+```
+
+然后用本地浏览器访问管理入口。公网 HTTPS、域名与证书见 [公网部署](docs/PUBLIC.md)；宝塔多文件编排的兼容方式也在该文档中。
+
+默认按需同步并返回最新 OTP，同一邮箱取件间隔为 3 秒。自动创建功能需主动开启；Apple 的限流、条款和会话状态以实际响应为准，长时会话恢复仍需持续验证。保持单个应用实例。
+
+## 数据备份与更新
+
+数据库、keys、installation state 与 mail archive 应形成同一个备份点，备份流程见 `README.md` 和 `scripts/backup-local.sh`。更新时保留 `.env` 和已有 Docker volumes，不执行带 `-v` 的清理。
+
+```sh
+sh scripts/backup-local.sh
+git pull --ff-only
+docker compose up -d --build --wait
+```
+
+使用宝塔单文件入口的安装，在更新后、部署前运行 `bash scripts/render-baota-compose.sh`，将更新后的基础编排重新合并。不要将正在使用的数据库、密钥、证书或备份提交到 GitHub。
+
+## 可选：历史离线镜像交付包
+
+首次 GitHub 发布只提供源码，不声明已有可下载的预构建镜像。仓库中的 `compose.offline.yaml` 是历史 `handoff-2026.09.14` 镜像包的配套文件，只有持有匹配交付包时才使用：
 
 ```sh
 cp -n .env.example .env
@@ -12,56 +60,4 @@ docker load -i images/linux-amd64.tar.gz
 docker compose -f compose.yaml -f compose.offline.yaml up -d --no-build --pull never --wait
 ```
 
-离线 Compose 固定使用镜像标签 `icloud-api:handoff-2026.09.14` 和 `icloud-api-postgres:handoff-2026.09.14`。运行时仍需联网访问 Apple/iCloud、IMAP 等上游；前端资源已本地化，免编译不等于完整离线邮件平台。目标机是 arm64 时使用源码版构建。
-
-## 源码构建版
-
-```sh
-cp -n .env.example .env
-docker compose up -d --build --wait
-```
-
-构建阶段需要访问 Docker 基础镜像、Go 模块和 npm 依赖源。Compose 默认将 HTTP 发布到 `127.0.0.1:8788`，IMAPS 发布到 `127.0.0.1:1993`；健康检查：
-
-```sh
-curl -fsS http://127.0.0.1:8788/healthz
-```
-
-## 首次登录
-
-首次空安装会自动生成管理员密码、OAuth Token、主密钥、管理路径和 IMAPS 自签证书，并保存在 `icloud_api_keys` 卷。使用 `admin` 用户和以下命令取得密码、路径：
-
-```sh
-docker compose -f compose.yaml -f compose.offline.yaml exec -T icloud-api cat /app/keys/admin-password
-docker compose -f compose.yaml -f compose.offline.yaml exec -T icloud-api cat /app/keys/admin-path
-```
-
-源码版去掉两个 `-f`；也可在 `.env` 设置 `COMPOSE_FILE=compose.yaml:compose.offline.yaml` 后统一使用 `docker compose`。浏览器打开 `http://127.0.0.1:8788` 加取得的管理路径。
-
-首次使用需在管理界面自行添加 Apple 主号并完成登录，直连 iCloud 需要 App 专用密码；第三方 IMAP 或自定义邮箱需填写对应 IMAP 凭据。默认按需同步并返回最新 OTP，取件有 3 秒限流；自动创建功能需要主动开启。Apple 约 8 小时长时恢复流程仍在验证中，不作永久稳定承诺。
-
-云主机可通过 SSH 隧道访问管理界面：
-
-```sh
-ssh -N -L 127.0.0.1:8788:127.0.0.1:8788 USER@SERVER
-```
-
-然后在本地浏览器访问 `http://127.0.0.1:8788/admin/`。公网 HTTPS、域名、证书和反向代理配置见 [公网部署](docs/PUBLIC.md)，需按自己的域名和服务器环境调整。
-
-## 数据与更新
-
-不要删除或更换现有 Docker volumes；更新镜像或源码时保持卷不变。数据库、keys、installation state 和 mail archive 必须一起备份，备份流程见 `README.md` 或 `scripts/backup-local.sh`。这些数据不包含在交付包中。`.git` 历史也不随交付；如需在新目录建立自己的仓库：
-
-```sh
-git init -b main
-git add .
-git commit -m 'Import handoff-2026.09.14'
-```
-
-提交前设置自己的 Git identity；先在 `.gitignore` 追加 `/images/`，镜像归档不加入源码 Git。包内 `RELEASE.json` 记录源码提交和镜像 ID；解压后、复制或修改文件前执行校验：
-
-```sh
-sha256sum -c SHA256SUMS
-```
-
-固定此版本后，其他机器可重建基线；应用限流、调度和账号锁按单进程协调，请保持一个应用实例。版本基线冻结现有功能和验证结果，Apple 长时会话表现仍以实际运行为准。
+`scripts/package-release.sh` 面向持有匹配本地 Git 标签及镜像的维护者；公共仓库不包含旧服务器的本地标签和交付数据。新用户请使用上面的源码构建流程。

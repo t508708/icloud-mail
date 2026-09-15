@@ -1,10 +1,14 @@
-# iCloud 隐私邮箱归档 API v2
+# iCloud Mail
+
+自托管的 iCloud 隐私邮箱管理、邮箱池与按需取码服务，提供本地化 Web 控制面板、浅色/深色主题和 Docker 部署。
+
+项目地址：<https://github.com/t508708/icloud-mail>。本项目基于 [mangobubu/icloud-api](https://github.com/mangobubu/icloud-api)；来源与当前许可状态见 [NOTICE.md](NOTICE.md)。
 
 包含 Web 控制面板、项目 Key、批量自动取号、幂等领取、确认/释放/续期、凭据联动轮换和定时创建。首次安装和交付包使用请先阅读 [交付与安装](DELIVERY.md)，邮箱池说明见 [邮箱池](docs/POOL.md)。复制 `.env.example` 后 HTTP 端口为 `8788`；下方未使用环境文件的原始 Compose 示例默认端口为 `8080`。
 
 本服务把 iCloud 隐私邮箱的新邮件归档到本地，并且只向外提供两种取件能力：
 
-1. `GET /api/v1/otp`：按邮箱返回持续累积的验证码历史。
+1. `GET /api/v1/otp`：按邮箱取码；使用示例配置时返回最新一条，未收到时返回 `[]`，也可配置返回验证码历史。
 2. 标准只读 IMAPS：按邮箱读取完整 MIME；正文已淘汰或不可用时返回保留原标题的占位邮件。
 
 `POST /oauth2/v2.0/token` 只为 IMAPS 的 XOAUTH2 登录签发一小时访问令牌，不构成第三种取件方式。服务签发的 API Key、IMAP 密码、client ID、refresh token 和 access token 都是本服务凭据，不是 Microsoft 凭据。
@@ -17,7 +21,7 @@
 - 管理多个 iCloud 主号及其隐私邮箱，继续支持目录同步和自动创建。
 - 升级后归档同步游标之后的全部新 UID，包括上游已读和未读邮件。
 - 新建隐私邮箱拥有独立、版本化的 API Key、IMAP 密码、client ID 和 refresh token；迁移前已经领取的旧 alias 保留 legacy API Key 和直达链接。
-- 通过派生取码 URL 或 Bearer API Key 重复读取最近 100 条验证码。
+- 通过派生取码 URL 或 Bearer API Key 触发按需取件；默认返回最新一条，也可读取最近 100 条验证码历史。同一邮箱取件共享 3 秒请求间隔。
 - 通过密码或 XOAUTH2 登录只读 IMAPS，读取完整 MIME、稳定本地 UID 和归档占位邮件。
 - 原始 MIME 按 SHA-256 去重保存到独立卷，容量超限时只淘汰最早正文，永久保留邮件元数据。
 - 管理界面支持配置为 `/admin/`；未配置时使用首次启动生成的随机路径。管理 API 保留固定 `/admin/api/v1` 兼容入口。
@@ -37,12 +41,15 @@ iCloud 主号 INBOX
 要求 Docker Engine、Docker Compose v2。直连 iCloud IMAP 时需要 iCloud 主号 App 专用密码；iCloud 转发第三方 IMAP 或自定义邮箱模式则填写对应邮箱服务的 IMAP 密码。
 
 ```bash
+git clone https://github.com/t508708/icloud-mail.git
+cd icloud-mail
+cp -n .env.example .env
 docker compose up -d --build --wait
 docker compose ps
-curl -fsS http://127.0.0.1:8080/healthz
+curl -fsS http://127.0.0.1:8788/healthz
 ```
 
-HTTP 默认只发布在 `127.0.0.1:8080`，IMAPS 默认只发布在 `127.0.0.1:1993`。首次启动会在 keys 卷中保存管理路径，并生成管理员密码、外部登记接口的 OAuth token、主密钥，以及本地持久化 IMAPS 自签证书。
+以上示例将 HTTP 发布在 `127.0.0.1:8788`，IMAPS 发布在 `127.0.0.1:1993`，管理入口为 `/admin/`。云服务器可通过 SSH 隧道访问，或按 [公网部署](docs/PUBLIC.md) 配置 HTTPS 反向代理。首次启动会在 keys 卷中保存管理路径，并生成管理员密码、外部登记接口的 OAuth token、主密钥，以及本地持久化 IMAPS 自签证书。
 
 ```bash
 docker compose exec -T icloud-api cat /app/keys/admin-password
