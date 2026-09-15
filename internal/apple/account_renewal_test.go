@@ -50,8 +50,8 @@ func TestAccountCreationRefreshesBeforeIdleDeadline(t *testing.T) {
 func TestAccountRefreshSchedulingHonorsTTLAndBackoff(t *testing.T) {
 	now := time.Now()
 	session := AccountSession{RefreshedAt: now, ExpiresAt: now.Add(15 * time.Minute)}
-	if session.NeedsRefresh(now.Add(11*time.Minute)) || !session.NeedsRefresh(now.Add(12*time.Minute)) {
-		t.Fatal("refresh must run before the fifteen-minute deadline")
+	if session.NeedsRefresh(now.Add(4*time.Minute-time.Nanosecond)) || !session.NeedsRefresh(now.Add(4*time.Minute)) {
+		t.Fatal("long management TTL must not postpone the four-minute keepalive")
 	}
 	session.RefreshAfter = now.Add(time.Hour)
 	if session.NeedsRefresh(now.Add(16 * time.Minute)) {
@@ -60,5 +60,30 @@ func TestAccountRefreshSchedulingHonorsTTLAndBackoff(t *testing.T) {
 	session.RefreshRejected = true
 	if session.NeedsRefresh(now.Add(2 * time.Hour)) {
 		t.Fatal("repeated a rejected session")
+	}
+}
+
+func TestAccountRenewalDeadlineUsesShorterTTLAndOriginalLogin(t *testing.T) {
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name    string
+		session AccountSession
+		want    time.Time
+	}{
+		{"short_ttl", AccountSession{RefreshedAt: now, ExpiresAt: now.Add(2 * time.Minute)}, now.Add(96 * time.Second)},
+		{"missing_ttl", AccountSession{RefreshedAt: now}, now.Add(4 * time.Minute)},
+		{"first_renewal", AccountSession{AuthenticatedAt: now, ExpiresAt: now.Add(15 * time.Minute)}, now.Add(4 * time.Minute)},
+		{"legacy_ttl_only", AccountSession{ExpiresAt: now.Add(15 * time.Minute)}, now.Add(12 * time.Minute)},
+		{"old_login_recent_renewal", AccountSession{AuthenticatedAt: now.Add(-8 * time.Hour), RefreshedAt: now, ExpiresAt: now.Add(15 * time.Minute)}, now.Add(4 * time.Minute)},
+		{"backoff_longer_than_ttl", AccountSession{RefreshedAt: now, ExpiresAt: now.Add(2 * time.Minute), RefreshAfter: now.Add(30 * time.Minute)}, now.Add(30 * time.Minute)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.session.NextRefreshAt(); !got.Equal(tc.want) {
+				t.Fatalf("next renewal=%v want=%v", got, tc.want)
+			}
+			if tc.session.NeedsRefresh(tc.want.Add(-time.Nanosecond)) || !tc.session.NeedsRefresh(tc.want) {
+				t.Fatal("renewal did not honor its deadline")
+			}
+		})
 	}
 }

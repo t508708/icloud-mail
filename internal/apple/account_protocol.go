@@ -44,24 +44,36 @@ type AccountSession struct {
 	Cookies         []PersistentCookie `json:"cookies,omitempty"`
 }
 
-// Refresh before the idle deadline, including when creation is waiting on its
-// own quota. Without a server TTL, use a bounded four-minute fallback.
-func (s AccountSession) NeedsRefresh(now time.Time) bool {
-	if s.RefreshRejected || s.RefreshAfter.After(now) {
-		return false
-	}
-	if s.ExpiresAt.IsZero() {
-		return !s.RefreshedAt.Add(4 * time.Minute).After(now)
-	}
-	lead := 3 * time.Minute
+// Keep the reference client's four-minute cadence even when the management
+// TTL is longer. The TTL is not a lifetime guarantee for the whole login.
+func (s AccountSession) NextRefreshAt() time.Time {
 	anchor := s.RefreshedAt
 	if anchor.IsZero() {
 		anchor = s.AuthenticatedAt
 	}
-	if lifetime := s.ExpiresAt.Sub(anchor); lifetime > 0 && lifetime/5 < lead {
-		lead = lifetime / 5
+	var next time.Time
+	if !anchor.IsZero() {
+		next = anchor.Add(4 * time.Minute)
 	}
-	return !s.ExpiresAt.Add(-lead).After(now)
+	if !s.ExpiresAt.IsZero() {
+		lead := 3 * time.Minute
+		if lifetime := s.ExpiresAt.Sub(anchor); lifetime > 0 && lifetime/5 < lead {
+			lead = lifetime / 5
+		}
+		if deadline := s.ExpiresAt.Add(-lead); next.IsZero() || deadline.Before(next) {
+			next = deadline
+		}
+	}
+	if s.RefreshAfter.After(next) {
+		next = s.RefreshAfter
+	}
+	return next
+}
+
+// Refresh while creation waits on its own quota, but honor upstream backoff
+// and stop after explicit rejection of the saved login.
+func (s AccountSession) NeedsRefresh(now time.Time) bool {
+	return !s.RefreshRejected && !s.NextRefreshAt().After(now)
 }
 
 func accountHeaders(s AccountSession, auth bool) http.Header {

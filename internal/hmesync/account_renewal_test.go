@@ -30,7 +30,7 @@ func TestAccountRenewalUsesTTLAndPersistsBackoff(t *testing.T) {
 		return current, nil
 	}}
 	s.client = client
-	now = now.Add(11 * time.Minute)
+	now = now.Add(3 * time.Minute)
 	if err := s.keepAliveAccountSession(ctx, account.ID, true, nil); err != nil || calls != 0 {
 		t.Fatalf("early renewal: calls=%d err=%v", calls, err)
 	}
@@ -39,7 +39,7 @@ func TestAccountRenewalUsesTTLAndPersistsBackoff(t *testing.T) {
 		t.Fatalf("due renewal: calls=%d err=%v", calls, err)
 	}
 	fail = true
-	now = now.Add(12 * time.Minute)
+	now = now.Add(4 * time.Minute)
 	if err := s.keepAliveAccountSession(ctx, account.ID, true, nil); err == nil {
 		t.Fatal("expected service outage")
 	}
@@ -148,7 +148,7 @@ func TestAccountRenewalWorkerRunsAndStopsWithContext(t *testing.T) {
 	s, _, account := independentAccountFixture(t, true)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := s.saveAccountManagementSession(ctx, account.ID, apple.AccountSession{AppleID: account.Email, Region: apple.RegionGlobal, APIKey: "key", AuthenticatedAt: time.Now()}); err != nil {
+	if err := s.saveAccountManagementSession(ctx, account.ID, apple.AccountSession{AppleID: account.Email, Region: apple.RegionGlobal, APIKey: "key", AuthenticatedAt: time.Now().Add(-5 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	called := false

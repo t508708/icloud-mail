@@ -136,6 +136,13 @@ func (s *Service) keepAliveAccountSession(ctx context.Context, id int64, onlyDue
 		if persistErr := s.persistAccountManagementSession(persistCtx, id, identityOf(account), failed); persistErr != nil {
 			return errors.Join(err, persistErr)
 		}
+		if logger != nil {
+			logger.Info("Apple Account 续期状态已保存", "account_id", id, "operation", "apple_account_session_checkpoint",
+				"authenticated_at", failed.AuthenticatedAt, "last_renewed_at", failed.RefreshedAt,
+				"expires_at", failed.ExpiresAt, "retry_after", failed.RefreshAfter,
+				"refresh_rejected", failed.RefreshRejected,
+				"session_age_seconds", max(int64(s.now().Sub(failed.AuthenticatedAt).Seconds()), 0))
+		}
 		return err
 	}
 	if !sameEmail(managed.AppleID, managedSession.AppleID) {
@@ -147,7 +154,10 @@ func (s *Service) keepAliveAccountSession(ctx context.Context, id int64, onlyDue
 		return err
 	}
 	if logger != nil {
-		logger.Info("Apple Account 会话已续期", "account_id", id, "operation", "apple_account_session_renew", "expires_at", managed.ExpiresAt)
+		logger.Info("Apple Account 会话已续期", "account_id", id, "operation", "apple_account_session_renew",
+			"authenticated_at", managed.AuthenticatedAt, "expires_at", managed.ExpiresAt,
+			"next_renew_at", managed.NextRefreshAt(),
+			"session_age_seconds", max(int64(s.now().Sub(managed.AuthenticatedAt).Seconds()), 0))
 	}
 	return nil
 }
