@@ -3,12 +3,14 @@ package apple
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -25,23 +27,24 @@ const accountAuth = "https://idmsa.apple.com/appleauth/auth"
 const accountUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
 
 type AccountSession struct {
-	AppleID         string             `json:"apple_id"`
-	Region          Region             `json:"region"`
-	SCNT            string             `json:"scnt,omitempty"`
-	APIKey          string             `json:"api_key,omitempty"`
-	SessionToken    string             `json:"session_token,omitempty"`
-	SessionID       string             `json:"session_id,omitempty"`
-	TrustToken      string             `json:"trust_token,omitempty"`
-	AuthAttributes  string             `json:"auth_attributes,omitempty"`
-	FrameID         string             `json:"frame_id,omitempty"`
-	AuthenticatedAt time.Time          `json:"authenticated_at,omitempty"`
-	ExpiresAt       time.Time          `json:"expires_at,omitempty"`
-	UpdatedAt       time.Time          `json:"updated_at,omitempty"`
-	RefreshedAt     time.Time          `json:"refreshed_at,omitempty"`
-	RefreshAfter    time.Time          `json:"refresh_after,omitempty"`
-	RefreshFailures int                `json:"refresh_failures,omitempty"`
-	RefreshRejected bool               `json:"refresh_rejected,omitempty"`
-	Cookies         []PersistentCookie `json:"cookies,omitempty"`
+	AppleID              string             `json:"apple_id"`
+	Region               Region             `json:"region"`
+	SCNT                 string             `json:"scnt,omitempty"`
+	APIKey               string             `json:"api_key,omitempty"`
+	SessionToken         string             `json:"session_token,omitempty"`
+	SessionID            string             `json:"session_id,omitempty"`
+	TrustToken           string             `json:"trust_token,omitempty"`
+	AuthAttributes       string             `json:"auth_attributes,omitempty"`
+	FrameID              string             `json:"frame_id,omitempty"`
+	AuthenticatedAt      time.Time          `json:"authenticated_at,omitempty"`
+	ExpiresAt            time.Time          `json:"expires_at,omitempty"`
+	UpdatedAt            time.Time          `json:"updated_at,omitempty"`
+	RefreshedAt          time.Time          `json:"refreshed_at,omitempty"`
+	RefreshAfter         time.Time          `json:"refresh_after,omitempty"`
+	RefreshFailures      int                `json:"refresh_failures,omitempty"`
+	RefreshRejected      bool               `json:"refresh_rejected,omitempty"`
+	RenewalJitterSeconds int                `json:"renewal_jitter_seconds,omitempty"`
+	Cookies              []PersistentCookie `json:"cookies,omitempty"`
 }
 
 // Keep the reference client's four-minute cadence even when the management
@@ -53,7 +56,11 @@ func (s AccountSession) NextRefreshAt() time.Time {
 	}
 	var next time.Time
 	if !anchor.IsZero() {
-		next = anchor.Add(4 * time.Minute)
+		interval := 4 * time.Minute
+		if s.RenewalJitterSeconds >= 240 && s.RenewalJitterSeconds <= 360 {
+			interval = time.Duration(s.RenewalJitterSeconds) * time.Second
+		}
+		next = anchor.Add(interval)
 	}
 	if !s.ExpiresAt.IsZero() {
 		lead := 3 * time.Minute
@@ -333,6 +340,7 @@ func (c *Client) RefreshAccountSession(ctx context.Context, s AccountSession) (A
 		s.RefreshAfter = time.Time{}
 		s.RefreshFailures = 0
 		s.RefreshRejected = false
+		s.RenewalJitterSeconds = randomRenewalJitterSeconds()
 		return nil
 	}
 	err := refresh(false)
@@ -348,6 +356,14 @@ func (c *Client) RefreshAccountSession(ctx context.Context, s AccountSession) (A
 		}
 	}
 	return s, err
+}
+
+func randomRenewalJitterSeconds() int {
+	value, err := cryptorand.Int(cryptorand.Reader, big.NewInt(121))
+	if err != nil {
+		return 300
+	}
+	return 240 + int(value.Int64())
 }
 
 func (c *Client) SignInAccount(ctx context.Context, appleID, password string, region Region, previous *AccountSession) (AccountSession, bool, error) {
