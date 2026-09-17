@@ -23,16 +23,14 @@ type aliasCreationJobRuntime struct {
 	cancel   map[int64]context.CancelFunc
 	stopping bool
 	wg       sync.WaitGroup
-	interval time.Duration
 }
 
 const (
-	aliasCreationJobInterval = domain.AppleCreationMinInterval
 	aliasCreationJobLifetime = 7 * 24 * time.Hour
 )
 
-type channelAliasCreator interface {
-	CreateAliasWithChannel(context.Context, int64, string) (domain.Alias, error)
+type manualChannelAliasCreator interface {
+	ProbeAliasWithChannel(context.Context, int64, string) (domain.Alias, error)
 }
 
 func (s *Server) StartAliasCreationJobs(ctx context.Context) error {
@@ -50,7 +48,6 @@ func (s *Server) StartAliasCreationJobs(ctx context.Context) error {
 	}
 	r.ctx = ctx
 	r.cancel = make(map[int64]context.CancelFunc)
-	r.interval = aliasCreationJobInterval
 	return nil
 }
 
@@ -94,7 +91,7 @@ func (s *Server) adminAPIStartAliasCreationJob(c *gin.Context) {
 		writeAdminAPIError(c, 409, "ACCOUNT_DISABLED", "请选择已启用的 iCloud 主号")
 		return
 	}
-	creator, ok := s.hmeSync.(channelAliasCreator)
+	creator, ok := s.hmeSync.(manualChannelAliasCreator)
 	if !ok {
 		writeAdminAPIError(c, 503, "APPLE_SERVICE_UNAVAILABLE", "创建服务暂未就绪")
 		return
@@ -154,8 +151,6 @@ func (s *Server) adminAPIStartAliasCreationJob(c *gin.Context) {
 		}
 		return
 	}
-	// The shared daily ceiling of 20 means a 100-alias job needs at least five
-	// days; seven days leaves two days of margin for budget and throttle waits.
 	waitCtx, cancel := context.WithTimeout(r.ctx, aliasCreationJobLifetime)
 	r.cancel[id] = cancel
 	r.wg.Add(1)
@@ -211,7 +206,7 @@ func (s *Server) adminAPIStopAliasCreationJob(c *gin.Context) {
 	s.adminAPIGetAliasCreationJob(c)
 }
 
-func (s *Server) runAliasCreationJob(waitCtx context.Context, creator channelAliasCreator, j store.AliasCreationJob) {
+func (s *Server) runAliasCreationJob(waitCtx context.Context, creator manualChannelAliasCreator, j store.AliasCreationJob) {
 	r := &s.aliasCreationJobs
 	defer r.wg.Done()
 	defer func() {
@@ -257,7 +252,7 @@ func (s *Server) runAliasCreationJob(waitCtx context.Context, creator channelAli
 		// A user stop only wakes the waiting loop. Let the current reservation
 		// finish and persist its result before stopping subsequent work.
 		createCtx, cancel := context.WithTimeout(context.WithoutCancel(waitCtx), 90*time.Second)
-		a, err := creator.CreateAliasWithChannel(createCtx, j.AccountID, j.Channel)
+		a, err := creator.ProbeAliasWithChannel(createCtx, j.AccountID, j.Channel)
 		cancel()
 		s.credentialRotationMu.RUnlock()
 		if err != nil {
@@ -268,28 +263,11 @@ func (s *Server) runAliasCreationJob(waitCtx context.Context, creator channelAli
 			if errors.As(err, &upstream) {
 				attributes = append(attributes, "apple_operation", upstream.Op, "apple_http_status", upstream.StatusCode)
 			}
-			if isAppleCreationBudgetWait(err) {
-				s.logger.Info("批量创建任务等待本地请求预算", attributes...)
-			} else {
-				s.logger.Warn("批量创建请求未完成", attributes...)
-			}
+			s.logger.Warn("批量创建请求未完成", attributes...)
 			j.LastError = apiErr.Message
 			var pending interface{ PendingConfirmation() bool }
 			var uncertain interface{ RemoteSideEffectPossible() bool }
 			ambiguous := errors.Is(err, hmesync.ErrAliasConfirmationPending) || errors.As(err, &pending) && pending.PendingConfirmation() || errors.As(err, &uncertain) && uncertain.RemoteSideEffectPossible()
-			if !ambiguous && isAppleCreationBudgetWait(err) {
-				delay := max(aliasCreationJobInterval, manualAliasRetryDelay(err))
-				next := time.Now().UTC().Add(delay)
-				j.Status = "waiting"
-				j.NextRunAt = &next
-				if !checkpoint() {
-					return
-				}
-				if !wait(delay) {
-					break
-				}
-				continue
-			}
 			if !ambiguous && (errors.Is(err, hmesync.ErrRateLimited) || apple.IsRateLimited(err)) {
 				delay := max(24*time.Hour, apple.RetryDelay(err))
 				next := time.Now().UTC().Add(delay)
@@ -338,9 +316,6 @@ func (s *Server) runAliasCreationJob(waitCtx context.Context, creator channelAli
 		}
 		if !checkpoint() {
 			return
-		}
-		if !wait(r.interval) {
-			break
 		}
 	}
 	j.Status = "stopped"

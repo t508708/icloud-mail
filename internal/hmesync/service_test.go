@@ -799,6 +799,48 @@ func TestCreateAutoAliasReplacesStaleCandidateOmittedByAuthoritativeList(t *test
 	}
 }
 
+func TestCreateAutoAliasResumesRecentGeneratedCandidateBeforeWaitingForDirectory(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 8, 9, 0, 0, 0, time.UTC)
+	repo := newFakeRepository(domain.Account{ID: 3, Email: "primary@icloud.com", Enabled: true}, now)
+	repo.pending = &domain.Alias{
+		ID:            77,
+		AccountID:     3,
+		Address:       "resume@icloud.com",
+		Label:         "resume-label",
+		Enabled:       false,
+		LastSyncError: domain.AppleAliasConfirmationPending,
+		CreatedAt:     now,
+	}
+	listCalls, completes := 0, 0
+	client := &resumingPendingAppleClient{fakeAppleClient: fakeAppleClient{
+		validate: func(_ context.Context, session apple.Session) (apple.Session, error) {
+			return session, nil
+		},
+		list: func(_ context.Context, session apple.Session) (apple.ListResult, apple.Session, error) {
+			listCalls++
+			result := apple.ListResult{SelectedForwardTo: "primary@icloud.com"}
+			if listCalls > 1 {
+				result.Aliases = []apple.Alias{{HME: "resume@icloud.com", IsActive: true, ForwardToEmail: "primary@icloud.com"}}
+			}
+			return result, session, nil
+		},
+	}, complete: func(_ context.Context, session apple.AccountSession, address, label, note string) (apple.Alias, apple.AccountSession, error) {
+		completes++
+		if address != "resume@icloud.com" || label != "resume-label" || note != "" {
+			t.Fatalf("completion input address=%q label=%q note=%q", address, label, note)
+		}
+		return apple.Alias{HME: address, IsActive: true}, session, nil
+	}}
+	service := newTestService(t, repo, client, &fakeLocker{}, func() time.Time { return now })
+	storeSession(t, service, repo, 3, apple.Session{AppleID: "owner@example.com", Region: apple.RegionGlobal, Account: &apple.AccountSession{AppleID: "owner@example.com", APIKey: "key", SCNT: "scnt"}})
+
+	created, err := service.CreateAutoAlias(ctx, 3)
+	if err != nil || created.ID != 77 || !created.Enabled || completes != 1 || listCalls != 2 || repo.confirms.Load() != 1 {
+		t.Fatalf("created=%#v completes=%d lists=%d confirms=%d err=%v", created, completes, listCalls, repo.confirms.Load(), err)
+	}
+}
+
 func TestCreateAutoAliasPreservesRotatedSessionWhenReserveFails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -2417,6 +2459,22 @@ func (c *fakeAppleClient) DeleteAlias(ctx context.Context, session apple.Session
 		panic("unexpected DeleteAlias")
 	}
 	return c.deleteRemote(ctx, session, anonymousID)
+}
+
+type resumingPendingAppleClient struct {
+	fakeAppleClient
+	complete func(context.Context, apple.AccountSession, string, string, string) (apple.Alias, apple.AccountSession, error)
+}
+
+func (c *resumingPendingAppleClient) CompleteAccountAlias(
+	ctx context.Context,
+	session apple.AccountSession,
+	address, label, note string,
+) (apple.Alias, apple.AccountSession, error) {
+	if c.complete == nil {
+		panic("unexpected CompleteAccountAlias")
+	}
+	return c.complete(ctx, session, address, label, note)
 }
 
 type fakeLocker struct {

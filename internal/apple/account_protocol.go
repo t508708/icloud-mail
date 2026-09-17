@@ -553,9 +553,31 @@ func (c *Client) CreateAccountAlias(ctx context.Context, s AccountSession, label
 	if json.Unmarshal(r.body, &candidate) != nil || !validAccountAliasAddress(candidate.EmailAddress) {
 		return Alias{}, s, r.operationError("account generate response", ErrInvalidResponse, nil)
 	}
-	candidate.EmailAddress = strings.TrimSpace(candidate.EmailAddress)
-	alias := Alias{HME: strings.ToLower(candidate.EmailAddress), Label: label, Note: note, Origin: "APPLE_ACCOUNT"}
-	r, err = c.accountManagementCall(ctx, &s, http.MethodPut, "/account/manage/email/private/add/complete", map[string]string{"emailAddress": candidate.EmailAddress, "label": label, "note": note})
+	return c.CompleteAccountAlias(ctx, s, candidate.EmailAddress, label, note)
+}
+
+// CompleteAccountAlias finishes a previously generated address. Unlike the
+// generate operation, repeating this request retains the same email address,
+// so one short retry is safe for a transient 5xx response.
+func (c *Client) CompleteAccountAlias(ctx context.Context, s AccountSession, emailAddress, label, note string) (Alias, AccountSession, error) {
+	emailAddress = strings.TrimSpace(emailAddress)
+	if s.APIKey == "" || s.SCNT == "" || s.RefreshRejected || !validAccountAliasAddress(emailAddress) {
+		return Alias{}, s, ErrInvalidSession
+	}
+	alias := Alias{HME: strings.ToLower(emailAddress), Label: label, Note: note, Origin: "APPLE_ACCOUNT"}
+	r, err := c.accountManagementCall(ctx, &s, http.MethodPut, "/account/manage/email/private/add/complete", map[string]string{"emailAddress": emailAddress, "label": label, "note": note})
+	if err != nil && r.status >= http.StatusInternalServerError && r.status < 600 && ctx.Err() == nil {
+		// Replaying completion for the same generated email is idempotent; do
+		// not replay the preceding address-generation request.
+		timer := time.NewTimer(600 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return alias, s, ctx.Err()
+		case <-timer.C:
+		}
+		r, err = c.accountManagementCall(ctx, &s, http.MethodPut, "/account/manage/email/private/add/complete", map[string]string{"emailAddress": emailAddress, "label": label, "note": note})
+	}
 	if err != nil {
 		// Only explicit rejection clears the candidate. Ambiguous completion
 		// retains it for durable staging and read-only directory confirmation.
@@ -569,7 +591,7 @@ func (c *Client) CreateAccountAlias(ctx context.Context, s AccountSession, label
 		ID           string `json:"id"`
 		Active       bool   `json:"active"`
 	}
-	if json.Unmarshal(r.body, &completed) != nil || completed.ID == "" || completed.EmailAddress != "" && !strings.EqualFold(completed.EmailAddress, candidate.EmailAddress) {
+	if json.Unmarshal(r.body, &completed) != nil || completed.ID == "" || completed.EmailAddress != "" && !strings.EqualFold(completed.EmailAddress, emailAddress) {
 		return alias, s, r.operationError("account complete response", ErrInvalidResponse, nil)
 	}
 	alias.AnonymousID = completed.ID

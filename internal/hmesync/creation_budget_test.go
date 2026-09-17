@@ -26,7 +26,7 @@ func (r *budgetTestRepository) PauseAppleCreation(ctx context.Context, id int64,
 	return r.pause(ctx, id, until)
 }
 
-func TestCreationBudgetStopsEveryChannelBeforeAnyUpstreamRequest(t *testing.T) {
+func TestCreationBudgetStopsEveryChannelBeforeFreshAddressGeneration(t *testing.T) {
 	for _, channel := range []string{"auto", "apple_account", "icloud_web"} {
 		t.Run(channel, func(t *testing.T) {
 			now := testAutoCreateDiagnosticNow()
@@ -46,17 +46,24 @@ func TestCreationBudgetStopsEveryChannelBeforeAnyUpstreamRequest(t *testing.T) {
 					return nil
 				},
 			}
-			client := &fakeAppleClient{validate: func(context.Context, apple.Session) (apple.Session, error) {
-				t.Fatal("budget wait reached Apple validation")
-				return apple.Session{}, nil
-			}}
+			validations, directoryReads := 0, 0
+			client := &fakeAppleClient{
+				validate: func(_ context.Context, session apple.Session) (apple.Session, error) {
+					validations++
+					return session, nil
+				},
+				list: func(_ context.Context, session apple.Session) (apple.ListResult, apple.Session, error) {
+					directoryReads++
+					return apple.ListResult{SelectedForwardTo: "primary@icloud.com"}, session, nil
+				},
+			}
 			service := newTestService(t, repo, client, &fakeLocker{}, func() time.Time { return now })
 			storeSession(t, service, base, 3, apple.Session{AppleID: "owner@example.com", Region: apple.RegionGlobal, SessionToken: "fixture"})
 			if _, err := service.CreateAliasWithChannel(context.Background(), 3, channel); !errors.Is(err, budgetErr) {
 				t.Fatalf("creation error = %v, want budget error", err)
 			}
-			if claims != 1 {
-				t.Fatalf("claims=%d, want 1", claims)
+			if claims != 1 || validations != 0 || directoryReads != 0 {
+				t.Fatalf("claims=%d validations=%d directory_reads=%d", claims, validations, directoryReads)
 			}
 		})
 	}
