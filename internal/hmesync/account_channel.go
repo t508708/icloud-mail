@@ -38,6 +38,10 @@ type accountClient interface {
 	CreateAccountAlias(context.Context, apple.AccountSession, string, string) (apple.Alias, apple.AccountSession, error)
 }
 
+type accountAliasCompleter interface {
+	CompleteAccountAlias(context.Context, apple.AccountSession, string, string, string) (apple.Alias, apple.AccountSession, error)
+}
+
 type accountAuthChallenge struct {
 	id       string
 	owner    int64

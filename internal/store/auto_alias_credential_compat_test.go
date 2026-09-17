@@ -3,10 +3,13 @@ package store_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"icloud-api/internal/domain"
 	"icloud-api/internal/secure"
+	"icloud-api/internal/store"
 )
 
 func TestAutoAliasPendingKeyMatchesV2BundleAndRequiresAcknowledgement(t *testing.T) {
@@ -86,6 +89,30 @@ func TestAutoAliasPendingKeyMatchesV2BundleAndRequiresAcknowledgement(t *testing
 	}
 	if count, err := db.CountPendingAliasAPIKeysByAccount(ctx, account.ID); err != nil || count != 0 {
 		t.Fatalf("pending key count after acknowledgement = %d, err=%v", count, err)
+	}
+}
+
+func TestDiscardStalePendingAutoAliasRemovesOnlyEligibleCandidate(t *testing.T) {
+	ctx := context.Background()
+	db := openTestStore(t)
+	account := createAccount(t, ctx, db, "Stale candidate", "stale-candidate@icloud.com")
+	created, _, err := db.CreateAliasWithPendingAPIKey(ctx, domain.AppleWebSession{
+		AccountID: account.ID, Ciphertext: "as1.stale", AppleID: account.Email, Authenticated: true,
+	}, domain.Alias{
+		AccountID: account.ID, Address: "stale-candidate-alias@icloud.com",
+		APIKeyHash: []byte("stale-candidate-key"), APIKeyPrefix: "stale", Enabled: false,
+	}, "pending-ciphertext")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DiscardStalePendingAutoAlias(ctx, account.ID, created.ID, time.Now().UTC().Add(time.Second)); err != nil {
+		t.Fatalf("discard eligible candidate: %v", err)
+	}
+	if _, err := db.GetAlias(ctx, created.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("discarded candidate lookup = %v, want not found", err)
+	}
+	if _, err := db.GetPendingAutoAliasConfirmation(ctx, account.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("discarded candidate pending record = %v, want not found", err)
 	}
 }
 

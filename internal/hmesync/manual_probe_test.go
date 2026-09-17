@@ -9,54 +9,32 @@ import (
 
 	"icloud-api/internal/apple"
 	"icloud-api/internal/domain"
-	"icloud-api/internal/store"
 )
 
-type probeTestRepository struct {
-	*budgetTestRepository
-	probe func(context.Context, int64, time.Time) error
-}
-
-func (r *probeTestRepository) ClaimAppleCreationProbe(ctx context.Context, id int64, at time.Time) error {
-	return r.probe(ctx, id, at)
-}
-
-func TestManualProbeUsesIndependentLedgerAndDoesNotPersistBackgroundCooldown(t *testing.T) {
+func TestManualProbeBypassesLocalBudgetAndDoesNotPersistBackgroundCooldown(t *testing.T) {
 	for _, channel := range []string{"auto", "apple_account", "icloud_web"} {
 		t.Run(channel, func(t *testing.T) {
 			now := testAutoCreateDiagnosticNow()
 			base := newFakeRepository(domain.Account{ID: 3, Email: "primary@icloud.com", Enabled: true}, now)
-			probes, requests := 0, 0
-			repo := &probeTestRepository{budgetTestRepository: &budgetTestRepository{fakeRepository: base,
-				claim: func(context.Context, int64, time.Time) error { t.Fatal("probe used background budget"); return nil },
-				pause: func(context.Context, int64, time.Time) error {
-					t.Fatal("probe changed background cooldown")
-					return nil
-				},
-			}, probe: func(_ context.Context, id int64, at time.Time) error {
-				if id != 3 || !at.Equal(now) {
-					t.Fatal("wrong probe identity or clock")
-				}
-				probes++
-				return nil
-			}}
+			claims, pauses, requests := 0, 0, 0
+			repo := &budgetTestRepository{fakeRepository: base,
+				claim: func(context.Context, int64, time.Time) error { claims++; return nil },
+				pause: func(context.Context, int64, time.Time) error { pauses++; return nil },
+			}
 			client := &fakeAppleClient{validate: func(_ context.Context, session apple.Session) (apple.Session, error) {
 				requests++
 				return session, &apple.Error{Kind: apple.ErrService, StatusCode: http.StatusTooManyRequests, RetryAfter: 7 * time.Second}
 			}}
 			service := newTestService(t, repo, client, &fakeLocker{}, func() time.Time { return now })
 			storeSession(t, service, base, 3, apple.Session{AppleID: "owner@example.com", Region: apple.RegionGlobal, SessionToken: "fixture"})
-			_, err := service.ProbeAliasWithChannel(context.Background(), 3, channel)
-			if !errors.Is(err, ErrRateLimited) || probes != 1 || requests != 1 || apple.RetryDelay(err) != 7*time.Second {
-				t.Fatalf("probe err=%v claims=%d requests=%d retry=%v", err, probes, requests, apple.RetryDelay(err))
+			for attempt := 0; attempt < 2; attempt++ {
+				_, err := service.ProbeAliasWithChannel(context.Background(), 3, channel)
+				if !errors.Is(err, ErrRateLimited) || apple.RetryDelay(err) != 7*time.Second {
+					t.Fatalf("attempt=%d probe err=%v retry=%v", attempt, err, apple.RetryDelay(err))
+				}
 			}
-			repo.probe = func(context.Context, int64, time.Time) error {
-				return &store.AppleCreationBudgetError{Now: now, Until: now.Add(2 * time.Minute)}
-			}
-			_, err = service.ProbeAliasWithChannel(context.Background(), 3, channel)
-			var wait *store.AppleCreationBudgetError
-			if !errors.As(err, &wait) || requests != 1 {
-				t.Fatalf("probe exceeded own budget: %v requests=%d", err, requests)
+			if claims != 0 || pauses != 0 || requests != 2 {
+				t.Fatalf("background claims=%d pauses=%d requests=%d", claims, pauses, requests)
 			}
 		})
 	}
@@ -115,10 +93,10 @@ func TestManualProbePublishesConfirmedAliasDuringBackgroundCooldown(t *testing.T
 	now := testAutoCreateDiagnosticNow()
 	base := newFakeRepository(domain.Account{ID: 1, Email: "owner@icloud.com", Enabled: true}, now)
 	claims := 0
-	repo := &probeTestRepository{budgetTestRepository: &budgetTestRepository{fakeRepository: base,
-		claim: func(context.Context, int64, time.Time) error { t.Fatal("probe charged background"); return nil },
+	repo := &budgetTestRepository{fakeRepository: base,
+		claim: func(context.Context, int64, time.Time) error { claims++; return nil },
 		pause: func(context.Context, int64, time.Time) error { t.Fatal("probe paused background"); return nil },
-	}, probe: func(context.Context, int64, time.Time) error { claims++; return nil }}
+	}
 	client := &accountTestClient{}
 	lists, creates := 0, 0
 	client.validate = func(_ context.Context, s apple.Session) (apple.Session, error) { return s, nil }
@@ -142,7 +120,7 @@ func TestManualProbePublishesConfirmedAliasDuringBackgroundCooldown(t *testing.T
 	if err != nil || !alias.Enabled || alias.ID < 1 || alias.Address != "probe-created@icloud.com" {
 		t.Fatalf("probe publication=%v err=%v", alias, err)
 	}
-	if claims != 1 || creates != 1 || base.creates.Load() != 1 || base.confirms.Load() != 1 {
+	if claims != 0 || creates != 1 || base.creates.Load() != 1 || base.confirms.Load() != 1 {
 		t.Fatalf("claims=%d creates=%d staged=%d confirmed=%d", claims, creates, base.creates.Load(), base.confirms.Load())
 	}
 	if !service.creationCooldowns[1]["apple_account"].Equal(until) {

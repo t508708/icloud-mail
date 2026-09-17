@@ -10,7 +10,3 @@ type appleCreationBudgetRepository interface {
 	ClaimAppleCreationAttempt(context.Context, int64, time.Time) error
 	PauseAppleCreation(context.Context, int64, time.Time) error
 }
-
-type appleCreationProbeRepository interface {
-	ClaimAppleCreationProbe(context.Context, int64, time.Time) error
-}

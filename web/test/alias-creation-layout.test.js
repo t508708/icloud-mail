@@ -34,10 +34,9 @@ test("batch creation stays compact without progress or created-address summary",
   assert.match(source, /const count = ref\(5\)/);
   assert.match(source, /const jobStatusPollIntervalMs = 10_000/);
   assert.match(source, /<details class="creation-job-panel__budget-details">/);
-  assert.match(source, /滚动 1 小时最多 18 次，尝试至少间隔 2 分钟/);
+  assert.match(source, /手动批量创建和单次探测均不使用本地创建额度/);
   assert.match(source, /任务生命周期为 7 天/);
   assert.match(source, /自动只选择本轮初始通道，不因限流切换/);
-  assert.match(source, /等待本地主号共享预算/);
   assert.match(source, /Apple 限流暂停中（至少 24 小时）/);
   assert.match(source, /手动探测 1 个/);
   assert.match(source, /createAliasNow/);

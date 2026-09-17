@@ -1,7 +1,7 @@
 <template>
   <div class="creation-job-panel">
     <h2 id="batch-creation-title" class="creation-job-panel__title">批量创建隐私邮箱</h2>
-    <span class="creation-job-panel__budget-short">滚动 1 小时 18 次 · 间隔至少 2 分钟</span>
+    <span class="creation-job-panel__budget-short">手动创建：不使用本地额度 · 成功后立即继续</span>
     <div class="creation-job-panel__controls">
       <el-input-number v-model="count" :min="1" :max="100" :controls="false" aria-label="创建数量" :disabled="active || starting" />
       <el-button :loading="probing" :disabled="probing || starting || job?.status === 'running' || !ready || !accountEnabled || !webAuthenticated || connectionBusy" @click="probe">手动探测 1 个</el-button>
@@ -10,10 +10,10 @@
       <el-button v-if="!ready" :loading="loading" @click="load">重新读取状态</el-button>
     </div>
     <span v-if="!webAuthenticated" class="creation-job-panel__connection-help">请在“管理 Apple 连接”中补充目录登录，用于核对转发与创建结果。</span>
-    <RequestAlert v-if="probeError" :error="probeError" :message="probeErrorMessage(probeError)" :type="probeError.code === 'APPLE_RATE_LIMITED' || probeError.code === 'APPLE_CREATION_BUDGET_WAIT' ? 'info' : 'error'" closable @close="probeError = null" />
+    <RequestAlert v-if="probeError" :error="probeError" :message="probeErrorMessage(probeError)" :type="probeError.code === 'APPLE_RATE_LIMITED' ? 'info' : 'error'" closable @close="probeError = null" />
     <details class="creation-job-panel__budget-details">
       <summary>创建节奏与等待说明</summary>
-      <p>后台批量与自动创建共享本地预算：滚动 1 小时最多 18 次，尝试至少间隔 2 分钟；手动单次探测使用独立 25 次/小时额度，不消耗后台额度，也不受后台 Apple 24 小时冷却阻挡，且不修改后台冷却或计划。失败及待确认尝试也计数。自动只选择本轮初始通道，不因限流切换。本地上限不是 Apple 官方配额保证；任务生命周期为 7 天。</p>
+      <p>手动批量创建和单次探测均不使用本地创建额度，成功后不额外等待；仍受 Apple 实际响应影响。自动计划按滚动 1 小时最多 18 次、尝试至少间隔 2 分钟执行，自动只选择本轮初始通道，不因限流切换。本地上限不是 Apple 官方配额保证；任务生命周期为 7 天。</p>
     </details>
     <RequestAlert v-if="error" :error="error" closable @close="error = null" />
     <div v-if="job && active" class="creation-job-panel__status" aria-live="polite">
@@ -56,7 +56,6 @@ function jobErrorMessage(value) {
 }
 function probeErrorMessage(error) {
   const message = String(error?.message || error || "");
-  if (error?.code === "APPLE_CREATION_BUDGET_WAIT") return "手动探测独立额度正在等待恢复；后台额度与计划保持不变。";
   if (error?.code === "APPLE_RATE_LIMITED") return "本次手动探测仍被 Apple 限流；后台冷却与计划保持不变，本次不自动重试。";
   return message;
 }

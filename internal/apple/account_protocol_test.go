@@ -85,10 +85,11 @@ func TestAccountHashcashDeterministicShape(t *testing.T) {
 
 func TestAccountAliasRateAndAmbiguity(t *testing.T) {
 	for _, tc := range []struct {
-		code int
-		body string
-		keep bool
-	}{{429, `{"errorCode":"-41015"}`, false}, {500, `{}`, true}} {
+		code  int
+		body  string
+		keep  bool
+		calls int
+	}{{429, `{"errorCode":"-41015"}`, false, 2}, {500, `{}`, true, 3}} {
 		n := 0
 		c := accountClient(t, func(r *http.Request) (*http.Response, error) {
 			n++
@@ -98,9 +99,33 @@ func TestAccountAliasRateAndAmbiguity(t *testing.T) {
 			return accountResp(tc.code, tc.body), nil
 		})
 		a, _, e := c.CreateAccountAlias(context.Background(), AccountSession{SCNT: "s", APIKey: "k", ExpiresAt: time.Now().Add(time.Hour)}, "L", "")
-		if e == nil || n != 2 || (tc.keep != (a.HME != "")) {
+		if e == nil || n != tc.calls || (tc.keep != (a.HME != "")) {
 			t.Fatalf("code %d alias=%+v calls=%d err=%v", tc.code, a, n, e)
 		}
+	}
+}
+
+func TestAccountAliasRetriesOnlyCompletionForTransientFailure(t *testing.T) {
+	posts, puts := 0, 0
+	c := accountClient(t, func(r *http.Request) (*http.Response, error) {
+		switch r.Method {
+		case http.MethodPost:
+			posts++
+			return accountResp(200, `{"emailAddress":"retry@icloud.com"}`), nil
+		case http.MethodPut:
+			puts++
+			if puts == 1 {
+				return accountResp(http.StatusServiceUnavailable, `{}`), nil
+			}
+			return accountResp(200, `{"emailAddress":"retry@icloud.com","id":"retry-id","active":true}`), nil
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+			return nil, nil
+		}
+	})
+	alias, _, err := c.CreateAccountAlias(context.Background(), AccountSession{SCNT: "s", APIKey: "k", ExpiresAt: time.Now().Add(time.Hour)}, "L", "")
+	if err != nil || alias.HME != "retry@icloud.com" || alias.AnonymousID != "retry-id" || posts != 1 || puts != 2 {
+		t.Fatalf("alias=%+v posts=%d puts=%d err=%v", alias, posts, puts, err)
 	}
 }
 

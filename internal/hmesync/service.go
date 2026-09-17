@@ -533,8 +533,9 @@ func (s *Service) CreateAliasWithChannel(ctx context.Context, accountID int64, c
 	return s.createAliasWithChannel(ctx, accountID, channel, false)
 }
 
-// ProbeAliasWithChannel runs one user-triggered attempt without changing the
-// background cooldown or schedule. Publication and account gates are identical.
+// ProbeAliasWithChannel runs one user-triggered attempt without consuming any
+// local creation quota or adding a local delay. Apple responses still control
+// whether that individual request completes.
 func (s *Service) ProbeAliasWithChannel(ctx context.Context, accountID int64, channel string) (domain.Alias, error) {
 	return s.createAliasWithChannel(ctx, accountID, channel, true)
 }
@@ -545,6 +546,8 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 	}
 	currentPercent := autoCreatePreparingPercent
 	pendingConfirmationTracked := false
+	var claimedBackgroundBudget appleCreationBudgetRepository
+	claimedCreationSlot := false
 	reportProgress := func(phase domain.AliasCreationPhase, percent, attempt int) {
 		if percent < 0 {
 			percent = 0
@@ -566,6 +569,17 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 			reportProgress(domain.AliasCreationPhaseCancelled, currentPercent, 0)
 		default:
 			reportProgress(domain.AliasCreationPhaseFailed, currentPercent, 0)
+		}
+	}()
+	defer func() {
+		if claimedBackgroundBudget == nil || (!errors.Is(resultErr, ErrRateLimited) && !apple.IsRateLimited(resultErr)) {
+			return
+		}
+		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), autoCreatePersistTimeout)
+		defer cancel()
+		until := s.now().Add(max(24*time.Hour, apple.RetryDelay(resultErr)))
+		if err := claimedBackgroundBudget.PauseAppleCreation(persistCtx, accountID, until); err != nil {
+			resultErr = errors.Join(resultErr, wrapPersistenceError(err))
 		}
 	}()
 
@@ -683,6 +697,30 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 			return domain.Alias{}, store.ErrAliasLimit
 		}
 	}
+	claimCreationSlot := func() error {
+		if claimedCreationSlot {
+			return nil
+		}
+		if probe {
+			// Interactive actions intentionally bypass local ledgers. They are
+			// used for direct operator control, while the scheduler alone owns
+			// the background quota and cadence.
+			return nil
+		}
+		budget, ok := s.repo.(appleCreationBudgetRepository)
+		if !ok {
+			return nil
+		}
+		if err := budget.ClaimAppleCreationAttempt(ctx, accountID, s.now()); err != nil {
+			if errors.Is(err, store.ErrAccountDisabled) {
+				return wrapError(CodeAccountDisabled, ErrAccountDisabled, err)
+			}
+			return err
+		}
+		claimedBackgroundBudget = budget
+		claimedCreationSlot = true
+		return nil
+	}
 
 	reportProgress(domain.AliasCreationPhaseLoadingSession, autoCreateLoadingSessionPercent, 0)
 	record, session, err := s.loadSession(ctx, accountID)
@@ -697,34 +735,13 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 		return domain.Alias{}, expireAutoSession(wrapError(CodeSessionExpired, ErrSessionExpired,
 			errors.New("stored Apple session omitted the account identifier")))
 	}
-	// Claim before the first upstream request. Manual probes use a separate
-	// ledger; background jobs share a budget across channels and schedulers.
-	if probe {
-		budget, ok := s.repo.(appleCreationProbeRepository)
-		if !ok {
-			return domain.Alias{}, errors.New("manual probe persistence is unavailable")
-		}
-		if err := budget.ClaimAppleCreationProbe(ctx, accountID, s.now()); err != nil {
+	// A fresh address consumes a creation slot before any Apple request. A
+	// pre-existing candidate follows the reconciliation path below without
+	// claiming another slot.
+	if !hasPendingConfirmation {
+		if err := claimCreationSlot(); err != nil {
 			return domain.Alias{}, err
 		}
-	} else if budget, ok := s.repo.(appleCreationBudgetRepository); ok {
-		if err := budget.ClaimAppleCreationAttempt(ctx, accountID, s.now()); err != nil {
-			if errors.Is(err, store.ErrAccountDisabled) {
-				return domain.Alias{}, wrapError(CodeAccountDisabled, ErrAccountDisabled, err)
-			}
-			return domain.Alias{}, err
-		}
-		defer func() {
-			if !errors.Is(resultErr, ErrRateLimited) && !apple.IsRateLimited(resultErr) {
-				return
-			}
-			persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), autoCreatePersistTimeout)
-			defer cancel()
-			until := s.now().Add(max(24*time.Hour, apple.RetryDelay(resultErr)))
-			if err := budget.PauseAppleCreation(persistCtx, accountID, until); err != nil {
-				resultErr = errors.Join(resultErr, wrapPersistenceError(err))
-			}
-		}()
 	}
 	reportProgress(domain.AliasCreationPhaseValidatingSession, autoCreateValidatingSessionPercent, 0)
 	validated, err := s.client.Validate(ctx, session)
@@ -929,14 +946,82 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 	}
 	if hasPendingConfirmation {
 		confirmed, found := findAppleAlias(settings.Aliases, pendingConfirmation.Alias.Address)
-		if !found {
+		if found {
+			return confirmPendingAlias(ctx, pendingConfirmation.Alias, confirmed, listedSession, 1)
+		}
+
+		pendingCreatedAt := pendingConfirmation.CreatedAt
+		if pendingCreatedAt.IsZero() {
+			pendingCreatedAt = pendingConfirmation.Alias.CreatedAt
+		}
+		staleBefore := s.now().Add(-stalePendingAliasConfirmationAge)
+		if pendingCreatedAt.IsZero() || pendingCreatedAt.After(staleBefore) {
+			// A generated address can survive a temporary failure while Apple is
+			// completing it. Resume that idempotent second step before treating
+			// the candidate as directory-propagation pending.
+			if completer, ok := s.client.(accountAliasCompleter); ok && listedSession.Account != nil &&
+				listedSession.Account.APIKey != "" && sameEmail(listedSession.Account.AppleID, record.AppleID) {
+				resumed, managed, resumeErr := completer.CompleteAccountAlias(
+					ctx, *listedSession.Account, pendingConfirmation.Alias.Address, pendingConfirmation.Alias.Label, "",
+				)
+				listedSession.Account = &managed
+				if err := checkpointSession(ctx, listedSession); err != nil {
+					return domain.Alias{}, wrapPersistenceError(err)
+				}
+				if strings.TrimSpace(resumed.HME) != "" {
+					resumedSettings, resumedSession, listErr := s.client.ListAliases(ctx, listedSession)
+					if hasAppleSessionState(resumedSession) {
+						listedSession = resumedSession
+					}
+					if err := checkpointSession(ctx, listedSession); err != nil {
+						return domain.Alias{}, wrapPersistenceError(err)
+					}
+					if listErr == nil {
+						if confirmed, found := findAppleAlias(resumedSettings.Aliases, pendingConfirmation.Alias.Address); found {
+							return confirmPendingAlias(ctx, pendingConfirmation.Alias, confirmed, listedSession, 2)
+						}
+					}
+				}
+				if resumeErr != nil && (errors.Is(resumeErr, apple.ErrInvalidSession) || apple.IsRateLimited(resumeErr)) {
+					return domain.Alias{}, mapAppleError(resumeErr, false)
+				}
+			}
 			return domain.Alias{}, wrapError(
 				CodeAliasConfirmationPending,
 				ErrAliasConfirmationPending,
 				errors.New("Apple list omitted the pending reserved alias"),
 			)
 		}
-		return confirmPendingAlias(ctx, pendingConfirmation.Alias, confirmed, listedSession, 1)
+		discarder, ok := s.repo.(StalePendingAutoAliasRepository)
+		if !ok {
+			return domain.Alias{}, wrapError(
+				CodeAliasConfirmationPending,
+				ErrAliasConfirmationPending,
+				errors.New("Apple list omitted a stale pending reserved alias"),
+			)
+		}
+		if err := discarder.DiscardStalePendingAutoAlias(ctx, accountID, pendingConfirmation.Alias.ID, staleBefore); err != nil {
+			if errors.Is(err, store.ErrAliasConfirmationPending) || errors.Is(err, store.ErrNotFound) {
+				return domain.Alias{}, wrapError(
+					CodeAliasConfirmationPending,
+					ErrAliasConfirmationPending,
+					errors.New("pending reserved alias changed before stale recovery"),
+				)
+			}
+			return domain.Alias{}, wrapPersistenceError(err)
+		}
+		// The full directory has remained authoritative and omitted this address
+		// beyond the confirmation window. Its local key bundle was never issued,
+		// so resume from the regular capacity and forwarding preflight.
+		hasPendingConfirmation = false
+		pendingConfirmationTracked = false
+		count, err := countEnabled(ctx, accountID)
+		if err != nil {
+			return domain.Alias{}, err
+		}
+		if count >= domain.MaxEnabledAliasesPerAccount {
+			return domain.Alias{}, store.ErrAliasLimit
+		}
 	}
 	forwardingErr := validateAutoCreateForwardingTarget(settings, account.Email)
 	if errors.Is(forwardingErr, ErrForwardingTargetMissing) {
@@ -1028,6 +1113,12 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 	}
 	if forwardingErr != nil {
 		return domain.Alias{}, forwardingErr
+	}
+
+	// A stale candidate was removed after the authoritative directory omitted
+	// it; a new generated address now needs its normal creation slot.
+	if err := claimCreationSlot(); err != nil {
+		return domain.Alias{}, err
 	}
 
 	// Prepare the one-time API key before reserve. The store later reuses this
@@ -1259,6 +1350,8 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 		}
 	}
 }
+
+const stalePendingAliasConfirmationAge = 20 * time.Minute
 
 func findAppleAlias(aliases []apple.Alias, address string) (apple.Alias, bool) {
 	wanted := domain.NormalizeEmail(address)
