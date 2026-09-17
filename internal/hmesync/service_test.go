@@ -759,6 +759,46 @@ func TestCreateAutoAliasConfirmsMissingReserveForwardFromAuthoritativeList(t *te
 	}
 }
 
+func TestCreateAutoAliasReplacesStaleCandidateOmittedByAuthoritativeList(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 8, 9, 0, 0, 0, time.UTC)
+	repo := newFakeRepository(domain.Account{ID: 3, Email: "primary@icloud.com", Enabled: true}, now)
+	repo.pending = &domain.Alias{
+		ID:            77,
+		AccountID:     3,
+		Address:       "stale@icloud.com",
+		Enabled:       false,
+		LastSyncError: domain.AppleAliasConfirmationPending,
+		CreatedAt:     now.Add(-stalePendingAliasConfirmationAge),
+	}
+	client := &fakeAppleClient{
+		validate: func(_ context.Context, session apple.Session) (apple.Session, error) {
+			return session, nil
+		},
+		list: func(_ context.Context, session apple.Session) (apple.ListResult, apple.Session, error) {
+			return apple.ListResult{SelectedForwardTo: "primary@icloud.com"}, session, nil
+		},
+		create: func(_ context.Context, session apple.Session, _, _ string) (apple.Alias, apple.Session, error) {
+			return apple.Alias{
+				HME:            "replacement@icloud.com",
+				IsActive:       true,
+				ForwardToEmail: "primary@icloud.com",
+			}, session, nil
+		},
+	}
+	service := newTestService(t, repo, client, &fakeLocker{}, func() time.Time { return now })
+	storeSession(t, service, repo, 3, apple.Session{AppleID: "owner@example.com", Region: apple.RegionGlobal})
+
+	created, err := service.CreateAutoAlias(ctx, 3)
+	if err != nil {
+		t.Fatalf("replace stale candidate: %v", err)
+	}
+	if created.Address != "replacement@icloud.com" || !created.Enabled || client.createCalls.Load() != 1 ||
+		repo.pending == nil || repo.pending.Address != "replacement@icloud.com" || repo.confirms.Load() != 1 {
+		t.Fatalf("created=%#v creates=%d pending=%#v confirms=%d", created, client.createCalls.Load(), repo.pending, repo.confirms.Load())
+	}
+}
+
 func TestCreateAutoAliasPreservesRotatedSessionWhenReserveFails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -2601,6 +2641,18 @@ func (r *fakeRepository) GetPendingAutoAliasConfirmation(_ context.Context, acco
 		return domain.PendingAliasAPIKey{}, store.ErrNotFound
 	}
 	return domain.PendingAliasAPIKey{Alias: *r.pending}, nil
+}
+
+func (r *fakeRepository) DiscardStalePendingAutoAlias(_ context.Context, accountID, aliasID int64, notNewerThan time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pending == nil || r.pending.AccountID != accountID || r.pending.ID != aliasID ||
+		r.pending.Enabled || r.pending.LastSyncError != domain.AppleAliasConfirmationPending ||
+		r.pending.CreatedAt.IsZero() || r.pending.CreatedAt.After(notNewerThan) {
+		return store.ErrAliasConfirmationPending
+	}
+	r.pending = nil
+	return nil
 }
 
 func (r *fakeRepository) ConfirmPendingAutoAlias(

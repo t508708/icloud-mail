@@ -44,6 +44,13 @@ type AutoCreateRepository interface {
 	ConfirmPendingAutoAlias(context.Context, domain.AppleWebSession, int64) (domain.Alias, domain.AppleWebSession, error)
 }
 
+// StalePendingAutoAliasRepository lets the creation flow discard a candidate
+// which Apple's complete, current directory has omitted beyond the bounded
+// confirmation window. The candidate never became an assignable mailbox.
+type StalePendingAutoAliasRepository interface {
+	DiscardStalePendingAutoAlias(context.Context, int64, int64, time.Time) error
+}
+
 // ModernAutoCreateRepository is the transitional richer shape used by older
 // PR2 adapters. The service accepts both shapes so changing an adapter does not
 // turn automatic creation into a runtime-unavailable operation.

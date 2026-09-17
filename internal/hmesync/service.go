@@ -929,14 +929,52 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 	}
 	if hasPendingConfirmation {
 		confirmed, found := findAppleAlias(settings.Aliases, pendingConfirmation.Alias.Address)
-		if !found {
+		if found {
+			return confirmPendingAlias(ctx, pendingConfirmation.Alias, confirmed, listedSession, 1)
+		}
+
+		pendingCreatedAt := pendingConfirmation.CreatedAt
+		if pendingCreatedAt.IsZero() {
+			pendingCreatedAt = pendingConfirmation.Alias.CreatedAt
+		}
+		staleBefore := s.now().Add(-stalePendingAliasConfirmationAge)
+		if pendingCreatedAt.IsZero() || pendingCreatedAt.After(staleBefore) {
 			return domain.Alias{}, wrapError(
 				CodeAliasConfirmationPending,
 				ErrAliasConfirmationPending,
 				errors.New("Apple list omitted the pending reserved alias"),
 			)
 		}
-		return confirmPendingAlias(ctx, pendingConfirmation.Alias, confirmed, listedSession, 1)
+		discarder, ok := s.repo.(StalePendingAutoAliasRepository)
+		if !ok {
+			return domain.Alias{}, wrapError(
+				CodeAliasConfirmationPending,
+				ErrAliasConfirmationPending,
+				errors.New("Apple list omitted a stale pending reserved alias"),
+			)
+		}
+		if err := discarder.DiscardStalePendingAutoAlias(ctx, accountID, pendingConfirmation.Alias.ID, staleBefore); err != nil {
+			if errors.Is(err, store.ErrAliasConfirmationPending) || errors.Is(err, store.ErrNotFound) {
+				return domain.Alias{}, wrapError(
+					CodeAliasConfirmationPending,
+					ErrAliasConfirmationPending,
+					errors.New("pending reserved alias changed before stale recovery"),
+				)
+			}
+			return domain.Alias{}, wrapPersistenceError(err)
+		}
+		// The full directory has remained authoritative and omitted this address
+		// beyond the confirmation window. Its local key bundle was never issued,
+		// so resume from the regular capacity and forwarding preflight.
+		hasPendingConfirmation = false
+		pendingConfirmationTracked = false
+		count, err := countEnabled(ctx, accountID)
+		if err != nil {
+			return domain.Alias{}, err
+		}
+		if count >= domain.MaxEnabledAliasesPerAccount {
+			return domain.Alias{}, store.ErrAliasLimit
+		}
 	}
 	forwardingErr := validateAutoCreateForwardingTarget(settings, account.Email)
 	if errors.Is(forwardingErr, ErrForwardingTargetMissing) {
@@ -1259,6 +1297,8 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 		}
 	}
 }
+
+const stalePendingAliasConfirmationAge = 20 * time.Minute
 
 func findAppleAlias(aliases []apple.Alias, address string) (apple.Alias, bool) {
 	wanted := domain.NormalizeEmail(address)

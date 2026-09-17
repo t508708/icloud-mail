@@ -217,6 +217,59 @@ func (s *Store) GetPendingAutoAliasConfirmation(ctx context.Context, accountID i
 	return pending, nil
 }
 
+// DiscardStalePendingAutoAlias releases a local reserve marker only after its
+// age has crossed the caller's confirmation deadline. It intentionally does
+// not call Apple: the caller has already received a successful full directory
+// response that omitted this address.
+func (s *Store) DiscardStalePendingAutoAlias(
+	ctx context.Context,
+	accountID, aliasID int64,
+	notNewerThan time.Time,
+) error {
+	if accountID < 1 || aliasID < 1 || notNewerThan.IsZero() {
+		return fmt.Errorf("discard stale pending automatic alias: identity and deadline are required")
+	}
+
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin stale pending automatic alias discard: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := s.lockAccountVersionForUpdate(ctx, tx, accountID); err != nil {
+		return fmt.Errorf("lock account before stale pending automatic alias discard: %w", err)
+	}
+
+	var enabled bool
+	var marker string
+	var createdAt int64
+	if err := s.txQueryRowContext(ctx, tx, `
+		SELECT enabled, last_sync_error, created_at
+		FROM aliases
+		WHERE id = ? AND account_id = ?`, aliasID, accountID,
+	).Scan(&enabled, &marker, &createdAt); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrNotFound
+		}
+		return fmt.Errorf("read pending automatic alias before discard: %w", err)
+	}
+	if enabled || marker != domain.AppleAliasConfirmationPending || createdAt > timestamp(notNewerThan.UTC()) {
+		return ErrAliasConfirmationPending
+	}
+	result, err := s.txExecContext(ctx, tx,
+		`DELETE FROM aliases WHERE id = ? AND account_id = ?`, aliasID, accountID,
+	)
+	if err != nil {
+		return fmt.Errorf("discard stale pending automatic alias: %w", err)
+	}
+	if err := requireAffected(result, "pending alias"); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit stale pending automatic alias discard: %w", err)
+	}
+	return nil
+}
+
 // ConfirmPendingAutoAlias atomically publishes an alias whose Apple directory
 // visibility was delayed after reserve. Its credential bundle was already
 // persisted with the provisional alias and becomes usable when enabled.
