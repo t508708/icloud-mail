@@ -77,6 +77,12 @@ type AliasDeletionOutcome struct {
 	Err     error
 }
 
+// AliasDeletionFinalizer atomically publishes an Apple-confirmed deletion.
+// The default finalizer removes the local alias. Callers that have coupled
+// state, such as a mailbox-pool retirement, may install their own finalizer.
+// It must be short and must not make another Apple request.
+type AliasDeletionFinalizer func(context.Context, int64) error
+
 type SessionCipher interface {
 	EncryptAppleSession(string) (string, error)
 	DecryptAppleSession(string) (string, error)

@@ -58,6 +58,50 @@ curl 'https://mail.example.com/api/v1/pool/claim' \
 
 领取前持久化 request_id 和原参数。相同项目、相同编号和相同参数重试会返回原领取记录；参数变化返回 `409 IDEMPOTENCY_CONFLICT`。库存不足返回 `409 POOL_EMPTY`，整批保持未分配状态。领取完成后重试旧编号仍返回原记录，只有仍在领取期或已经确认使用的记录会带邮箱凭据。
 
+## 已使用邮箱退休删除
+
+供项目侧完成业务后回收**已使用**隐藏邮箱。此接口只删除指定项目已领取并已使用的隐藏邮箱；不删除 iCloud 主号，也不扫描或删除该主号的其他地址。它与旧的管理端 `DELETE /admin/api/v1/aliases/batch` 独立，旧接口的同步与异步语义不变。
+
+提交和读取都需要双重鉴权：有效管理员 Session，以及该项目的 `Authorization: Bearer pool_...`。提交还必须提供同源 `X-CSRF-Token`；读取 GET 不要求 CSRF。路径使用实际管理前缀：`<admin-path>/api/v1/pool/aliases/batch`。
+
+```sh
+curl -X POST 'https://mail.example.com/ADMIN_PATH/api/v1/pool/aliases/batch' \
+  -H 'Cookie: icloud_admin_session=ADMIN_SESSION' \
+  -H 'X-CSRF-Token: ADMIN_CSRF' \
+  -H 'Authorization: Bearer pool_PROJECT_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"operation_id":"retire-20260918-0001","items":[{"alias_id":123,"lease_id":"LEASE_ID"}]}'
+```
+
+- `operation_id` 为 16–128 位 ASCII 字母、数字、`-`、`_`；`items` 1–100 项，顺序属于幂等内容的一部分。
+- 服务先整批预检：lease 必须精确对应 alias、属于当前 Pool Key 项目、为该 alias 唯一 live lease 且状态为 `used`；alias 必须属于启用、已认证的 iCloud 主号，不能是目录确认中地址。任一项目失败则整批不接收，所有 lease 保持原状。
+- 接收时单事务将 lease 置为 `retiring`。此后取码、续期、释放、再次确认使用和再次领取均关闭。
+- Apple 明确确认删除后，本地同一事务将 lease 置为 `retired`、`alias_id` 置空，并删除 alias 与 Pool 成员；历史 lease 保留。Apple 明确失败则恢复 `used` 并保留 alias。
+- 网络结果未知、任务中断、服务重启或本地收口失败时，lease 保持 `retiring`，item 标为 `review`，任务为 `review` 或 `interrupted`；服务不自动重放。Apple 执行沿用现有每主号串行、批量并发和限流恢复策略。
+- `operation_id` 在安装内全局唯一。原项目以完全相同、顺序一致的 items 重试时返回原任务，不重复删除；内容不同或被其他项目占用时返回 `409 IDEMPOTENCY_CONFLICT`，且不泄露原作业。客户端首次提交前必须保存 operation_id 与原 items。
+
+读取任务：
+
+```sh
+curl 'https://mail.example.com/ADMIN_PATH/api/v1/pool/aliases/batch/jobs/retire-20260918-0001' \
+  -H 'Cookie: icloud_admin_session=ADMIN_SESSION' \
+  -H 'Authorization: Bearer pool_PROJECT_KEY'
+```
+
+响应仅含任务状态及逐项 alias/lease 结果，不返回项目 Key、邮箱 API Key、IMAP/OAuth 凭据、Cookie 或邮件内容：
+
+```json
+{
+  "data": {
+    "operation_id": "retire-20260918-0001",
+    "status": "completed",
+    "total": 1,
+    "processed": 1,
+    "items": [{"alias_id": 123, "lease_id": "LEASE_ID", "state": "retired", "result_code": ""}]
+  }
+}
+```
+
 成功响应形状：
 
 ```json

@@ -516,6 +516,9 @@ func (s *Service) expireAliasDeletionSession(ctx context.Context, accountID int6
 func (s *Service) deleteLocalAliasAfterApple(ctx context.Context, repo AliasDeletionRepository, aliasID int64) error {
 	persistContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), aliasDeletePersistTimeout)
 	defer cancel()
+	if finalizer := aliasDeletionFinalizerFromContext(ctx); finalizer != nil {
+		return finalizer(persistContext, aliasID)
+	}
 	return repo.DeleteAlias(persistContext, aliasID)
 }
 

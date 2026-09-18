@@ -16,11 +16,19 @@ import (
 )
 
 var (
-	ErrPoolEmpty           = errors.New("mailbox pool has insufficient available addresses")
-	ErrPoolConflict        = errors.New("mailbox pool state conflict")
-	ErrPoolRequestConflict = errors.New("idempotency key belongs to a different request")
-	ErrPoolClosed          = errors.New("mailbox lease is closed or expired")
-	ErrPoolInput           = errors.New("invalid mailbox pool input")
+	ErrPoolEmpty                   = errors.New("mailbox pool has insufficient available addresses")
+	ErrPoolConflict                = errors.New("mailbox pool state conflict")
+	ErrPoolRequestConflict         = errors.New("idempotency key belongs to a different request")
+	ErrPoolClosed                  = errors.New("mailbox lease is closed or expired")
+	ErrPoolInput                   = errors.New("invalid mailbox pool input")
+	ErrPoolRetirementConflict      = errors.New("pool alias retirement operation conflicts with existing state")
+	ErrPoolRetirementLeaseNotFound = errors.New("pool alias retirement lease not found")
+	ErrPoolRetirementProject       = errors.New("pool alias retirement lease belongs to another project")
+	ErrPoolRetirementAlias         = errors.New("pool alias retirement lease does not match alias")
+	ErrPoolRetirementNotUsed       = errors.New("pool alias retirement lease is not used")
+	ErrPoolRetirementNotLive       = errors.New("pool alias retirement lease is not the only live lease")
+	ErrPoolRetirementNotICloud     = errors.New("pool alias retirement alias is not an authenticated iCloud alias")
+	ErrPoolRetirementPending       = errors.New("pool alias retirement alias is pending Apple confirmation")
 )
 
 type PoolClient struct {
@@ -106,16 +114,22 @@ func (s *Store) migratePool(ctx context.Context, tx *sql.Tx) error {
 		 PRIMARY KEY(client_id, request_id))`,
 		`CREATE TABLE IF NOT EXISTS pool_leases (id TEXT PRIMARY KEY, alias_id BIGINT REFERENCES aliases(id) ON DELETE SET NULL,
 		 address TEXT NOT NULL, client_id TEXT NOT NULL REFERENCES pool_clients(id), request_id TEXT NOT NULL,
-		 state TEXT NOT NULL CHECK(state IN ('leased','used','released','expired')),
+		 state TEXT NOT NULL CHECK(state IN ('leased','used','retiring','retired','released','expired')),
 		 created_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, updated_at BIGINT NOT NULL,
 		 FOREIGN KEY(client_id,request_id) REFERENCES pool_requests(client_id,request_id))`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS pool_one_live_lease ON pool_leases(alias_id) WHERE state IN ('leased','used')`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS pool_one_live_lease ON pool_leases(alias_id) WHERE state IN ('leased','used','retiring')`,
 		`CREATE INDEX IF NOT EXISTS pool_lease_expiry ON pool_leases(state, expires_at)`,
 		`CREATE INDEX IF NOT EXISTS pool_lease_request ON pool_leases(client_id, request_id)`,
 	} {
 		if _, err := s.txExecContext(ctx, tx, query); err != nil {
 			return fmt.Errorf("migrate mailbox pool: %w", err)
 		}
+	}
+	if err := s.migratePoolLeaseStates(ctx, tx); err != nil {
+		return err
+	}
+	if err := s.migratePoolAliasRetirementJobs(ctx, tx); err != nil {
+		return err
 	}
 	if _, err := s.txExecContext(ctx, tx, `INSERT INTO pool_suspended_members(alias_id,state,updated_at)
 		SELECT m.alias_id,m.state,m.updated_at FROM pool_members m
@@ -127,6 +141,91 @@ func (s *Store) migratePool(ctx context.Context, tx *sql.Tx) error {
 		SELECT m.alias_id FROM pool_members m JOIN aliases al ON al.id=m.alias_id
 		JOIN accounts a ON a.id=al.account_id WHERE a.enabled=FALSE)`); err != nil {
 		return fmt.Errorf("remove disabled-account pool members: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) migratePoolLeaseStates(ctx context.Context, tx *sql.Tx) error {
+	if s.dialect == dialectSQLite {
+		var definition string
+		err := s.txQueryRowContext(ctx, tx, `SELECT sql FROM sqlite_master WHERE type='table' AND name='pool_leases'`).Scan(&definition)
+		if err != nil {
+			return fmt.Errorf("read SQLite pool lease schema: %w", err)
+		}
+		if !strings.Contains(strings.ToLower(definition), "'retiring'") {
+			for _, query := range []string{
+				`DROP INDEX IF EXISTS pool_one_live_lease`,
+				`DROP INDEX IF EXISTS pool_lease_expiry`,
+				`DROP INDEX IF EXISTS pool_lease_request`,
+				`CREATE TABLE pool_leases_next (id TEXT PRIMARY KEY, alias_id BIGINT REFERENCES aliases(id) ON DELETE SET NULL,
+					address TEXT NOT NULL, client_id TEXT NOT NULL REFERENCES pool_clients(id), request_id TEXT NOT NULL,
+					state TEXT NOT NULL CHECK(state IN ('leased','used','retiring','retired','released','expired')),
+					created_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, updated_at BIGINT NOT NULL,
+					FOREIGN KEY(client_id,request_id) REFERENCES pool_requests(client_id,request_id))`,
+				`INSERT INTO pool_leases_next(id,alias_id,address,client_id,request_id,state,created_at,expires_at,updated_at)
+					SELECT id,alias_id,address,client_id,request_id,state,created_at,expires_at,updated_at FROM pool_leases`,
+				`DROP TABLE pool_leases`,
+				`ALTER TABLE pool_leases_next RENAME TO pool_leases`,
+				`CREATE UNIQUE INDEX pool_one_live_lease ON pool_leases(alias_id) WHERE state IN ('leased','used','retiring')`,
+				`CREATE INDEX pool_lease_expiry ON pool_leases(state, expires_at)`,
+				`CREATE INDEX pool_lease_request ON pool_leases(client_id, request_id)`,
+			} {
+				if _, err := s.txExecContext(ctx, tx, query); err != nil {
+					return fmt.Errorf("upgrade SQLite pool lease states: %w", err)
+				}
+			}
+		}
+		return nil
+	}
+
+	if _, err := s.txExecContext(ctx, tx, `DO $$
+	DECLARE constraint_name text;
+	BEGIN
+		SELECT conname INTO constraint_name FROM pg_constraint
+		WHERE conrelid = 'pool_leases'::regclass AND contype = 'c'
+		  AND pg_get_constraintdef(oid) LIKE '%state%';
+		IF constraint_name IS NOT NULL THEN
+			EXECUTE format('ALTER TABLE pool_leases DROP CONSTRAINT %I', constraint_name);
+		END IF;
+	END $$`); err != nil {
+		return fmt.Errorf("replace PostgreSQL pool lease state check: %w", err)
+	}
+	for _, query := range []string{
+		`ALTER TABLE pool_leases DROP CONSTRAINT IF EXISTS pool_leases_state_check`,
+		`ALTER TABLE pool_leases ADD CONSTRAINT pool_leases_state_check CHECK(state IN ('leased','used','retiring','retired','released','expired'))`,
+		`DROP INDEX IF EXISTS pool_one_live_lease`,
+		`CREATE UNIQUE INDEX pool_one_live_lease ON pool_leases(alias_id) WHERE state IN ('leased','used','retiring')`,
+	} {
+		if _, err := s.txExecContext(ctx, tx, query); err != nil {
+			return fmt.Errorf("upgrade PostgreSQL pool lease states: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) migratePoolAliasRetirementJobs(ctx context.Context, tx *sql.Tx) error {
+	for _, query := range []string{
+		`CREATE TABLE IF NOT EXISTS pool_alias_retirement_jobs (
+			operation_id TEXT PRIMARY KEY, client_id TEXT NOT NULL REFERENCES pool_clients(id), project TEXT NOT NULL,
+			fingerprint TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('queued','running','completed','review','interrupted')),
+			request_id TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS pool_alias_retirement_job_items (
+			operation_id TEXT NOT NULL REFERENCES pool_alias_retirement_jobs(operation_id) ON DELETE CASCADE,
+			ordinal INTEGER NOT NULL, alias_id BIGINT NOT NULL, lease_id TEXT NOT NULL REFERENCES pool_leases(id),
+			account_id BIGINT NOT NULL, address TEXT NOT NULL,
+			state TEXT NOT NULL CHECK(state IN ('retiring','retired','used','review')),
+			result_code TEXT NOT NULL DEFAULT '', result_message TEXT NOT NULL DEFAULT '', updated_at BIGINT NOT NULL,
+			PRIMARY KEY(operation_id, ordinal), UNIQUE(operation_id, lease_id))`,
+		// A retired or explicitly failed lease remains historical, so this is a
+		// lookup index rather than a global uniqueness rule. State='retiring'
+		// itself prevents a second live retirement from being accepted.
+		`DROP INDEX IF EXISTS pool_retirement_one_job_per_lease`,
+		`CREATE INDEX IF NOT EXISTS pool_retirement_lease_lookup ON pool_alias_retirement_job_items(lease_id)`,
+		`CREATE INDEX IF NOT EXISTS pool_retirement_job_client ON pool_alias_retirement_jobs(client_id, updated_at)`,
+	} {
+		if _, err := s.txExecContext(ctx, tx, query); err != nil {
+			return fmt.Errorf("migrate pool alias retirement jobs: %w", err)
+		}
 	}
 	return nil
 }

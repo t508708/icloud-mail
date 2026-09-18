@@ -219,6 +219,9 @@ func run() error {
 	if err := web.StartAliasDeletionJobs(workerContext); err != nil {
 		return fmt.Errorf("初始化后台隐私邮箱删除任务: %w", err)
 	}
+	if err := web.StartPoolAliasRetirementJobs(workerContext); err != nil {
+		return fmt.Errorf("初始化邮箱池退休删除任务: %w", err)
+	}
 	web.SetAliasAutoCreationService(autoManager)
 	web.SetSeenNotifier(seenWorker.Notify)
 	web.SetReadinessChecker(publicIMAPService.Ready)
@@ -242,7 +245,7 @@ func run() error {
 	}
 
 	var background sync.WaitGroup
-	background.Add(7)
+	background.Add(8)
 	go func() {
 		defer background.Done()
 		hmeService.RunAccountSessionRenewal(workerContext, logger)
@@ -265,6 +268,10 @@ func run() error {
 	go func() {
 		defer background.Done()
 		web.RunAliasDeletionJobs()
+	}()
+	go func() {
+		defer background.Done()
+		web.RunPoolAliasRetirementJobs()
 	}()
 	go func() {
 		defer background.Done()

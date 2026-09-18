@@ -59,6 +59,7 @@ func (s *Server) registerAdminAPIRoutes(api *gin.RouterGroup) {
 	)
 	protected.GET("/auth/session", s.adminAPISession)
 	s.registerAdminPoolRoutes(protected.Group("/pool"))
+	s.registerPoolAliasRetirementRoutes(protected.Group("/pool"))
 	protected.POST("/auth/logout", s.adminAPILogout(basePath))
 	protected.PUT("/auth/password", s.adminAPIChangePassword(basePath))
 

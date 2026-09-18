@@ -42,20 +42,21 @@ type Server struct {
 	ready               func() bool
 	adminSPA            *adminSPA
 
-	mailSyncWakeMu       sync.Mutex
-	mailSyncWake         map[int64]time.Time
-	credentialRotationMu sync.RWMutex
-	poolMu               sync.Mutex
-	manualAliasMu        sync.Mutex
-	manualAliasesRunning map[int64]bool
-	manualProbesRunning  map[int64]bool
-	demandAliasSync      func(context.Context, int64) error
-	aliasDemandRateMu    sync.Mutex
-	aliasDemandRate      map[int64]aliasDemandRateState
-	accountPickupActive  map[int64]int
-	pickupRateCleanupAt  time.Time
-	aliasCreationJobs    aliasCreationJobRuntime
-	aliasDeletionJobs    aliasDeletionJobRuntime
+	mailSyncWakeMu          sync.Mutex
+	mailSyncWake            map[int64]time.Time
+	credentialRotationMu    sync.RWMutex
+	poolMu                  sync.Mutex
+	manualAliasMu           sync.Mutex
+	manualAliasesRunning    map[int64]bool
+	manualProbesRunning     map[int64]bool
+	demandAliasSync         func(context.Context, int64) error
+	aliasDemandRateMu       sync.Mutex
+	aliasDemandRate         map[int64]aliasDemandRateState
+	accountPickupActive     map[int64]int
+	pickupRateCleanupAt     time.Time
+	aliasCreationJobs       aliasCreationJobRuntime
+	aliasDeletionJobs       aliasDeletionJobRuntime
+	poolAliasRetirementJobs poolAliasRetirementJobRuntime
 	// beforeCredentialRotationLock is a deterministic test seam. Production
 	// leaves it nil.
 	beforeCredentialRotationLock func()

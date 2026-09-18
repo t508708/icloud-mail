@@ -768,6 +768,125 @@ paths:
         "500":
           $ref: "#/components/responses/AdminInternalError"
 
+  /api/v1/pool/aliases/batch:
+    servers:
+      - url: https://HOST/{admin_path}
+        description: 安装级管理 API 前缀；将 admin_path 替换为 keys 卷中管理路径去掉首尾斜杠后的形式
+        variables:
+          admin_path:
+            default: 00000000000000000000000000000000/admin
+      - url: https://HOST/admin
+        description: 固定兼容管理入口；管理员 Session、CSRF 与 Pool Key 规则相同
+    post:
+      tags: [Mailbox Pool, Administration]
+      operationId: retireUsedPoolAliases
+      summary: 异步永久删除指定项目已使用的隐藏邮箱
+      description: |
+        该接口只删除当前 Pool Key 项目中指定、已领取且已使用的 iCloud 隐藏邮箱；不删除 iCloud 主号，
+        不扫描或删除该主号其他邮箱。它独立于 `DELETE /api/v1/aliases/batch`，不改变旧管理批量删除语义。
+
+        接收前整批预检 lease 与 alias 精确绑定、项目归属、唯一 live lease、used 状态、已认证 iCloud
+        主号、Apple 目录确认状态与会话。任一 item 不合格时整批不接收且不改变 lease。接收后原子地
+        `used -> retiring`，关闭该 lease 的取码、renew、release、commit 和再次 claim。Apple 已确认删除后
+        本地事务将 lease 变为 `retired`、清空 alias_id，并删除 alias/pool member；明确 Apple 失败恢复 used。
+        网络结果未知、任务中断、重启或本地收口失败时 lease 保持 retiring，任务进入 review/interrupted，
+        不自动重放。Apple 执行复用现有每主号串行、限流与批量并发策略。
+
+        operation_id 在安装内全局唯一。原项目以相同 operation_id 和顺序、内容完全相同的 items
+        重试时返回原任务；不同内容或被其他项目占用时返回 IDEMPOTENCY_CONFLICT，且不泄露原作业。
+        operation_id 是 16–128 位 ASCII 字母、数字、`-`、`_`；items 为 1–100 项。
+      security:
+        - adminSession: []
+          poolKey: []
+      parameters:
+        - $ref: "#/components/parameters/AdminCSRFToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PoolAliasRetirementRequest"
+      responses:
+        "202":
+          description: 作业已接收，或幂等重放返回原作业快照；不表示全部 Apple 删除已完成。
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+            Cache-Control:
+              $ref: "#/components/headers/AdminAliasBatchDeleteCacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PoolAliasRetirementJobResponse"
+        "400":
+          $ref: "#/components/responses/AdminBadRequest"
+        "401":
+          $ref: "#/components/responses/AdminAuthUnauthorized"
+        "403":
+          $ref: "#/components/responses/AdminCSRFForbidden"
+        "409":
+          description: 预检、Apple 会话或 operation_id 冲突。稳定 code 包括 IDEMPOTENCY_CONFLICT、LEASE_NOT_FOUND、LEASE_PROJECT_MISMATCH、LEASE_ALIAS_MISMATCH、LEASE_NOT_USED、LEASE_NOT_LIVE、ALIAS_NOT_ICLOUD、ALIAS_PENDING_CONFIRMATION、APPLE_LOGIN_REQUIRED、APPLE_SESSION_EXPIRED。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminAppleErrorResponse"
+        "503":
+          description: 后台作业服务未启动、正在关闭或 Apple 删除服务不可用。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminAppleErrorResponse"
+
+  /api/v1/pool/aliases/batch/jobs/{operationID}:
+    servers:
+      - url: https://HOST/{admin_path}
+        description: 安装级管理 API 前缀
+        variables:
+          admin_path:
+            default: 00000000000000000000000000000000/admin
+      - url: https://HOST/admin
+        description: 固定兼容管理入口
+    get:
+      tags: [Mailbox Pool, Administration]
+      operationId: getPoolAliasRetirementJob
+      summary: 查询当前项目的隐藏邮箱退休删除作业
+      description: |
+        同时校验管理员 Session 和 Pool Key；GET 不要求 CSRF。作业只允许创建它的 Pool 项目读取。
+        返回仅含任务状态、稳定结果码及 alias/lease 项结果，不含 API Key、IMAP/OAuth 凭据、Cookie 或邮件内容。
+        查询不启动、不恢复也不重放 Apple 操作。
+      security:
+        - adminSession: []
+          poolKey: []
+      parameters:
+        - name: operationID
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 16
+            maxLength: 128
+            pattern: '^[A-Za-z0-9_-]{16,128}$'
+      responses:
+        "200":
+          description: 当前作业快照。
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+            Cache-Control:
+              $ref: "#/components/headers/AdminAliasBatchDeleteCacheControl"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PoolAliasRetirementJobResponse"
+        "401":
+          $ref: "#/components/responses/AdminAuthUnauthorized"
+        "404":
+          description: 作业不存在或不属于当前 Pool Key 项目。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIErrorEnvelope"
+
   /api/v1/aliases/batch:
     servers:
       - url: https://HOST/{admin_path}
@@ -1477,6 +1596,11 @@ components:
       type: apiKey
       in: query
       name: api_key
+    poolKey:
+      type: http
+      scheme: bearer
+      bearerFormat: pool project Key
+      description: 以 `pool_` 开头的项目 Key；仅与管理员 Session 组合时可调用 Pool 已使用邮箱退休删除接口。
     adminSession:
       type: apiKey
       in: cookie
@@ -2437,6 +2561,98 @@ components:
             format: int64
             minimum: 1
           description: 需要从 Apple 永久删除的本地隐私邮箱 ID。
+    PoolAliasRetirementRequest:
+      type: object
+      additionalProperties: false
+      required: [operation_id, items]
+      properties:
+        operation_id:
+          type: string
+          minLength: 16
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]{16,128}$'
+          description: 安装内全局唯一的幂等作业标识；原项目重试必须使用相同值和相同顺序的 items。
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/PoolAliasRetirementItemRequest"
+    PoolAliasRetirementItemRequest:
+      type: object
+      additionalProperties: false
+      required: [alias_id, lease_id]
+      properties:
+        alias_id:
+          type: integer
+          format: int64
+          minimum: 1
+        lease_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+    PoolAliasRetirementJobResponse:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/PoolAliasRetirementJob"
+    PoolAliasRetirementJob:
+      type: object
+      additionalProperties: false
+      required: [operation_id, status, total, processed, items, created_at, updated_at]
+      description: 持久化的观察快照，不是可自动重放的队列；review/interrupted 保留 retiring lease，需人工核对 Apple 目录。
+      properties:
+        operation_id:
+          type: string
+          minLength: 16
+          maxLength: 128
+          pattern: '^[A-Za-z0-9_-]{16,128}$'
+        status:
+          type: string
+          enum: [queued, running, completed, review, interrupted]
+        total:
+          type: integer
+          minimum: 1
+          maximum: 100
+        processed:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: 已进入 retired、used 或 review 的项目数。
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/PoolAliasRetirementJobItem"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    PoolAliasRetirementJobItem:
+      type: object
+      additionalProperties: false
+      required: [alias_id, lease_id, state, result_code, result_message]
+      properties:
+        alias_id:
+          type: integer
+          format: int64
+          minimum: 1
+        lease_id:
+          type: string
+        state:
+          type: string
+          enum: [retiring, retired, used, review]
+        result_code:
+          type: string
+          description: 稳定结果码；例如 APPLE_DELETE_FAILED、APPLE_DELETE_UNCERTAIN、JOB_INTERRUPTED、APPLE_RATE_LIMITED。
+        result_message:
+          type: string
+          description: 非敏感展示信息；不含 Apple Cookie、邮箱凭据或邮件内容。
     AdminAsyncDeleteAliasesRequest:
       type: object
       additionalProperties: false
