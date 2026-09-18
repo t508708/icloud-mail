@@ -853,6 +853,11 @@ func hmeRouteHasConflictingAlias(
 	route icloudHMERoute,
 	aliases map[string][]int64,
 ) bool {
+	routeAliasIDs, routeMatched := aliasIDsForAddress(route.privateAddress, aliases)
+	routeAliasID := int64(0)
+	if routeMatched && len(routeAliasIDs) == 1 && routeAliasIDs[0] > 0 {
+		routeAliasID = routeAliasIDs[0]
+	}
 	fields := append([]string(nil), strongRecipientHeaderFields...)
 	fields = append(fields, weakRecipientHeaderFields...)
 	for _, field := range fields {
@@ -870,7 +875,11 @@ func hmeRouteHasConflictingAlias(
 			if address == route.privateAddress || address == route.forwardAddress {
 				continue
 			}
-			if _, matched := aliasIDsForAddress(address, aliases); matched {
+			aliasIDs, matched := aliasIDsForAddress(address, aliases)
+			if !matched {
+				continue
+			}
+			if routeAliasID == 0 || len(aliasIDs) != 1 || aliasIDs[0] != routeAliasID {
 				return true
 			}
 		}

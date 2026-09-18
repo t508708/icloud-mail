@@ -49,16 +49,56 @@ func TestClassifyArchiveRecipientAliasesStrictPlusTagResolution(t *testing.T) {
 		determinate bool
 	}{
 		{name: "full address wins", address: "root+literal@example.test", want: []int64{2}, determinate: true},
+		{name: "full address wins after normalization", address: "ROOT+LITERAL@EXAMPLE.TEST", want: []int64{2}, determinate: true},
 		{name: "tag falls back to root", address: "root+job-42@example.test", want: []int64{1}, determinate: true},
 		{name: "first plus begins tag", address: "root+job-42+retry@example.test", want: []int64{1}, determinate: true},
 		{name: "unknown root tag does not match", address: "unknown+job-42@example.test", determinate: false},
 		{name: "different domain does not match", address: "root+job-42@other.example.test", determinate: false},
+		{name: "suffix domain does not match", address: "root+job-42@example.test.evil", determinate: false},
+		{name: "similar local part does not match", address: "rootish+job-42@example.test", determinate: false},
+		{name: "empty tag does not match", address: "root+@example.test", determinate: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			header := stdmail.Header{"X-Original-To": {test.address}}
 			got, determinate := classifyArchiveRecipientAliases(header, aliases, account, false)
 			if determinate != test.determinate || !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("address=%q aliases=%#v determinate=%v, want %#v %v", test.address, got, determinate, test.want, test.determinate)
+			}
+		})
+	}
+}
+
+func TestICloudHMERouteUsesStrictPlusTagIdentity(t *testing.T) {
+	account := domain.Account{MailboxType: domain.MailboxTypeICloud, Email: "primary@icloud.com"}
+	aliases := map[string][]int64{
+		"root@icloud.com":         {1},
+		"root+literal@icloud.com": {2},
+	}
+	for _, test := range []struct {
+		name        string
+		private     string
+		cc          string
+		want        int64
+		determinate bool
+	}{
+		{
+			name:    "same root tag is not a conflicting alias",
+			private: "root+job-42@icloud.com", cc: "root@icloud.com", want: 1, determinate: true,
+		},
+		{
+			name:    "registered full address remains distinct from root",
+			private: "root+literal@icloud.com", cc: "root@icloud.com", determinate: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			header := stdmail.Header{
+				"To":                 {test.private},
+				"Cc":                 {test.cc},
+				icloudHMEHeaderField: {"p=" + test.private + "; f=primary@icloud.com; r=to"},
+			}
+			got, determinate := classifyRecipientAlias(header, aliases, account, false)
+			if got != test.want || determinate != test.determinate {
+				t.Fatalf("classification = (%d, %v), want (%d, %v)", got, determinate, test.want, test.determinate)
 			}
 		})
 	}

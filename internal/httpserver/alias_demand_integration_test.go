@@ -218,6 +218,7 @@ func TestPoolLeaseCodeReadsTaggedRootAddressOnDemand(t *testing.T) {
 		t.Fatal(err)
 	}
 	root, _ := createV2AliasFixture(t, env, account.ID, "pool-root@icloud.com")
+	literal, _ := createV2AliasFixture(t, env, account.ID, "pool-root+literal@icloud.com")
 	if err := env.store.EnrollPoolAliases(ctx, []int64{root.ID}); err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +235,8 @@ func TestPoolLeaseCodeReadsTaggedRootAddressOnDemand(t *testing.T) {
 		code    string
 	}{
 		{"pool-root+wrong@other.example.test", "111111"},
-		{"pool-root+job-42@icloud.com", "222222"},
+		{"pool-root+literal@icloud.com", "222222"},
+		{"pool-root+job-42@icloud.com", "333333"},
 	} {
 		raw := "From: sender@example.test\r\nX-Original-To: " + item.address + "\r\n" +
 			"Delivered-To: pool-owner@example.test\r\nTo: " + item.address + "\r\n" +
@@ -253,12 +255,16 @@ func TestPoolLeaseCodeReadsTaggedRootAddressOnDemand(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := serveV2Request(router, http.MethodGet, "/api/v1/pool/leases/"+leases[0].ID+"/code", "", map[string]string{"Authorization": "Bearer " + key})
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"otp":"222222"`) || strings.Contains(response.Body.String(), "111111") {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"otp":"333333"`) ||
+		strings.Contains(response.Body.String(), "111111") || strings.Contains(response.Body.String(), "222222") {
 		t.Fatalf("tagged pool code = %d %s", response.Code, response.Body.String())
+	}
+	if records, err := env.store.ListAliasOTPs(ctx, literal.ID, 10); err != nil || len(records) != 0 {
+		t.Fatalf("literal alias must not receive root lease OTPs: %v %v", records, err)
 	}
 	trace.mu.Lock()
 	defer trace.mu.Unlock()
-	if trace.logins != 1 || !reflect.DeepEqual(trace.bodies, []imap.UID{2}) {
-		t.Fatalf("login count=%d body UIDs=%v; want one login and only [2]", trace.logins, trace.bodies)
+	if trace.logins != 1 || !reflect.DeepEqual(trace.bodies, []imap.UID{3}) {
+		t.Fatalf("login count=%d body UIDs=%v; want one login and only [3]", trace.logins, trace.bodies)
 	}
 }
