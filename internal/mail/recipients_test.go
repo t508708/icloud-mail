@@ -36,6 +36,34 @@ func TestMatchingAliasIDsUsesExactMailbox(t *testing.T) {
 	}
 }
 
+func TestClassifyArchiveRecipientAliasesStrictPlusTagResolution(t *testing.T) {
+	account := domain.Account{MailboxType: domain.MailboxTypeCustom}
+	aliases := map[string][]int64{
+		"root@example.test":         {1},
+		"root+literal@example.test": {2},
+	}
+	for _, test := range []struct {
+		name        string
+		address     string
+		want        []int64
+		determinate bool
+	}{
+		{name: "full address wins", address: "root+literal@example.test", want: []int64{2}, determinate: true},
+		{name: "tag falls back to root", address: "root+job-42@example.test", want: []int64{1}, determinate: true},
+		{name: "first plus begins tag", address: "root+job-42+retry@example.test", want: []int64{1}, determinate: true},
+		{name: "unknown root tag does not match", address: "unknown+job-42@example.test", determinate: false},
+		{name: "different domain does not match", address: "root+job-42@other.example.test", determinate: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			header := stdmail.Header{"X-Original-To": {test.address}}
+			got, determinate := classifyArchiveRecipientAliases(header, aliases, account, false)
+			if determinate != test.determinate || !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("address=%q aliases=%#v determinate=%v, want %#v %v", test.address, got, determinate, test.want, test.determinate)
+			}
+		})
+	}
+}
+
 func TestMatchingAliasIDsRejectsForgedToByDefault(t *testing.T) {
 	header := stdmail.Header{"To": {`alias@example.com`}}
 	aliases := map[string][]int64{"alias@example.com": {1}}

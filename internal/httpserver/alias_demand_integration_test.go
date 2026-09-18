@@ -178,3 +178,87 @@ func TestAliasDemandURLThroughIMAPAndStoreReturnsNewTargetOTP(t *testing.T) {
 		t.Fatalf("login count=%d body UIDs=%v; want two logins and only [1 2]", trace.logins, trace.bodies)
 	}
 }
+
+func TestPoolLeaseCodeReadsTaggedRootAddressOnDemand(t *testing.T) {
+	env := newAdminAPITestEnv(t)
+	ctx := context.Background()
+	if err := env.store.ConfigureMailArchive(t.TempDir(), 64<<20); err != nil {
+		t.Fatal(err)
+	}
+	user := imapmemserver.NewUser("pool-owner@example.test", "fixture-password")
+	if err := user.Create("INBOX", nil); err != nil {
+		t.Fatal(err)
+	}
+	backend := imapmemserver.New()
+	backend.AddUser(user)
+	trace := &demandIMAPTrace{}
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", demandFixtureTLS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imapServer := imapserver.New(&imapserver.Options{
+		Logger: log.New(io.Discard, "", 0),
+		NewSession: func(*imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
+			return &demandIMAPSession{Session: backend.NewSession(), trace: trace}, nil, nil
+		},
+	})
+	done := make(chan struct{})
+	go func() { defer close(done); _ = imapServer.Serve(listener) }()
+	t.Cleanup(func() { _ = listener.Close(); _ = imapServer.Close(); <-done })
+	password, err := env.cipher.Encrypt("fixture-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, err := env.store.CreateAccount(ctx, domain.Account{
+		MailboxType: domain.MailboxTypeICloud, Email: "pool-primary@icloud.com",
+		IMAPHost: "127.0.0.1", IMAPPort: listener.Addr().(*net.TCPAddr).Port,
+		IMAPUsername: "pool-owner@example.test", PasswordCiphertext: password, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, _ := createV2AliasFixture(t, env, account.ID, "pool-root@icloud.com")
+	if err := env.store.EnrollPoolAliases(ctx, []int64{root.ID}); err != nil {
+		t.Fatal(err)
+	}
+	client, key, err := env.store.CreatePoolClient(ctx, "tagged-pool-code-project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leases, err := env.store.ClaimPool(ctx, client.ID, store.PoolClaim{RequestID: "tagged-pool-code-claim-0001", Count: 1, TTLSeconds: 600})
+	if err != nil || len(leases) != 1 || leases[0].AliasID != root.ID {
+		t.Fatalf("claim root lease = %#v err=%v", leases, err)
+	}
+	for _, item := range []struct {
+		address string
+		code    string
+	}{
+		{"pool-root+wrong@other.example.test", "111111"},
+		{"pool-root+job-42@icloud.com", "222222"},
+	} {
+		raw := "From: sender@example.test\r\nX-Original-To: " + item.address + "\r\n" +
+			"Delivered-To: pool-owner@example.test\r\nTo: " + item.address + "\r\n" +
+			"Subject: Verification code\r\nContent-Type: text/plain\r\n\r\nYour verification code is " + item.code + "\r\n"
+		if _, err := user.Append("INBOX", strings.NewReader(raw), &imap.AppendOptions{Time: time.Now().Add(time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fetcher := mailfetch.NewFetcher()
+	fetcher.ArchiveTempDir = env.store.MailArchiveTempDir()
+	manager := syncer.New(env.store, env.cipher, fetcher, env.server.logger, time.Minute, 1)
+	manager.SetOnDemandOnly(true)
+	env.server.SetAliasDemandSync(manager.SyncAliasOnDemand)
+	router, err := env.server.Router()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := serveV2Request(router, http.MethodGet, "/api/v1/pool/leases/"+leases[0].ID+"/code", "", map[string]string{"Authorization": "Bearer " + key})
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"otp":"222222"`) || strings.Contains(response.Body.String(), "111111") {
+		t.Fatalf("tagged pool code = %d %s", response.Code, response.Body.String())
+	}
+	trace.mu.Lock()
+	defer trace.mu.Unlock()
+	if trace.logins != 1 || !reflect.DeepEqual(trace.bodies, []imap.UID{2}) {
+		t.Fatalf("login count=%d body UIDs=%v; want one login and only [2]", trace.logins, trace.bodies)
+	}
+}

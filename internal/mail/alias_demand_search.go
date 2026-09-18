@@ -2,6 +2,7 @@ package mail
 
 import (
 	"errors"
+	"strings"
 
 	imap "github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
@@ -18,12 +19,31 @@ func aliasRecipientSearch(address, host string) imap.SearchCriteria {
 		// the full delivery-header classifier still checks every candidate.
 		fields = []string{icloudHMEHeaderField, "To", "Cc"}
 	}
-	criteria := imap.SearchCriteria{Header: []imap.SearchCriteriaHeaderField{{Key: fields[0], Value: address}}}
-	for _, field := range fields[1:] {
-		next := imap.SearchCriteria{Header: []imap.SearchCriteriaHeaderField{{Key: field, Value: address}}}
-		criteria = imap.SearchCriteria{Or: [][2]imap.SearchCriteria{{criteria, next}}}
+	values := aliasRecipientSearchValues(address)
+	criteria := imap.SearchCriteria{Header: []imap.SearchCriteriaHeaderField{{Key: fields[0], Value: values[0]}}}
+	for _, value := range values {
+		for _, field := range fields {
+			if value == values[0] && field == fields[0] {
+				continue
+			}
+			next := imap.SearchCriteria{Header: []imap.SearchCriteriaHeaderField{{Key: field, Value: value}}}
+			criteria = imap.SearchCriteria{Or: [][2]imap.SearchCriteria{{criteria, next}}}
+		}
 	}
 	return criteria
+}
+
+// aliasRecipientSearchValues adds only the local-part plus prefix needed to
+// discover arbitrary tagged deliveries. It is a candidate prefilter: strict
+// header classification still requires either the full registered address or
+// the same-domain registered root before any message body is downloaded.
+func aliasRecipientSearchValues(address string) []string {
+	values := []string{address}
+	local, _, hasDomain := strings.Cut(address, "@")
+	if plus := strings.IndexByte(local, '+'); hasDomain && plus < 0 && local != "" {
+		values = append(values, local+"+")
+	}
+	return values
 }
 
 func discoverAliasArchiveUIDs(client *imapclient.Client, lastUID, upperUID uint32, address, host string, limit int) ([]uint32, bool, uint32, error) {

@@ -443,8 +443,8 @@ func visibleAliasIDs(header stdmail.Header, aliases map[string][]int64) ([]int64
 func aliasIDsForAddresses(addresses []string, aliases map[string][]int64) ([]int64, bool) {
 	seen := make(map[int64]struct{})
 	for _, address := range addresses {
-		ids, exists := aliases[address]
-		if !exists {
+		ids, matched := aliasIDsForAddress(address, aliases)
+		if !matched {
 			continue
 		}
 		if len(ids) != 1 || ids[0] <= 0 {
@@ -485,7 +485,7 @@ func iCloudStrongAliasIDs(
 	finalTargets := iCloudFinalDeliveryTargets(account)
 	foundFinalTarget := false
 	for _, address := range addresses {
-		if _, registered := aliases[address]; registered {
+		if _, matched := aliasIDsForAddress(address, aliases); matched {
 			continue
 		}
 		if _, isTarget := routeTargets[address]; !isTarget {
@@ -590,8 +590,8 @@ func classifyCustomRecipientAliases(
 
 	seenIDs := make(map[int64]string, len(addresses))
 	for _, address := range addresses {
-		aliasIDs := aliases[address]
-		if len(aliasIDs) != 1 || aliasIDs[0] <= 0 {
+		aliasIDs, matched := aliasIDsForAddress(address, aliases)
+		if !matched || len(aliasIDs) != 1 || aliasIDs[0] <= 0 {
 			return nil, false
 		}
 		aliasID := aliasIDs[0]
@@ -627,14 +627,35 @@ func customRecipientAddresses(header stdmail.Header, allowWeak bool) ([]string, 
 }
 
 func aliasIDForAddress(address string, aliases map[string][]int64) (int64, bool) {
-	aliasIDs := aliases[address]
-	if len(aliasIDs) == 0 {
+	aliasIDs, matched := aliasIDsForAddress(address, aliases)
+	if !matched {
 		return 0, true
 	}
 	if len(aliasIDs) != 1 {
 		return 0, false
 	}
 	return aliasIDs[0], true
+}
+
+// aliasIDsForAddress only accepts an exact registered address, except that an
+// otherwise-unregistered local-part tag may resolve to its exact same-domain
+// root. This preserves a literal alias such as root+tag@example.com when it is
+// registered, and deliberately performs no domain, dot, or fuzzy matching.
+func aliasIDsForAddress(address string, aliases map[string][]int64) ([]int64, bool) {
+	if aliasIDs, matched := aliases[address]; matched {
+		return aliasIDs, true
+	}
+	local, domain, hasDomain := strings.Cut(address, "@")
+	if !hasDomain || local == "" || domain == "" || strings.Contains(domain, "@") {
+		return nil, false
+	}
+	plus := strings.IndexByte(local, '+')
+	if plus < 1 || plus == len(local)-1 {
+		return nil, false
+	}
+	root := local[:plus] + "@" + domain
+	aliasIDs, matched := aliases[root]
+	return aliasIDs, matched
 }
 
 // Apple encodes HME routing as semicolon-separated metadata, not an address
@@ -849,7 +870,7 @@ func hmeRouteHasConflictingAlias(
 			if address == route.privateAddress || address == route.forwardAddress {
 				continue
 			}
-			if _, registered := aliases[address]; registered {
+			if _, matched := aliasIDsForAddress(address, aliases); matched {
 				return true
 			}
 		}
