@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func TestPickupRateIsSharedByAliasTokensAndHonorsThreeSecondBoundary(t *testing.T) {
+func TestPickupRateIsSharedByAliasTokensAndDoesNotExtendTwoSecondCooldown(t *testing.T) {
 	env := newAdminAPITestEnv(t)
 	env.server.sync = nil
 	now := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
@@ -40,13 +40,15 @@ func TestPickupRateIsSharedByAliasTokensAndHonorsThreeSecondBoundary(t *testing.
 			headers = map[string]string{"Authorization": "Bearer " + credentials.APIKey}
 		}
 		got := serveV2Request(router, http.MethodGet, target, "", headers)
-		if got.Code != http.StatusTooManyRequests || got.Header().Get("Retry-After") != "3" {
+		if got.Code != http.StatusTooManyRequests || got.Header().Get("Retry-After") != "2" {
 			t.Fatalf("shared pickup %s = %d Retry-After=%q", target, got.Code, got.Header().Get("Retry-After"))
 		}
 	}
-	now = now.Add(2999 * time.Millisecond)
-	if got := serveV2Request(router, http.MethodGet, "/api/v1/otp", "", map[string]string{"Authorization": "Bearer " + credentials.APIKey}); got.Code != http.StatusTooManyRequests {
-		t.Fatalf("before boundary = %d", got.Code)
+	for _, elapsed := range []time.Duration{time.Second, 1999 * time.Millisecond} {
+		now = time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC).Add(elapsed)
+		if got := serveV2Request(router, http.MethodGet, "/api/v1/otp", "", map[string]string{"Authorization": "Bearer " + credentials.APIKey}); got.Code != http.StatusTooManyRequests {
+			t.Fatalf("before boundary at %s = %d", elapsed, got.Code)
+		}
 	}
 	now = now.Add(time.Millisecond)
 	if got := serveV2Request(router, http.MethodGet, "/api/v1/otp", "", map[string]string{"Authorization": "Bearer " + credentials.APIKey}); got.Code != http.StatusOK {

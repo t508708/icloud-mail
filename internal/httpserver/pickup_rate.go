@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	aliasDemandMinimumInterval = 3 * time.Second
+	aliasDemandMinimumInterval = 2 * time.Second
 	pickupConcurrentLimit      = 16
 	pickupAccountLimit         = 2
 	pickupRateMaxEntries       = 8192
@@ -33,14 +33,14 @@ func (s *Server) pickupAdmission() gin.HandlerFunc {
 		}
 		c.Header("Cache-Control", "no-store")
 		if !rate.Allow("pickup") {
-			s.rejectMailboxPickup(c, "取件请求较多，请在 3 秒后重试")
+			s.rejectMailboxPickup(c, "取件请求较多，请在 2 秒后重试")
 			return
 		}
 		select {
 		case slots <- struct{}{}:
 			defer func() { <-slots }()
 		default:
-			s.rejectMailboxPickup(c, "取件服务繁忙，请在 3 秒后重试")
+			s.rejectMailboxPickup(c, "取件服务繁忙，请在 2 秒后重试")
 			return
 		}
 		c.Next()
@@ -48,7 +48,7 @@ func (s *Server) pickupAdmission() gin.HandlerFunc {
 }
 
 func (s *Server) rejectMailboxPickup(c *gin.Context, message string) {
-	c.Header("Retry-After", "3")
+	c.Header("Retry-After", "2")
 	s.writeAPIError(c, http.StatusTooManyRequests, "RATE_LIMITED", message)
 	c.Abort()
 }
@@ -74,11 +74,11 @@ func (s *Server) beginMailboxPickup(c *gin.Context, accountID, aliasID int64) (f
 	message := ""
 	switch {
 	case state.inFlight || now.Before(state.nextAt):
-		message = "同一邮箱正在取件或距上次完成不足 3 秒，请稍后重试"
+		message = "同一邮箱正在取件或距上次完成不足 2 秒，请稍后重试"
 	case s.accountPickupActive[accountID] >= pickupAccountLimit:
-		message = "此主号已有取件请求处理中，请在 3 秒后重试"
+		message = "此主号已有取件请求处理中，请在 2 秒后重试"
 	case !exists && len(s.aliasDemandRate) >= pickupRateMaxEntries:
-		message = "取件请求较多，请在 3 秒后重试"
+		message = "取件请求较多，请在 2 秒后重试"
 	}
 	if message != "" {
 		s.aliasDemandRateMu.Unlock()
@@ -92,6 +92,8 @@ func (s *Server) beginMailboxPickup(c *gin.Context, accountID, aliasID int64) (f
 		finished := s.now()
 		s.aliasDemandRateMu.Lock()
 		defer s.aliasDemandRateMu.Unlock()
+		// Rejections above do not mutate the state. The cooldown is anchored to
+		// this completed pickup, so repeated refreshes cannot push it forward.
 		s.aliasDemandRate[aliasID] = aliasDemandRateState{nextAt: finished.Add(aliasDemandMinimumInterval)}
 		s.accountPickupActive[accountID]--
 		if s.accountPickupActive[accountID] == 0 {
