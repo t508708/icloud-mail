@@ -21,7 +21,7 @@ func (s *Server) refreshDemandMailbox(c *gin.Context, binding domain.MailboxBind
 		return binding, true
 	}
 	if err := s.demandAliasSync(c.Request.Context(), binding.Alias.ID); err != nil {
-		c.Header("Retry-After", "3")
+		c.Header("Retry-After", "2")
 		s.writeAPIError(c, http.StatusServiceUnavailable, "SYNC_UNAVAILABLE", "本次按需取件尚未完成，请稍后刷新取件地址")
 		return domain.MailboxBinding{}, false
 	}

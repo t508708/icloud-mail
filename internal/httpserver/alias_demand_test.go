@@ -73,8 +73,8 @@ func TestAliasDemandSyncOTPErrorReturns503(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+credentials.APIKey)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "SYNC_UNAVAILABLE") {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "2" || !strings.Contains(rec.Body.String(), "SYNC_UNAVAILABLE") {
+		t.Fatalf("status=%d Retry-After=%q body=%s", rec.Code, rec.Header().Get("Retry-After"), rec.Body.String())
 	}
 	if syncRequestID == "" || rec.Header().Get("X-Request-ID") != syncRequestID || !strings.Contains(rec.Body.String(), syncRequestID) {
 		t.Fatal("request ID did not reach the demand sync and error response")

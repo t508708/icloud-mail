@@ -26,8 +26,10 @@ type aliasDemandFlight struct {
 	finished time.Time
 }
 
+const aliasDemandSyncReuseInterval = 2 * time.Second
+
 // SyncAliasOnDemand runs at most one bounded batch for an authenticated read.
-// Concurrent readers share the result, and repeated refreshes within 3 seconds
+// Concurrent readers share the result, and repeated refreshes within 2 seconds
 // read the cache. No continuation or retry is scheduled after this returns.
 func (m *Manager) SyncAliasOnDemand(ctx context.Context, aliasID int64) error {
 	if aliasID < 1 || ctx == nil {
@@ -37,7 +39,7 @@ func (m *Manager) SyncAliasOnDemand(ctx context.Context, aliasID int64) error {
 		return context.Canceled
 	}
 	m.demandMu.Lock()
-	if flight := m.demandFlights[aliasID]; flight != nil && (flight.finished.IsZero() || time.Since(flight.finished) < 3*time.Second) {
+	if flight := m.demandFlights[aliasID]; flight != nil && (flight.finished.IsZero() || time.Since(flight.finished) < aliasDemandSyncReuseInterval) {
 		m.demandMu.Unlock()
 		select {
 		case <-ctx.Done():
@@ -51,7 +53,7 @@ func (m *Manager) SyncAliasOnDemand(ctx context.Context, aliasID int64) error {
 	}
 	if len(m.demandFlights) >= 1024 {
 		for id, flight := range m.demandFlights {
-			if !flight.finished.IsZero() && time.Since(flight.finished) >= 3*time.Second {
+			if !flight.finished.IsZero() && time.Since(flight.finished) >= aliasDemandSyncReuseInterval {
 				delete(m.demandFlights, id)
 			}
 		}

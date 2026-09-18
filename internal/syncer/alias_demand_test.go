@@ -106,14 +106,14 @@ func TestAliasDemandCoalescesAndKeepsOtherAliasCursor(t *testing.T) {
 	var calls atomic.Int32
 	started, release := make(chan struct{}), make(chan struct{})
 	fetcher := demandFetcherFake{fn: func(ctx context.Context, a domain.Alias, state *domain.IMAPSyncState, p map[int64]domain.MailboxSnapshotPosition) (domain.MailboxSyncResult, error) {
-		calls.Add(1)
-		if state != nil {
+		call := calls.Add(1)
+		if call == 1 && state != nil {
 			t.Error("other alias cursor reused")
 		}
 		if len(p) != 1 || p[a.ID].AliasID != a.ID {
 			t.Errorf("other alias positions leaked: %v", p)
 		}
-		if a.ID == 10 {
+		if a.ID == 10 && call == 1 {
 			close(started)
 			select {
 			case <-release:
@@ -151,6 +151,15 @@ func TestAliasDemandCoalescesAndKeepsOtherAliasCursor(t *testing.T) {
 	}
 	if calls.Load() != 2 || len(repo.targets) != 2 || len(base.applies) != 0 {
 		t.Fatalf("calls=%d target=%v wholeaccount=%d", calls.Load(), repo.targets, len(base.applies))
+	}
+	m.demandMu.Lock()
+	m.demandFlights[10].finished = time.Now().Add(-aliasDemandSyncReuseInterval)
+	m.demandMu.Unlock()
+	if err := m.SyncAliasOnDemand(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("refresh at two-second boundary reused stale result; calls=%d", calls.Load())
 	}
 }
 
