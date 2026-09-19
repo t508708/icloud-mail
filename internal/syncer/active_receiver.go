@@ -265,6 +265,10 @@ func (r *ActiveReceiver) run(w *activeReceiverWorker) {
 		case <-timer.C:
 		case <-tick.C:
 			account, err := r.manager.repo.GetAccount(w.ctx, w.account.ID)
+			if errors.Is(err, store.ErrNotFound) {
+				timer.Stop()
+				return
+			}
 			if err == nil {
 				transport, transportErr := accountMailTransport(w.ctx, r.manager.repo, account.ID)
 				if !account.Enabled || mailboxWatchIdentity(account) != mailboxWatchIdentity(w.account) ||

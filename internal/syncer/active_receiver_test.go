@@ -287,3 +287,22 @@ func TestActiveReceiverCapacityDoesNotBlockExistingReaders(t *testing.T) {
 		t.Fatalf("existing worker admission: %v", err)
 	}
 }
+
+func TestActiveReceiverDeletedAccountStopsBeforeIdleExpiry(t *testing.T) {
+	watches := make(chan eventWatchCall, 1)
+	r, repo := activeTestReceiver(t, captureEventWatches(watches), func(context.Context, int64) error { return nil })
+	r.idleTTL = 100 * time.Millisecond
+	if err := r.SyncAlias(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	watch := eventReceive(t, watches)
+	r.mu.Lock()
+	// Keep the worker active: removal, not idle expiry, must close the watch.
+	r.workers[1].lastAccess = time.Now().Add(time.Minute)
+	r.mu.Unlock()
+	repo.mu.Lock()
+	repo.accounts = repo.accounts[1:]
+	repo.mu.Unlock()
+	eventReceive(t, watch.stopped)
+	eventEventually(t, func() bool { r.mu.Lock(); defer r.mu.Unlock(); return len(r.workers) == 0 })
+}
