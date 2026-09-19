@@ -230,7 +230,7 @@ func TestActiveReceiverDisconnectedFreshnessAndNoPeriodicFetch(t *testing.T) {
 	}
 	r.mu.Lock()
 	w := r.workers[1]
-	w.lastSync = time.Now().Add(-6 * time.Second)
+	w.lastSync = time.Now().Add(-2 * time.Second)
 	r.mu.Unlock()
 	before := calls.Load()
 	if err := r.SyncAlias(context.Background(), 2); err != nil {
@@ -239,8 +239,8 @@ func TestActiveReceiverDisconnectedFreshnessAndNoPeriodicFetch(t *testing.T) {
 	if calls.Load() != before {
 		t.Fatal("connected watch ignored its freshness window")
 	}
-	// A disconnect invalidates the observation immediately; a half-open
-	// connection is still covered by the longer connected freshness window.
+	// A disconnect invalidates the observation immediately; a silent connected
+	// watch is also bounded by the on-demand freshness window.
 	r.notify(w, false)
 	if err := r.SyncAlias(context.Background(), 3); err != nil {
 		t.Fatal(err)
@@ -264,7 +264,7 @@ func TestActiveReceiverDisconnectedFreshnessAndNoPeriodicFetch(t *testing.T) {
 	}
 	r.mu.Lock()
 	w.connected = true
-	w.lastSync = time.Now().Add(-31 * time.Second)
+	w.lastSync = time.Now().Add(-6 * time.Second)
 	r.mu.Unlock()
 	if err := r.SyncAlias(context.Background(), 5); err != nil {
 		t.Fatal(err)

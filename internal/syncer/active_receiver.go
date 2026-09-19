@@ -48,7 +48,9 @@ type activeReceiverWorker struct {
 func NewActiveReceiver(ctx context.Context, manager *Manager, watch MailboxWatchFunc) *ActiveReceiver {
 	return &ActiveReceiver{ctx: ctx, manager: manager, watch: watch,
 		workers: make(map[int64]*activeReceiverWorker), idleTTL: 10 * time.Minute,
-		freshness: 30 * time.Second, fallbackFreshness: 5 * time.Second,
+		// A live socket is not proof of prompt delivery: Apple can omit or delay
+		// EXISTS. Bound observation age on demand even while IDLE is connected.
+		freshness: 5 * time.Second, fallbackFreshness: 5 * time.Second,
 		retryMinimum: 2 * time.Second, maxWorkers: 128, syncAccount: manager.SyncActiveAccount}
 }
 

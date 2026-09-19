@@ -9,7 +9,7 @@
 - [go-imap](https://github.com/emersion/go-imap)：本项目已使用的 Go IMAP 协议库；IDLE 命令自动约每 28 分钟续订，避免长期空闲超时。
 - [EmailEngine](https://github.com/postalsys/emailengine)：参考通知唤醒与持久化同步状态的分工。其当前许可为商业源码可用许可，项目没有将它当作免费开源依赖引入。
 
-默认 `ICLOUD_API_MAIL_ON_DEMAND_ONLY=true` 且启用 `ICLOUD_API_IMAP_IDLE_ENABLED`：服务按活跃主号建立共享 receiver，不在启动时执行全量收件，也不做无条件周期轮询。主号连续 10 分钟没有有效取件后 receiver 休眠；每个主号最多保持 1 条 IDLE 通知连接和 1 条串行 fetch 连接，manager 的全局 `sync_concurrency` 不变。收到请求且上次观察超过 30 秒时执行兜底检查；断线期间最多使用 5 秒缓存，错误退避带抖动。`ICLOUD_API_IMAP_IDLE_ENABLED=false` 时回退到单 alias 按需路径；webmail 继续使用原有 callback。`ICLOUD_API_MAIL_ON_DEMAND_ONLY=false` 保留历史兼容行为。
+默认 `ICLOUD_API_MAIL_ON_DEMAND_ONLY=true` 且启用 `ICLOUD_API_IMAP_IDLE_ENABLED`：服务按活跃主号建立共享 receiver，不在启动时执行全量收件，也不做无条件周期轮询。主号连续 10 分钟没有有效取件后 receiver 休眠；每个主号最多保持 1 条 IDLE 通知连接和 1 条串行 fetch 连接，manager 的全局 `sync_concurrency` 不变。收到请求且上次观察超过 5 秒时执行共享补查，错误退避带抖动。真实 Apple 联测存在连接仍在但未及时通知新信的情况，因此连接正常和断线状态均采用此观察期限；5 秒不是 Apple 投递或端到端延迟保证，连接、排队和下载仍需时间。`ICLOUD_API_IMAP_IDLE_ENABLED=false` 时回退到单 alias 按需路径；webmail 继续使用原有 callback。`ICLOUD_API_MAIL_ON_DEMAND_ONLY=false` 保留历史兼容行为。
 
 ## 上游资源与一致性
 
