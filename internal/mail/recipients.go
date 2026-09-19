@@ -345,6 +345,38 @@ func classifyICloudRecipientAliases(
 	return aliasIDsForAddresses(weakAddresses, aliases)
 }
 
+// matchesDirectICloudTargetFallback covers Apple's direct-mailbox delivery
+// form where the upstream service reduces root+tag to the registered root and
+// omits every routable envelope header. It is available only to a targeted
+// on-demand read; account-wide scans retain the strict delivery-header rule.
+func matchesDirectICloudTargetFallback(
+	header stdmail.Header,
+	aliases map[string][]int64,
+	account domain.Account,
+	targetAliasID int64,
+) bool {
+	if targetAliasID < 1 || domain.NormalizeMailboxType(account.MailboxType) != domain.MailboxTypeICloud ||
+		iCloudReceiveModeForAccount(account) != iCloudReceiveDirect ||
+		hasAnyHeader(header, []string{icloudHMEHeaderField}) ||
+		hasAnyHeader(header, strongRecipientHeaderFields) {
+		return false
+	}
+	for _, field := range weakRecipientHeaderFields {
+		if !strings.EqualFold(field, "To") && hasAnyHeader(header, []string{field}) {
+			return false
+		}
+	}
+	if !hasAnyHeader(header, []string{"To"}) {
+		return false
+	}
+	addresses, valid := addressesFromHeaders(header, []string{"To"})
+	if !valid || len(addresses) != 1 {
+		return false
+	}
+	ids, matched := aliasIDsForAddress(addresses[0], aliases)
+	return matched && len(ids) == 1 && ids[0] == targetAliasID
+}
+
 // hmeRouteMatchesForwardTarget accepts Apple's account-level forwarding
 // address. In a direct iCloud mailbox it is normally Account.Email; after an
 // iCloud forwarding chain it can instead be the forwarding address recorded in
