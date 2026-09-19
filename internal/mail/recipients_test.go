@@ -561,6 +561,28 @@ func TestMatchingAliasIDsHandlesRawAppleHeaderCasing(t *testing.T) {
 	}
 }
 
+func TestMatchingAliasIDsAcceptsAppleHMERouteWithoutRecipientRole(t *testing.T) {
+	header := stdmail.Header{
+		"Original-recipient": {`rfc822;primary@icloud.com`},
+		"To":                 {`Hide My Email <private.alias@icloud.com>`},
+		"X-Icloud-Hme":       {`p=private.alias@icloud.com; d=; f=primary@icloud.com; s=sender@example.com`},
+	}
+	aliases := map[string][]int64{"private.alias@icloud.com": {7}}
+	account := domain.Account{MailboxType: domain.MailboxTypeICloud, Email: "PRIMARY@iCloud.com", IMAPHost: domain.DefaultIMAPHost, IMAPPort: domain.DefaultIMAPPort, IMAPUsername: "primary@icloud.com"}
+	if got, determinate := classifyRecipientAlias(header, aliases, account, false); !determinate || got != 7 {
+		t.Fatalf("missing-r Apple route classification = (%d, %v), want (7, true)", got, determinate)
+	}
+
+	header = stdmail.Header{
+		"Original-recipient": {`rfc822;primary@icloud.com`},
+		"Cc":                 {`Hide My Email <private.alias@icloud.com>`},
+		"X-Icloud-Hme":       {`p=private.alias@icloud.com; d=; f=primary@icloud.com; s=sender@example.com`},
+	}
+	if got, determinate := classifyRecipientAlias(header, aliases, account, false); determinate || got != 0 {
+		t.Fatalf("missing-r Cc route classification = (%d, %v), want (0, false)", got, determinate)
+	}
+}
+
 func TestMatchingAliasIDsRejectsInvalidAppleHMERoutes(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -570,7 +592,6 @@ func TestMatchingAliasIDsRejectsInvalidAppleHMERoutes(t *testing.T) {
 	}{
 		{name: "missing private address", hme: `d=; f=primary@icloud.com; r=to`},
 		{name: "missing forward address", hme: `p=hidden.alias@icloud.com; d=; r=to`},
-		{name: "missing recipient role", hme: `p=hidden.alias@icloud.com; d=; f=primary@icloud.com`},
 		{name: "duplicate private address", hme: `p=hidden.alias@icloud.com; p=other.alias@icloud.com; f=primary@icloud.com; r=to`},
 		{name: "display name is not an address parameter", hme: `p=Hidden Alias <hidden.alias@icloud.com>; f=primary@icloud.com; r=to`},
 		{name: "forward address mismatch", hme: `p=hidden.alias@icloud.com; f=other@icloud.com; r=to`},

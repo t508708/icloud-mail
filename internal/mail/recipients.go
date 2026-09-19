@@ -739,13 +739,15 @@ func parseICloudHMEValue(value string) (icloudHMERoute, bool) {
 	if !ok || privateAddress == forwardAddress {
 		return icloudHMERoute{}, false
 	}
-	recipientRole, ok := params["r"]
-	if !ok {
-		return icloudHMERoute{}, false
-	}
-	recipientRole = strings.ToLower(strings.TrimSpace(recipientRole))
-	if recipientRole != "to" && recipientRole != "cc" {
-		return icloudHMERoute{}, false
+	// Apple currently emits both `r=to` and an older direct-delivery form
+	// without r. The latter is constrained to the visible To field below;
+	// an explicitly supplied role remains validated strictly.
+	recipientRole := "to"
+	if value, exists := params["r"]; exists {
+		recipientRole = strings.ToLower(strings.TrimSpace(value))
+		if recipientRole != "to" && recipientRole != "cc" {
+			return icloudHMERoute{}, false
+		}
 	}
 	if sender, exists := params["s"]; exists {
 		if _, ok := parseICloudHMEAddressValue(sender); !ok {
