@@ -775,10 +775,6 @@ func fetchArchiveCandidateHeaders(
 			continue
 		}
 		candidate.aliasIDs, _ = classifyArchiveRecipientAliases(parsedHeader.Header, aliases, account, settings.allowWeakRecipientHeaders)
-		if len(candidate.aliasIDs) == 0 && settings.targetAliasID > 0 &&
-			matchesDirectICloudTargetFallback(parsedHeader.Header, aliases, account, settings.targetAliasID) {
-			candidate.aliasIDs = []int64{settings.targetAliasID}
-		}
 		if settings.targetAliasID > 0 {
 			matched := false
 			for _, aliasID := range candidate.aliasIDs {
