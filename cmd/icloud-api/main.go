@@ -214,7 +214,16 @@ func run() error {
 	}
 	if cfg.MailOnDemandOnly {
 		web.SetAliasDemandSync(manager.SyncAliasOnDemand)
-		logger.Info("邮件收取使用按需模式", "operation", "mail_demand_mode", "periodic_fetch", false, "imap_idle_watch", false)
+	}
+	var activeReceiver *syncer.ActiveReceiver
+	if cfg.MailOnDemandOnly && cfg.IMAPIdleEnabled {
+		activeReceiver = syncer.NewActiveReceiver(workerContext, manager, fetcher.WatchMailbox)
+		defer activeReceiver.Close()
+		web.SetSharedMailboxReceiver(activeReceiver.SyncAlias)
+	}
+	if cfg.MailOnDemandOnly {
+		logger.Info("邮件收取使用按需模式", "operation", "mail_demand_mode", "periodic_fetch", false,
+			"active_account_receiver", activeReceiver != nil)
 	}
 	web.SetHMESyncService(hmeService)
 	if err := web.StartAliasCreationJobs(workerContext); err != nil {
@@ -250,6 +259,10 @@ func run() error {
 
 	var background sync.WaitGroup
 	background.Add(8)
+	if activeReceiver != nil {
+		background.Add(1)
+		go func() { defer background.Done(); <-workerContext.Done(); activeReceiver.Close() }()
+	}
 	go func() {
 		defer background.Done()
 		hmeService.RunAccountSessionRenewal(workerContext, logger)

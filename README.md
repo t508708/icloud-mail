@@ -19,10 +19,11 @@
 ## 核心能力
 
 - 管理多个 iCloud 主号及其隐私邮箱，继续支持目录同步和自动创建。
-- 升级后归档同步游标之后的全部新 UID，包括上游已读和未读邮件。
+- 活跃收件增量检查主号游标之后的新 UID，归档命中已登记邮箱的近期邮件，包括上游已读和未读邮件。
 - 新建隐私邮箱拥有独立、版本化的 API Key、IMAP 密码、client ID 和 refresh token；迁移前已经领取的旧 alias 保留 legacy API Key 和直达链接。
-- 通过派生取码 URL 或 Bearer API Key 触发按需取件；默认返回最新一条，也可读取最近 100 条验证码历史。同一邮箱取件共享 3 秒请求间隔。
+- 通过派生取码 URL 或 Bearer API Key 触发按需取件；默认返回最新一条，也可读取最近 100 条验证码历史。同一邮箱取件共享完成后 2 秒冷却，连续刷新不延期。
 - 通过密码或 XOAUTH2 登录只读 IMAPS，读取完整 MIME、稳定本地 UID 和归档占位邮件。
+- 活跃主号共享 IDLE 通知和增量收件；10 分钟无人取件后休眠，多个隐藏邮箱共用归档结果，不重复向 Apple 搜索。
 - 原始 MIME 按 SHA-256 去重保存到独立卷，容量超限时只淘汰最早正文，永久保留邮件元数据。
 - 管理界面支持配置为 `/admin/`；未配置时使用首次启动生成的随机路径。管理 API 保留固定 `/admin/api/v1` 兼容入口。
 
@@ -292,11 +293,11 @@ location / {
 
 ## 归档与留存
 
-- 默认 `ICLOUD_API_MAIL_ON_DEMAND_ONLY=true`，不启动周期/启动时 IMAP 同步或 IDLE。真实已鉴权的 OTP Bearer、`?token=` 直链、legacy latest/recent、pool lease code 取件请求（包括浏览器直接访问/刷新）触发单 alias 读取；同邮箱请求处理中及完成后 3 秒内返回 429，附 `Retry-After: 3`。每主号最多容纳 2 个取件请求，全站最多同时处理 16 个，每秒准入 100 次。同主号最短 30 秒 fetch guard 保留。
-- 单次最多处理一批 128 封目标邮件，无后台续跑；新 alias 首次访问只读取最近 4096 个 UID 数值窗口，之后按每 alias 独立游标继续，不会无限回扫。SEARCH recipient headers 后精确复核归属，只获取目标内容。public IMAPS 仅读本地归档；管理员显式手动同步仍可执行主号级增量同步。详见 [收信与资源设计](docs/MAIL-RECEPTION.md)。
-- 升级完成后只处理同步游标之后的新 UID；已读和未读邮件都会归档。
-- 增量取件单批最多处理 128 个目标 UID；每批原子保存邮件和游标，不后台续跑。
-- 旧版本迁移不会回填远端历史；v1 的最新快照只迁移标题和时间元数据，并分配稳定的本地 UID 1。新 alias 首访的最近 4096 UID 窗口是按需取件初始化，不代表无限回扫。
+- 默认 `ICLOUD_API_MAIL_ON_DEMAND_ONLY=true`、`ICLOUD_API_IMAP_IDLE_ENABLED=true`，已鉴权取件唤醒主号共享收件工作器。IDLE 接收新信通知，增量同步提交后，各 alias 从本地取件；10 分钟无访问休眠。每主号 1 条通知连接及最多 1 条串行读取连接，上游并发仍由 `SYNC_CONCURRENCY` 控制；HTTP 最多 128 个在途、每主号 64 个、每秒 100 次；同 alias 完成后 2 秒冷却，429 不延期。
+- 首次、UIDVALIDITY 变化、游标闲置超过 15 分钟时，只补查末尾最多 128 条头部，正文限最近 15 分钟；正常活跃期间从持久化主号 UID 游标增量处理。收到请求且观察已超过 30 秒时补查，断线后该期限缩短至 5 秒，错误退避重试。public IMAPS 仅读本地归档。详见 [收信与资源设计](docs/MAIL-RECEPTION.md)。
+- 有界恢复完成后按游标继续检查新 UID；近期正文归档不依赖上游已读/未读标记。
+- 增量取件单批最多处理 128 个 UID；每批原子保存邮件和游标，活跃工作器对未完成批次继续处理。客户端取消等待不取消共享同步。
+- 旧版本迁移不回填远端历史。关闭 `ICLOUD_API_IMAP_IDLE_ENABLED` 可回退旧单 alias 按需路径（HTTP 全站 16 / 主号 2、首次最近 4096 UID）；webmail 保持原取件实现。
 - PostgreSQL 保存邮件元数据、SHA-256、alias 映射、本地稳定 UID 和 OTP；原始 MIME 保存在独立 `icloud_api_mail_archive` 卷。
 - 同一上游邮件投递给多个 alias 时只保存一份 MIME，各 alias 拥有自己的稳定邮箱 UID。
 - `ICLOUD_API_MAIL_CONTENT_LIMIT_BYTES` 默认 `10737418240`（10 GiB）。每批提交后按收件时间全局 FIFO 淘汰最早正文，标题、时间、发件人、Message-ID、本地 UID 和历史记录永久保留。

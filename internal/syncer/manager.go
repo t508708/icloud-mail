@@ -1278,9 +1278,16 @@ func (m *Manager) syncAccountLocked(
 		return err
 	}
 	failedOperation = "fetch_incremental"
-	result, err := m.fetcher.FetchIncremental(
-		fetchCtx, account, password, enabled, previousState, snapshotPositions,
-	)
+	fetch := m.fetcher.FetchIncremental
+	active, _ := ctx.Value(activeReceiveContextKey{}).(bool)
+	if active {
+		bounded, ok := m.fetcher.(activeAccountFetcher)
+		if !ok {
+			return errors.New("active account fetcher unavailable")
+		}
+		fetch = bounded.FetchActiveIncremental
+	}
+	result, err := fetch(fetchCtx, account, password, enabled, previousState, snapshotPositions)
 	password = ""
 	if err != nil {
 		wrapped := fmt.Errorf("fetch IMAP mailbox increment: %w", err)
@@ -1312,6 +1319,20 @@ func (m *Manager) syncAccountLocked(
 	now := time.Now().UTC()
 	if err := m.repo.ApplyMailboxSync(ctx, accountID, account.UpdatedAt, enabled, result, now); err != nil {
 		return fmt.Errorf("批量保存 IMAP 同步结果: %w", err)
+	}
+	if active {
+		// A concurrent credential/alias edit can discard publication. Never mark
+		// that observation fresh merely because the compatibility store returned nil.
+		committed, err := m.repo.GetIMAPSyncState(ctx, accountID)
+		if err != nil {
+			return err
+		}
+		if committed.UIDValidity != result.State.UIDValidity || committed.LastUID < result.State.LastUID || committed.UpdatedAt.Before(result.State.UpdatedAt) {
+			return ErrSyncDeferred
+		}
+		m.logger.Info("主号共享增量收件完成", "operation", "active_mail_sync", "account_id", accountID,
+			"message_count", len(result.ArchivedMessages), "cursor_uid", result.State.LastUID,
+			"has_more", result.HasMore, "recovery_boundary_uid", result.RecoveryBoundaryUID)
 	}
 	m.logSyncFlow(
 		ctx,

@@ -370,6 +370,8 @@ type MailboxSnapshotPosition struct {
 // MailboxSyncResult contains the newly archived messages and committed cursor
 // for one bounded account-level sync batch.
 type MailboxSyncResult struct {
+	// RecoveryBoundaryUID records an explicit bounded-history recovery boundary.
+	RecoveryBoundaryUID   uint32
 	ArchivedMessages      []ArchivedMessage
 	LegacySnapshotUpdates map[int64]LatestMessage
 	State                 IMAPSyncState

@@ -50,6 +50,7 @@ type Server struct {
 	manualAliasesRunning    map[int64]bool
 	manualProbesRunning     map[int64]bool
 	demandAliasSync         func(context.Context, int64) error
+	sharedMailboxReceiver   bool
 	aliasDemandRateMu       sync.Mutex
 	aliasDemandRate         map[int64]aliasDemandRateState
 	accountPickupActive     map[int64]int
@@ -98,6 +99,7 @@ func (s *Server) SetAutoCreationService(service AliasAutoCreationService) {
 
 type adminSPA struct {
 	index        []byte
+	preloads     map[string]string
 	assets       fs.FS
 	assetHandler http.Handler
 }
@@ -142,6 +144,13 @@ func (s *Server) SetMailboxWatchHealth(healthy func(int64) bool) {
 
 func (s *Server) SetAliasDemandSync(sync func(context.Context, int64) error) {
 	s.demandAliasSync = sync
+}
+
+// SetSharedMailboxReceiver keeps HTTP waiters separate from upstream slots.
+// The receiver itself must bound and serialize real work per primary account.
+func (s *Server) SetSharedMailboxReceiver(sync func(context.Context, int64) error) {
+	s.demandAliasSync = sync
+	s.sharedMailboxReceiver = true
 }
 
 // requestMailboxSync is the compatibility path used when on-demand-only mode
@@ -259,6 +268,7 @@ func loadAdminSPA(webRoot string) (*adminSPA, error) {
 	}
 	return &adminSPA{
 		index:        index,
+		preloads:     adminRoutePreloads(root),
 		assets:       assets,
 		assetHandler: http.FileServer(http.FS(assets)),
 	}, nil
@@ -331,6 +341,9 @@ func (s *Server) serveAdminIndex(c *gin.Context) {
 	}
 	baseElement := `<base href="` + s.cfg.AdminPath + `/">`
 	index := strings.Replace(string(s.adminSPA.index), `<base href="./">`, baseElement, 1)
+	if hints := s.adminSPA.preloads[adminViewForPath(strings.TrimPrefix(c.Request.URL.Path, s.cfg.AdminPath))]; hints != "" {
+		index = strings.Replace(index, "</head>", hints+"</head>", 1)
+	}
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(index))
 }
 

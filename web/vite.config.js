@@ -29,6 +29,7 @@ export default defineConfig({
     },
   },
   build: {
+    manifest: true,
     outDir: "dist",
     sourcemap: false,
   },

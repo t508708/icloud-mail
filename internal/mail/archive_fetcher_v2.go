@@ -115,6 +115,21 @@ func (f *Fetcher) fetchArchiveIncremental(
 		Reset:     reset,
 		TargetUID: upperUID,
 	}
+	// Bound cold recovery, but never rewind a live cursor or skip its pending
+	// batches. Notifications and ordinary reads then fetch each new UID once.
+	if settings.activeRecent && (reset || syncedAt.Sub(previous.UpdatedAt) > settings.activeRecentWindow) {
+		boundary, hasMore, err := establishArchiveRecentCursor(ctx, client, mailbox.NumMessages, upperUID, settings.activeRecentCandidates)
+		if err != nil {
+			return failure, fmt.Errorf("establish active recent cursor: %w", err)
+		}
+		if !reset && previous.LastUID > boundary {
+			boundary = previous.LastUID
+		}
+		result.State.LastUID, result.HasMore = boundary, hasMore
+		result.RecoveryBoundaryUID = boundary
+		baseline := result.State
+		previous = &baseline
+	}
 	publish := func() (domain.MailboxSyncResult, error) {
 		domain.ReportMailboxSyncProgress(ctx, domain.MailboxSyncPhaseValidating, 25)
 		updates, err := reconcileLegacySnapshotPositions(
@@ -141,7 +156,7 @@ func (f *Fetcher) fetchArchiveIncremental(
 	// window. The following incremental batch examines every UID after this
 	// boundary, preserving the no-unbounded-backfill behavior while retaining
 	// both upstream-read and upstream-unread messages in the v2 archive.
-	if reset && settings.targetAliasAddress == "" {
+	if reset && settings.targetAliasAddress == "" && !settings.activeRecent {
 		lastUID, hasMore, err := establishArchiveRecentCursor(
 			ctx, client, mailbox.NumMessages, upperUID, settings.maxCandidates,
 		)
@@ -156,7 +171,7 @@ func (f *Fetcher) fetchArchiveIncremental(
 		domain.ReportMailboxSyncProgress(ctx, domain.MailboxSyncPhaseReading, 20)
 		return publish()
 	}
-	if reset {
+	if reset && !settings.activeRecent {
 		// The first on-demand request reads a bounded recent UID window in the
 		// same connection, instead of requiring a second request after baseline.
 		baseline := result.State
@@ -218,6 +233,9 @@ func (f *Fetcher) fetchArchiveIncremental(
 	for _, candidate := range candidates {
 		if err := ctx.Err(); err != nil {
 			return failure, err
+		}
+		if settings.activeRecent && candidate.internalDate.Before(syncedAt.Add(-settings.activeRecentWindow)) {
+			continue
 		}
 		archived, err := fetchArchivedMessage(client, candidate, account.ID, mailbox.UIDValidity, syncedAt, settings)
 		if err != nil {

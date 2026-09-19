@@ -48,6 +48,8 @@ type Fetcher struct {
 	MaxMessageBytes           int
 	MaxBodyBytes              int
 	MaxParsedMessageBytes     int
+	ActiveRecentWindow        time.Duration
+	ActiveRecentCandidates    int
 	AllowWeakRecipientHeaders bool
 	// ArchiveTempDir receives complete MIME literals before the store publishes
 	// them atomically into the archive tree.
@@ -84,6 +86,12 @@ func (f *Fetcher) FetchIncremental(
 	return f.fetchArchiveIncremental(
 		ctx, account, password, aliases, previous, snapshotPositions, f.settings(),
 	)
+}
+
+func (f *Fetcher) FetchActiveIncremental(ctx context.Context, account domain.Account, password string, aliases []domain.Alias, previous *domain.IMAPSyncState, positions map[int64]domain.MailboxSnapshotPosition) (domain.MailboxSyncResult, error) {
+	settings := f.settings()
+	settings.activeRecent = true
+	return f.fetchArchiveIncremental(ctx, account, password, aliases, previous, positions, settings)
 }
 
 // FetchAliasIncremental searches upstream recipient headers before downloading
@@ -130,6 +138,9 @@ type fetchSettings struct {
 	allowWeakRecipientHeaders bool
 	now                       func() time.Time
 	archiveTempDir            string
+	activeRecent              bool
+	activeRecentWindow        time.Duration
+	activeRecentCandidates    int
 }
 
 func (f *Fetcher) settings() fetchSettings {
@@ -142,6 +153,8 @@ func (f *Fetcher) settings() fetchSettings {
 		maxMessageBytes:          defaultMaxMessageBytes,
 		maxBodyBytes:             defaultMaxBodyBytes,
 		now:                      time.Now,
+		activeRecentWindow:       15 * time.Minute,
+		activeRecentCandidates:   128,
 	}
 	if f == nil {
 		settings.maxParsedMessageBytes = settings.maxBodyBytes + defaultMetadataResultBytes
@@ -177,6 +190,12 @@ func (f *Fetcher) settings() fetchSettings {
 	}
 	settings.allowWeakRecipientHeaders = f.AllowWeakRecipientHeaders
 	settings.archiveTempDir = strings.TrimSpace(f.ArchiveTempDir)
+	if f.ActiveRecentWindow > 0 {
+		settings.activeRecentWindow = f.ActiveRecentWindow
+	}
+	if f.ActiveRecentCandidates > 0 {
+		settings.activeRecentCandidates = min(f.ActiveRecentCandidates, defaultMaxCandidates)
+	}
 	if f.now != nil {
 		settings.now = f.now
 	}

@@ -22,7 +22,11 @@ type aliasDemandRateState struct {
 // Admission runs before credential locks and database authentication. Slots
 // bound the entire request, including slow upstream reads, with no wait queue.
 func (s *Server) pickupAdmission() gin.HandlerFunc {
-	slots := make(chan struct{}, pickupConcurrentLimit)
+	limit := pickupConcurrentLimit
+	if s.sharedMailboxReceiver {
+		limit = 128
+	}
+	slots := make(chan struct{}, limit)
 	rate := newWindowLimiter(100, time.Second)
 	return func(c *gin.Context) {
 		switch c.FullPath() {
@@ -72,10 +76,14 @@ func (s *Server) beginMailboxPickup(c *gin.Context, accountID, aliasID int64) (f
 	}
 	state, exists := s.aliasDemandRate[aliasID]
 	message := ""
+	accountLimit := pickupAccountLimit
+	if s.sharedMailboxReceiver {
+		accountLimit = 64
+	}
 	switch {
 	case state.inFlight || now.Before(state.nextAt):
 		message = "同一邮箱正在取件或距上次完成不足 2 秒，请稍后重试"
-	case s.accountPickupActive[accountID] >= pickupAccountLimit:
+	case s.accountPickupActive[accountID] >= accountLimit:
 		message = "此主号已有取件请求处理中，请在 2 秒后重试"
 	case !exists && len(s.aliasDemandRate) >= pickupRateMaxEntries:
 		message = "取件请求较多，请在 2 秒后重试"

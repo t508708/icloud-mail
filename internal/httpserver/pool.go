@@ -24,7 +24,11 @@ func (s *Server) poolLock() gin.HandlerFunc {
 
 func (s *Server) poolAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !s.externalAPILimiter.Allow(c.ClientIP()) {
+		// Code reads already pass bounded pickup admission and per-alias cooldown.
+		// A shared 300/min IP budget starves otherwise valid parallel lease polls.
+		pickup := c.Request.Method == http.MethodGet && c.FullPath() == "/api/v1/pool/leases/:leaseID/code"
+		if !pickup && !s.externalAPILimiter.Allow(c.ClientIP()) {
+			c.Header("Retry-After", "60")
 			s.writeAPIError(c, 429, "RATE_LIMITED", "请求过于频繁")
 			c.Abort()
 			return
