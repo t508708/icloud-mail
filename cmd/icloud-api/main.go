@@ -125,7 +125,11 @@ func run() error {
 	}
 	manager := syncer.New(db, cipher, fetcher, logger, syncInterval, cfg.SyncConcurrency)
 	manager.SetSyncTimeout(cfg.SyncTimeout)
-	manager.SetMinimumFetchInterval(30 * time.Second)
+	// HTTP admission already limits each alias to one on-demand read every two
+	// seconds. Keep the shared Apple mailbox cadence aligned with that window:
+	// a longer account-level delay makes a just-arrived OTP wait in the server
+	// until downstream jobs time out.
+	manager.SetMinimumFetchInterval(2 * time.Second)
 	manager.SetOnDemandOnly(cfg.MailOnDemandOnly)
 	mailboxEvents := syncer.NewMailboxEvents(db, cipher, fetcher.WatchMailbox, func(ctx context.Context, accountID int64) error {
 		for batch := 0; batch < 128; batch++ {
