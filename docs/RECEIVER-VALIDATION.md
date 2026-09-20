@@ -106,3 +106,62 @@ flock ../.local/project-heavy.lock node --test --test-concurrency=2
 - 同 root 完成后 2 秒冷却；HTTP 全局/主号准入和实际 IMAP 并发分别有界，超额不积压无限队列。
 - 不改变 root 分裂/串行规则、既有取件响应结构、Pool 生命周期或旧管理删除合同。
 - 本轮使用干净提交构建，已有其他 Pool retirement / claimable accounts 工作树改动保留且未混入发布。
+
+## 9 秒延迟修复：持久读取连接与等待取码
+
+代码提交 `410c16c`；双方只读日志对齐后执行，不把 RPC 请求耗时与后台同步重复相加。
+
+### 确认原因
+
+- 首次旧观测恢复已追平 UID 75，但 HasMore 仍为 true，触发 batch_no_progress、503 和错误退避。TLS fixture 已复现并由本轮修复为成功空结果；真实 backlog/UIDVALIDITY 验证保留。
+- 上次 11:16:22.405 确认发信，邮件 Received 最后一跳为 11:16:27，11:16:31.525 客户端收到。邮件头仅秒级，IMAP 实际可见时刻未知；约 4-5 秒在投递链路、约 4-5 秒在其后的处理链路。
+- 旧版 IDLE 连接仅负责通知；每批读取重新 Dial/TLS/Login/EXAMINE。现在每活跃主号一个读取连接，批次之间复用认证，仍每批 EXAMINE 复核 UIDVALIDITY/UIDNEXT，避免使用过期 mailbox view。
+- 上次 3 秒 Retry-After 与后台第二批同步重叠，客户端和网关冷却取 max；单独缩短 Retry-After 不等于直接减少 3 秒总耗时。
+
+### 实现及边界
+
+- 连接绑定 worker 与主号身份，不建每 alias/tag 连接或无界连接池。worker 空闲/关闭/停用/删除/换凭据时关闭；失败或取消的 socket 丢弃，不盲重放失败批次。
+- 连接取消回调在释放前等待收口，避免晚到取消关闭下一批复用连接；其他 HTTP 读者取消不影响共享 worker。
+- Pool code 新增可选 `wait_seconds=0..15`，默认保持旧单次读取。正值等共享提交或原 5 秒按需补查期限，有符合 after 的新码立即返回；等待到期沿用 no_code。首轮同步从未完成或确有上游错误仍返回 503，区别于已确认无新码。
+- 只为 Pool code 缩短全量凭据轮换锁的持有区间，所有公开凭据接口旧锁语义保留。等待期间不持 Pool/rotation 锁，每次返回前在原锁顺序下重新验证项目 Key、lease、alias、主号。
+- 同 root 一在途、完成后 2 秒冷却、全局 128 / 主号 64 HTTP 准入及独立 IMAP 并发预算保持；无等待者不新增周期补查。
+- 新增 `connection_reused`、`connection_setup_ms`、`mailbox_read_ms` 脱敏时延字段，用运行日志验证收益。setup 包含建连与登录，read 包含 EXAMINE、增量发现/读取及暂存，不冒充更细的阶段测量。
+
+### 离线验证
+
+- 40 root 首次读取、单 root 等待、40 root 错峰等待和合法 +tag 经真实 TLS IMAP/HTTP 链路：全程 2 次 LOGIN（通知+读取），82 封目标正文各读一次。该测试连续 3 次通过；无外部邮箱访问。
+- 错密码不复用旧认证、跨主号 owner 校验、失败游标保持/下次重新登录、owner 取消打断阻塞读取、旧观测已追平/空箱/新信恢复。
+- Pool 参数非法/重复、默认兼容、等待超时、取消释放容量、同 root 429、等待中 Key 轮换/lease 释放/停用返回闭合错误，且全局锁可取得。
+- 受影响包测试 `internal/mail internal/syncer internal/httpserver internal/store cmd/icloud-api`、聚焦 race、go vet、diff check 通过；发布使用干净 archive，原有工作树改动不混入。
+
+### 协作客户端
+
+维护会话提交 `285f2c6`：getCode 按剩余预算减去 2 秒网络收尾、向下取整、最多 15 秒设置 wait_seconds；不足 3 秒时为 0。HTTP 总 deadline、since、取消、同 root 串行、429/503 保持。维护方报告 31/31 聚焦测试、构建、工程门禁通过。
+
+此前把 retryCount 9 -> 10 归因于“自动调度”证据不足。维护方进一步核对持久事件为 manual_retry_override，与显式 force:true 入口相符；调用者身份未确认，不据此归咎任何用户或会话。单样本验证需核对实际重试入口与次数。
+
+### 发布与本轮单样本
+
+- 干净 `410c16c` archive 的五个受影响包再次测试通过，Docker runtime 构建通过，已部署为 `410c16c`，公网/origin health 正常。上一镜像保留为 `icloud-api:before-pickup-410c16c`（`d9560ea`）；未重启数据库或修改原有 Pool 工作树。
+- 协作客户端 `285f2c6` 已部署。只提交一次普通 retry（无 force），任务 revision 420/retryCount 10 -> revision 439/retryCount 11；13:03:28.952 排队，13:03:51.088 在 `sentinel_warmup.proxy_tls_handshake_failed` 阶段结束，批次 13:03:52.505 收尾，activeTasks 为 0。
+- 该任务没有发信确认、Pool HTTP、wait_seconds、新 UID 或取码事件，因此没有产生与 9.12 秒的有效新邮件对照；不把代码上线/测试通过当成真实投递提速证明，也没有再重跑任务。
+- 后台生产浏览器回归仍通过：HTML 引导节点正常消费，无额外 auth/session 请求、无外部资源或浏览器错误。
+
+### 三次真实只读取件探针
+
+仅使用既有 alias/lease，固定 after 为 13:13:11.709；没有新增发信、任务重试、领取或凭据变更。最初本地探针脚本误用协作项目解密 API，实际执行 0 次请求；主审纠正为应用现有身份校验/解密调用后，业务凭据验证正常，再执行以下共 3 次请求。
+
+| 请求 | wait_seconds | 起止时间 | HTTP / 结果 | 耗时 |
+| --- | ---: | --- | --- | ---: |
+| 冷读 | 0 | 13:13:11.722-13:13:14.369 | 200 / no_code | 2647 ms |
+| 6 秒后热补查 | 0 | 13:13:20.369-13:13:20.849 | 200 / no_code | 480 ms |
+| 再隔 3 秒短等待 | 2 | 13:13:23.849-13:13:25.860 | 200 / no_code | 2011 ms |
+
+- 三次响应都没有 Retry-After，均未命中晚于 after 的验证码。不能把 200 或 no_code 当成新邮件验证成功。
+- 冷读 connection_reused=false，setup=1196 ms，read=779 ms；热补查 connection_reused=true，setup=0 ms，read=377 ms。
+- 13:13:14.776 另有启动通知合并后的共享空同步，复用连接、read=368 ms；它不是额外 HTTP 探针。
+- 短等待期间的按需补查仍复用连接，setup=0 ms，read=369 ms。日志与 2011 ms 响应共同证明等待预算及原 freshness 补查生效。
+- 所有这些批次 has_more=false，message_count=0，UID 保持 79：旧观测已追平时不再误报 503；真实热补查由冷读 2647 ms 降到 480 ms，减少约 82%。这是同版本冷/热样本，不是不同版本或真实投递时延的严格 A/B。
+- 结束双方服务健康、activeTasks=0。新邮件全链路时延仍待一次有效发信样本，当前没有宣称 9.12 秒已降到 480 ms。
+
+本地脱敏结果：`.local/free-auth-pool-wait-live.txt`、`.local/free-auth-pool-wait-read-probe-review.txt`；网关同期结构化日志包含 setup/read/reused 指标。
