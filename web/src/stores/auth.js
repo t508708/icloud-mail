@@ -6,6 +6,7 @@ import {
   login as loginRequest,
   logout as logoutRequest,
 } from "../api/admin.js";
+import { consumeSessionBootstrap } from "../utils/sessionBootstrap.js";
 
 const state = reactive({
   username: "",
@@ -15,6 +16,12 @@ const state = reactive({
 });
 
 let sessionPromise = null;
+let bootstrapAvailable = true;
+
+function discardBootstrap() {
+  bootstrapAvailable = false;
+  consumeSessionBootstrap();
+}
 
 function applySession(session) {
   state.username = session?.username || "";
@@ -24,6 +31,7 @@ function applySession(session) {
 }
 
 function clearSession({ checked = true, errorCode = "" } = {}) {
+  discardBootstrap();
   state.username = "";
   state.csrfToken = "";
   state.sessionChecked = checked;
@@ -36,6 +44,16 @@ async function ensureSession({ force = false } = {}) {
   }
   if (sessionPromise) {
     return sessionPromise;
+  }
+
+  if (force) discardBootstrap();
+  if (bootstrapAvailable) {
+    bootstrapAvailable = false;
+    const session = consumeSessionBootstrap();
+    if (session) {
+      applySession(session);
+      return true;
+    }
   }
 
   sessionPromise = getSession()
@@ -62,6 +80,7 @@ async function prepareLogin() {
 }
 
 async function login(username, password) {
+  discardBootstrap();
   if (!state.csrfToken) {
     await prepareLogin();
   }
@@ -71,6 +90,7 @@ async function login(username, password) {
 }
 
 async function logout() {
+  discardBootstrap();
   await logoutRequest(state.csrfToken);
   clearSession({ checked: false });
 }

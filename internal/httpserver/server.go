@@ -335,6 +335,8 @@ func (s *Server) registerAdminSPA(router *gin.Engine) {
 func (s *Server) serveAdminIndex(c *gin.Context) {
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.Header("Cache-Control", "no-store, private")
+	c.Header("CDN-Cache-Control", "no-store")
+	c.Writer.Header().Add("Vary", "Cookie")
 	if c.Request.Method == http.MethodHead {
 		c.Status(http.StatusOK)
 		return
@@ -343,6 +345,9 @@ func (s *Server) serveAdminIndex(c *gin.Context) {
 	index := strings.Replace(string(s.adminSPA.index), `<base href="./">`, baseElement, 1)
 	if hints := s.adminSPA.preloads[adminViewForPath(strings.TrimPrefix(c.Request.URL.Path, s.cfg.AdminPath))]; hints != "" {
 		index = strings.Replace(index, "</head>", hints+"</head>", 1)
+	}
+	if bootstrap := s.adminSessionBootstrap(c); bootstrap != "" {
+		index = strings.Replace(index, "</head>", bootstrap+"</head>", 1)
 	}
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(index))
 }
