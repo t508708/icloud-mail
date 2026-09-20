@@ -8,6 +8,7 @@ RUN sed -i "s#dl-cdn.alpinelinux.org#${ALPINE_MIRROR}#g" /etc/apk/repositories \
 
 COPY docker/postgres-entrypoint.sh /usr/local/bin/icloud-api-postgres-entrypoint
 COPY docker/postgres-persist-credentials.sh /docker-entrypoint-initdb.d/001-icloud-api-persist-credentials.sh
+COPY NOTICE.md /usr/share/licenses/icloud-mail/NOTICE.md
 RUN sed -i 's/\r$//' \
         /usr/local/bin/icloud-api-postgres-entrypoint \
         /docker-entrypoint-initdb.d/001-icloud-api-persist-credentials.sh \
@@ -29,6 +30,8 @@ RUN npm ci --no-audit --no-fund --registry="${NPM_REGISTRY}"
 
 COPY web/ ./
 RUN NODE_OPTIONS=--max-old-space-size=512 npm run build
+COPY scripts/collect-npm-notices.mjs /tmp/collect-npm-notices.mjs
+RUN node /tmp/collect-npm-notices.mjs /out/licenses/npm
 
 FROM ${DOCKER_HUB_MIRROR}/library/golang:1.26-alpine AS go-builder
 
@@ -47,6 +50,7 @@ RUN GOMAXPROCS=2 GOMEMLIMIT=512MiB CGO_ENABLED=0 GOOS=linux go build -p 2 \
     -ldflags="-s -w" \
     -o /out/icloud-api \
     ./cmd/icloud-api
+RUN GOMAXPROCS=2 GOMEMLIMIT=512MiB sh scripts/collect-go-notices.sh /out/licenses/go
 
 FROM ${DOCKER_HUB_MIRROR}/library/alpine:3.22 AS runtime
 
@@ -63,6 +67,9 @@ WORKDIR /app
 
 COPY --from=go-builder --chown=app:app /out/icloud-api /app/icloud-api
 COPY --from=web-builder --chown=app:app /src/web/dist/ /app/web/
+COPY --from=go-builder /out/licenses/go/ /usr/share/licenses/icloud-mail/go/
+COPY --from=web-builder /out/licenses/npm/ /usr/share/licenses/icloud-mail/npm/
+COPY NOTICE.md /usr/share/licenses/icloud-mail/NOTICE.md
 COPY --chown=app:app docker/icloud-api-entrypoint.sh /usr/local/bin/icloud-api-entrypoint
 COPY --chown=app:app docker/keys-maintenance.sh /usr/local/bin/icloud-api-keys-maintenance
 RUN sed -i 's/\r$//' \

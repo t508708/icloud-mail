@@ -5,18 +5,34 @@ umask 077
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$project_dir"
 release_tag=${1:?Usage: bash scripts/package-release.sh TAG}
-[[ "$release_tag" =~ ^handoff-[0-9]{4}\.[0-9]{2}\.[0-9]{2}([.-][a-zA-Z0-9]+)*$ ]] || {
-    printf '%s\n' 'Expected a handoff-YYYY.MM.DD tag.' >&2
+is_semver=false
+if [[ "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    is_semver=true
+elif [[ ! "$release_tag" =~ ^handoff-[0-9]{4}\.[0-9]{2}\.[0-9]{2}([.-][a-zA-Z0-9]+)*$ ]]; then
+    printf '%s\n' 'Expected a vX.Y.Z or handoff-YYYY.MM.DD tag.' >&2
     exit 1
-}
+fi
 for tool in git docker tar zip gzip sha256sum flock node; do
     command -v "$tool" >/dev/null
 done
 commit=$(git rev-parse --verify "refs/tags/$release_tag^{commit}")
-[[ -z "$(git status --porcelain)" ]] || {
+if [[ "$is_semver" != true && -n "$(git status --porcelain)" ]]; then
     printf '%s\n' 'Commit tracked changes before creating a release.' >&2
     exit 1
-}
+fi
+if [[ "$is_semver" == true ]]; then
+    tag_version=$(git show "$release_tag:VERSION")
+    [[ "$tag_version" == "${release_tag#v}" ]] || {
+        printf 'VERSION in %s does not match tag.\n' "$release_tag" >&2
+        exit 1
+    }
+    tag_app_image=$(git show "$release_tag:compose.offline.yaml" | awk '/^[[:space:]]+image:[[:space:]]*icloud-api:/ {print $2; exit}')
+    tag_database_image=$(git show "$release_tag:compose.offline.yaml" | awk '/^[[:space:]]+image:[[:space:]]*icloud-api-postgres:/ {print $2; exit}')
+    [[ "$tag_app_image" == "icloud-api:$release_tag" && "$tag_database_image" == "icloud-api-postgres:$release_tag" ]] || {
+        printf 'compose.offline.yaml image references do not match %s.\n' "$release_tag" >&2
+        exit 1
+    }
+fi
 mkdir -p .local/releases
 exec 9>.local/project-heavy.lock
 flock 9
@@ -31,6 +47,14 @@ app_image="icloud-api:$release_tag"
 database_image="icloud-api-postgres:$release_tag"
 for image in "$app_image" "$database_image"; do
     [[ "$(docker image inspect "$image" --format '{{.Os}}/{{.Architecture}}')" == linux/amd64 ]]
+    if [[ "$is_semver" == true ]]; then
+        image_revision=$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
+        image_version=$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
+        [[ "$image_revision" == "$commit" && "$image_version" == "$release_tag" ]] || {
+            printf 'Image %s OCI labels do not match tag %s.\n' "$image" "$release_tag" >&2
+            exit 1
+        }
+    fi
 done
 output_dir="$project_dir/.local/releases/$release_tag"
 [[ ! -e "$output_dir" ]] || { printf 'Release already exists: %s\n' "$output_dir" >&2; exit 1; }
