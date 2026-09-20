@@ -51,3 +51,23 @@ JSON 错误码继续为 `RATE_LIMITED`，HTTP 状态继续为 429。附加响应
 ```sh
 flock .local/project-heavy.lock env GOMAXPROCS=2 GOMEMLIMIT=512MiB GIN_MODE=release go test -p 1 -parallel 2 ./internal/httpserver -run 'TestSharedPickup|TestPickup|TestActiveReceiverHTTP|TestPoolLeaseCodeWait' -count=1
 ```
+
+### 公网只读取件验证（2026-09-20）
+
+代码版本 `a23e516` 从干净提交构建；更新应用前确认创建、删除、Pool retirement 均无活跃作业，自动创建计划未启用。仅更新应用容器，数据库容器保持运行，保留旧应用镜像以供回滚。
+
+使用已有取件链接，经公网代理实测，未发新信或执行 Apple 创建/删除：
+
+| 请求 | HTTP 状态 | 耗时 | 剩余额度恢复时间 |
+| --- | --- | --- | --- |
+| 首次预热 | 200 | 1904 ms | - |
+| 空闲恢复后第 1 次读取 | 200 | 27 ms | - |
+| 紧接第 2 次读取 | 200 | 20 ms | - |
+| 紧接第 3 次读取 | 429 | 13 ms | 1958 ms |
+| 约 300 ms 后再刷新 | 429 | 16 ms | 1642 ms |
+| 再约 300 ms 后刷新 | 429 | 15 ms | 1327 ms |
+| 按剩余时间等待后重试 | 200 | 415 ms | - |
+
+三次 429 原因均为 `mailbox_rate`，连续刷新没有推迟恢复。运行日志确认共享收件启用、周期拉取关闭，限流记录包含原因和剩余毫秒。上述 200 仅证明真实取件接口与限流恢复正常，不代表本轮验证了新邮件投递；新 `+tag` 邮件唤醒由离线 TLS IMAP fixture 覆盖。
+
+同一干净代码版本的 5 个受影响 Go 包测试通过；工作树聚焦 race、`go vet`、发布文档测试和 `git diff --check` 通过。原有未提交的 Pool 接口改动未纳入镜像。
