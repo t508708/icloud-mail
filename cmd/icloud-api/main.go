@@ -220,6 +220,7 @@ func run() error {
 		activeReceiver = syncer.NewActiveReceiver(workerContext, manager, fetcher.WatchMailbox)
 		defer activeReceiver.Close()
 		web.SetSharedMailboxReceiver(activeReceiver.SyncAlias)
+		web.SetMailboxChanges(activeReceiver.MailboxChanges)
 	}
 	if cfg.MailOnDemandOnly {
 		logger.Info("邮件收取使用按需模式", "operation", "mail_demand_mode", "periodic_fetch", false,

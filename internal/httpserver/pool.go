@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -265,13 +266,24 @@ func (s *Server) poolLeaseCode(c *gin.Context) {
 			after = parsed
 		}
 	}
+	wait, err := poolCodeWait(c)
+	if err != nil {
+		s.poolError(c, err)
+		return
+	}
 	release, ok := s.beginMailboxPickup(c, account.ID, alias.ID)
 	if !ok {
 		return
 	}
 	defer release()
+	waitCtx := c.Request.Context()
+	if wait > 0 {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(waitCtx, wait)
+		defer cancel()
+	}
 	if s.demandAliasSync != nil {
-		if err := s.demandAliasSync(c.Request.Context(), alias.ID); err != nil {
+		if err := s.demandAliasSync(waitCtx, alias.ID); err != nil {
 			c.Header("Retry-After", "3")
 			s.writeAPIError(c, http.StatusServiceUnavailable, "SYNC_UNAVAILABLE", "本次按需取件尚未完成，请稍后刷新取件地址")
 			return
@@ -279,43 +291,110 @@ func (s *Server) poolLeaseCode(c *gin.Context) {
 	} else {
 		s.requestMailboxSync(alias.AccountID, s.now())
 	}
+	for {
+		if c.Request.Context().Err() != nil {
+			return
+		}
+		var changed <-chan struct{}
+		var nextCheck time.Duration
+		if wait > 0 && s.mailboxChanges != nil && s.demandAliasSync != nil && waitCtx.Err() == nil {
+			// Subscribe before checking the archive to avoid a lost commit between
+			// the local read and the start of the wait.
+			changed, nextCheck = s.mailboxChanges(account.ID)
+		}
+		if s.writePoolCodeIfReady(c, v, alias, account, after, changed == nil) {
+			return
+		}
+		// A defensive floor also bounds a stale or custom notification hook.
+		timer := time.NewTimer(max(nextCheck, 50*time.Millisecond))
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+			if c.Request.Context().Err() == nil {
+				s.writePoolCodeIfReady(c, v, alias, account, after, true)
+			}
+			return
+		case <-changed:
+		case <-timer.C:
+		}
+		timer.Stop()
+		if waitCtx.Err() != nil {
+			continue
+		}
+		if err := s.demandAliasSync(waitCtx, alias.ID); err != nil {
+			if waitCtx.Err() != nil && c.Request.Context().Err() == nil {
+				s.writePoolCodeIfReady(c, v, alias, account, after, true)
+			} else if c.Request.Context().Err() == nil {
+				c.Header("Retry-After", "3")
+				s.writeAPIError(c, http.StatusServiceUnavailable, "SYNC_UNAVAILABLE", "本次按需取件尚未完成，请稍后刷新取件地址")
+			}
+			return
+		}
+	}
+}
+
+func poolCodeWait(c *gin.Context) (time.Duration, error) {
+	values, err := url.ParseQuery(c.Request.URL.RawQuery)
+	if err != nil {
+		return 0, store.ErrPoolInput
+	}
+	raw, exists := values["wait_seconds"]
+	if !exists {
+		return 0, nil
+	}
+	if len(raw) != 1 || raw[0] == "" || strings.Trim(raw[0], "0123456789") != "" {
+		return 0, store.ErrPoolInput
+	}
+	seconds, err := strconv.Atoi(raw[0])
+	if err != nil || seconds > 15 {
+		return 0, store.ErrPoolInput
+	}
+	return time.Duration(seconds) * time.Second, nil
+}
+
+func (s *Server) writePoolCodeIfReady(c *gin.Context, v store.PoolLease, alias domain.Alias, account domain.Account, after time.Time, final bool) bool {
 	// Revalidate after the network wait, then serialize only the local response
 	// against pool key rotation and lease changes.
+	s.credentialRotationMu.RLock()
+	defer s.credentialRotationMu.RUnlock()
 	s.poolMu.Lock()
 	defer s.poolMu.Unlock()
 	token, _ := strictBearerToken(c.Request)
 	currentClient, err := s.store.AuthenticatePoolClient(c.Request.Context(), token)
 	if errors.Is(err, store.ErrNotFound) || err == nil && currentClient.ID != poolClient(c).ID {
 		s.writeAPIError(c, http.StatusUnauthorized, "INVALID_POOL_KEY", "项目 Key 已更新或停用")
-		return
+		return true
 	}
 	if err != nil {
 		s.poolError(c, err)
-		return
+		return true
 	}
 	currentLease, err := s.store.GetPoolLease(c.Request.Context(), v.ID, currentClient.ID)
 	if err != nil || currentLease.AliasID != alias.ID || currentLease.State != "used" && (currentLease.State != "leased" || !s.now().Before(currentLease.ExpiresAt)) {
 		s.poolError(c, store.ErrPoolClosed)
-		return
+		return true
 	}
 	currentAlias, aliasErr := s.store.GetAlias(c.Request.Context(), alias.ID)
 	currentAccount, accountErr := s.store.GetAccount(c.Request.Context(), alias.AccountID)
 	if aliasErr != nil || accountErr != nil || !currentAlias.Enabled || !currentAccount.Enabled || currentAlias.AccountID != account.ID {
 		s.poolError(c, store.ErrPoolClosed)
-		return
+		return true
 	}
 	records, err := s.store.ListAliasOTPs(c.Request.Context(), alias.ID, 100)
 	if err != nil {
 		s.poolError(c, err)
-		return
+		return true
 	}
 	for _, record := range records {
 		if record.Time.After(after) {
 			c.JSON(200, gin.H{"data": gin.H{"success": true, "otp": record.OTP, "time": record.Time.UTC().Format(time.RFC3339Nano), "email": alias.Address}})
-			return
+			return true
 		}
 	}
-	c.JSON(200, gin.H{"data": gin.H{"success": false, "code": "no_code", "retryable": true, "email": alias.Address}})
+	if final {
+		c.JSON(200, gin.H{"data": gin.H{"success": false, "code": "no_code", "retryable": true, "email": alias.Address}})
+	}
+	return final
 }
 
 func (s *Server) adminPoolAccounts(c *gin.Context) {

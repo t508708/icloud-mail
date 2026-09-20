@@ -1332,7 +1332,10 @@ func (m *Manager) syncAccountLocked(
 		}
 		m.logger.Info("主号共享增量收件完成", "operation", "active_mail_sync", "account_id", accountID,
 			"message_count", len(result.ArchivedMessages), "cursor_uid", result.State.LastUID,
-			"has_more", result.HasMore, "recovery_boundary_uid", result.RecoveryBoundaryUID)
+			"has_more", result.HasMore, "recovery_boundary_uid", result.RecoveryBoundaryUID,
+			"connection_reused", result.ConnectionReused,
+			"connection_setup_ms", result.ConnectionSetupDuration.Milliseconds(),
+			"mailbox_read_ms", result.MailboxReadDuration.Milliseconds())
 	}
 	m.logSyncFlow(
 		ctx,

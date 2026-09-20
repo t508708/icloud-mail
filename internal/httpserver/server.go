@@ -50,6 +50,7 @@ type Server struct {
 	manualAliasesRunning    map[int64]bool
 	manualProbesRunning     map[int64]bool
 	demandAliasSync         func(context.Context, int64) error
+	mailboxChanges          func(int64) (<-chan struct{}, time.Duration)
 	sharedMailboxReceiver   bool
 	aliasDemandRateMu       sync.Mutex
 	aliasDemandRate         map[int64]aliasDemandRateState
@@ -151,6 +152,12 @@ func (s *Server) SetAliasDemandSync(sync func(context.Context, int64) error) {
 func (s *Server) SetSharedMailboxReceiver(sync func(context.Context, int64) error) {
 	s.demandAliasSync = sync
 	s.sharedMailboxReceiver = true
+}
+
+// SetMailboxChanges enables optional, bounded Pool waits on shared commits.
+// The hook never starts a receiver or performs network IO itself.
+func (s *Server) SetMailboxChanges(changes func(int64) (<-chan struct{}, time.Duration)) {
+	s.mailboxChanges = changes
 }
 
 // requestMailboxSync is the compatibility path used when on-demand-only mode

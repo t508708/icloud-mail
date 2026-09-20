@@ -71,6 +71,12 @@ func (s *Server) audit(c *gin.Context, adminID *int64, username, action, resourc
 // the response has been written.
 func (s *Server) credentialRotationReadGuard() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Pool code returns no credentials and revalidates key/lease under this
+		// lock immediately before publishing. Never hold it over upstream waits.
+		if c.Request.Method == http.MethodGet && c.FullPath() == "/api/v1/pool/leases/:leaseID/code" {
+			c.Next()
+			return
+		}
 		if s.beforeCredentialRotationReadLock != nil {
 			s.beforeCredentialRotationReadLock()
 		}

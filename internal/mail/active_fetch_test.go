@@ -2,11 +2,77 @@ package mail
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	imap "github.com/emersion/go-imap/v2"
 	"icloud-api/internal/domain"
 )
+
+func TestFetchActiveIncrementalStaleObservationCatchup(t *testing.T) {
+	t.Run("caught up cursor does not redownload", func(t *testing.T) {
+		fixture := startArchiveIMAPFixture(t, 75, 0)
+		fetcher := NewFetcher()
+		fetcher.ArchiveTempDir = t.TempDir()
+		now := time.Date(2026, 9, 11, 1, 16, 0, 0, time.UTC)
+		fetcher.now = func() time.Time { return now }
+		state := fixture.initialState(t)
+		state.LastUID = 75
+		state.UpdatedAt = now.Add(-16 * time.Minute)
+		result, err := fetcher.FetchActiveIncremental(context.Background(), fixture.account, "fixture-password", []domain.Alias{fixture.alias}, &state, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.State.LastUID != 75 || result.HasMore || len(result.ArchivedMessages) != 0 {
+			t.Fatalf("caught-up stale result cursor=%d more=%v archived=%d", result.State.LastUID, result.HasMore, len(result.ArchivedMessages))
+		}
+		fixture.mu.Lock()
+		defer fixture.mu.Unlock()
+		if len(fixture.bodyUIDs) != 0 {
+			t.Fatalf("caught-up stale result fetched bodies=%d, want 0", len(fixture.bodyUIDs))
+		}
+	})
+
+	t.Run("empty mailbox", func(t *testing.T) {
+		fixture := startArchiveIMAPFixture(t, 0, 0)
+		fetcher := NewFetcher()
+		fetcher.ArchiveTempDir = t.TempDir()
+		now := time.Date(2026, 9, 11, 1, 16, 0, 0, time.UTC)
+		fetcher.now = func() time.Time { return now }
+		state := fixture.initialState(t)
+		state.UpdatedAt = now.Add(-16 * time.Minute)
+		result, err := fetcher.FetchActiveIncremental(context.Background(), fixture.account, "fixture-password", []domain.Alias{fixture.alias}, &state, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.State.LastUID != 0 || result.HasMore || len(result.ArchivedMessages) != 0 {
+			t.Fatalf("empty stale result cursor=%d more=%v archived=%d", result.State.LastUID, result.HasMore, len(result.ArchivedMessages))
+		}
+	})
+
+	t.Run("new mail is archived", func(t *testing.T) {
+		fixture := startArchiveIMAPFixture(t, 75, 0)
+		newRaw := "From: sender@example.test\r\nX-Original-To: alias@example.test\r\nTo: alias@example.test\r\nSubject: message 76\r\nMessage-ID: <76@example.test>\r\nDate: Fri, 11 Sep 2026 01:00:00 +0000\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nVerification code 100076\r\n"
+		if _, err := fixture.user.Append("INBOX", strings.NewReader(newRaw), &imap.AppendOptions{Time: time.Date(2026, 9, 11, 1, 0, 76, 0, time.UTC)}); err != nil {
+			t.Fatal(err)
+		}
+		fetcher := NewFetcher()
+		fetcher.ArchiveTempDir = t.TempDir()
+		now := time.Date(2026, 9, 11, 1, 10, 0, 0, time.UTC)
+		fetcher.now = func() time.Time { return now }
+		state := fixture.initialState(t)
+		state.LastUID = 75
+		state.UpdatedAt = now.Add(-16 * time.Minute)
+		result, err := fetcher.FetchActiveIncremental(context.Background(), fixture.account, "fixture-password", []domain.Alias{fixture.alias}, &state, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.State.LastUID != 76 || result.HasMore || len(result.ArchivedMessages) != 1 {
+			t.Fatalf("new-mail stale result cursor=%d more=%v archived=%d", result.State.LastUID, result.HasMore, len(result.ArchivedMessages))
+		}
+	})
+}
 
 // These tests use the TLS IMAP fixture from archive_fetcher_transport_test.go;
 // in particular they exercise the same LOGIN/SELECT/FETCH path as production.

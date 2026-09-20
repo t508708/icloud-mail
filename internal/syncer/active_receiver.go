@@ -204,6 +204,14 @@ func (r *ActiveReceiver) watchAccount(w *activeReceiverWorker) {
 
 func (r *ActiveReceiver) run(w *activeReceiverWorker) {
 	defer r.wg.Done()
+	receiveCtx := w.ctx
+	if owner, ok := r.manager.fetcher.(interface {
+		OpenActiveAccount(context.Context, int64) (context.Context, func())
+	}); ok {
+		var closeConnection func()
+		receiveCtx, closeConnection = owner.OpenActiveAccount(w.ctx, w.account.ID)
+		defer closeConnection()
+	}
 	watchDone := make(chan struct{})
 	go func() { defer close(watchDone); r.watchAccount(w) }()
 	defer func() {
@@ -232,7 +240,7 @@ func (r *ActiveReceiver) run(w *activeReceiverWorker) {
 		r.mu.Unlock()
 		if pending && delay <= 0 {
 			started := time.Now()
-			ctx, cancel := context.WithTimeout(w.ctx, r.manager.syncTimeout)
+			ctx, cancel := context.WithTimeout(receiveCtx, r.manager.syncTimeout)
 			err := r.syncAccount(ctx, w.account.ID)
 			cancel()
 			r.mu.Lock()

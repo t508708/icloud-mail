@@ -39,7 +39,7 @@ func (f *Fetcher) fetchArchiveIncremental(
 	previous *domain.IMAPSyncState,
 	snapshotPositions map[int64]domain.MailboxSnapshotPosition,
 	settings fetchSettings,
-) (domain.MailboxSyncResult, error) {
+) (out domain.MailboxSyncResult, retErr error) {
 	failure := domain.MailboxSyncResult{}
 	if previous != nil {
 		failure.State = *previous
@@ -63,33 +63,19 @@ func (f *Fetcher) fetchArchiveIncremental(
 	}
 
 	domain.ReportMailboxSyncProgress(ctx, domain.MailboxSyncPhaseConnecting, 5)
-	client, err := dialArchiveIMAP(ctx, address, host, settings)
+	setupStarted := time.Now()
+	client, reused, release, err := acquireArchiveConnection(ctx, account.ID, address, host, username, password, settings)
+	setupDuration := time.Since(setupStarted)
 	if err != nil {
-		return failure, fmt.Errorf("connect IMAP %s: %w", address, err)
+		return failure, err
 	}
-	stopCancellation := make(chan struct{})
-	cancellationStopped := make(chan struct{})
-	go func() {
-		defer close(cancellationStopped)
-		select {
-		case <-ctx.Done():
-			_ = client.Close()
-		case <-stopCancellation:
-		}
-	}()
+	defer func() { release(retErr == nil) }()
+	readStarted := time.Now()
 	defer func() {
-		close(stopCancellation)
-		<-cancellationStopped
-		_ = client.Close()
+		out.ConnectionReused = reused
+		out.ConnectionSetupDuration = setupDuration
+		out.MailboxReadDuration = time.Since(readStarted)
 	}()
-
-	domain.ReportMailboxSyncProgress(ctx, domain.MailboxSyncPhaseAuthenticating, 10)
-	if err := client.Login(username, password).Wait(); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return failure, ctxErr
-		}
-		return failure, fmt.Errorf("login IMAP account: %w", err)
-	}
 	domain.ReportMailboxSyncProgress(ctx, domain.MailboxSyncPhaseScanning, 15)
 	mailbox, err := client.Select("INBOX", &imapv2.SelectOptions{ReadOnly: true}).Wait()
 	if err != nil {
@@ -150,6 +136,7 @@ func (f *Fetcher) fetchArchiveIncremental(
 	if len(aliasAddresses) == 0 {
 		domain.ReportMailboxSyncProgress(ctx, domain.MailboxSyncPhaseReading, 20)
 		result.State.LastUID = upperUID
+		result.HasMore = false
 		return publish()
 	}
 	// A new installation or UIDVALIDITY generation establishes a bounded recent
@@ -186,6 +173,9 @@ func (f *Fetcher) fetchArchiveIncremental(
 	}
 	result.State.LastUID = previous.LastUID
 	if previous.LastUID == upperUID {
+		// Recovery may clamp its initial boundary to an already committed tail.
+		// That is a successful empty observation, not an unadvanced pending batch.
+		result.HasMore = false
 		return publish()
 	}
 

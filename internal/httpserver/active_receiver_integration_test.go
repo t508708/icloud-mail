@@ -8,6 +8,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -108,6 +110,15 @@ func TestActiveReceiverHTTPFortyRootsPoolAndIdleArrival(t *testing.T) {
 	receiver := syncer.NewActiveReceiver(ctx, manager, fetcher.WatchMailbox)
 	t.Cleanup(receiver.Close)
 	env.server.SetSharedMailboxReceiver(receiver.SyncAlias)
+	waitSubscribed := make(chan struct{}, 128)
+	env.server.SetMailboxChanges(func(id int64) (<-chan struct{}, time.Duration) {
+		ch, delay := receiver.MailboxChanges(id)
+		select {
+		case waitSubscribed <- struct{}{}:
+		default:
+		}
+		return ch, delay
+	})
 	now := time.Now()
 	env.server.now = func() time.Time { return now }
 	router, err := env.server.Router()
@@ -169,8 +180,101 @@ func TestActiveReceiverHTTPFortyRootsPoolAndIdleArrival(t *testing.T) {
 	}
 	t.Logf("warm fixture pickup: %s", time.Since(start))
 	trace.mu.Lock()
-	defer trace.mu.Unlock()
 	if len(trace.bodies) != 41 {
 		t.Fatalf("new mail body downloads=%d, want exactly 41", len(trace.bodies))
+	}
+	trace.mu.Unlock()
+
+	// A waiting Pool reader gets a later +tag message from the shared IDLE
+	// receiver without issuing another HTTP request or logging into IMAP again.
+	now = now.Add(3 * time.Second)
+	after := time.Now().Add(3 * time.Second)
+	waitResult := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		waitResult <- serveV2Request(router, http.MethodGet, "/api/v1/pool/leases/"+leases[0].ID+"/code?wait_seconds=5&after="+url.QueryEscape(after.Format(time.RFC3339Nano)), "", map[string]string{"Authorization": "Bearer " + key})
+	}()
+	select {
+	case <-waitSubscribed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Pool reader did not subscribe")
+	}
+	appendMail("root-0+waiting@icloud.com", "456789", after.Add(time.Second))
+	select {
+	case response := <-waitResult:
+		if response.Code != 200 || !strings.Contains(response.Body.String(), `"otp":"456789"`) {
+			t.Fatalf("waiting Pool result: %d %s", response.Code, response.Body.String())
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("waiting Pool reader missed IDLE arrival")
+	}
+	trace.mu.Lock()
+	if trace.logins != 2 || len(trace.bodies) != 42 {
+		t.Fatalf("shared connection trace: logins=%d bodies=%d, want 2/42", trace.logins, len(trace.bodies))
+	}
+	trace.mu.Unlock()
+
+	ids := make([]int64, 0, 39)
+	for _, alias := range aliases[1:] {
+		ids = append(ids, alias.ID)
+	}
+	if err := env.store.EnrollPoolAliases(ctx, ids); err != nil {
+		t.Fatal(err)
+	}
+	more, err := env.store.ClaimPool(ctx, client.ID, store.PoolClaim{RequestID: "active-receiver-pool-0040", Count: 39, TTLSeconds: 600})
+	if err != nil || len(more) != 39 {
+		t.Fatalf("parallel leases: %v count=%d", err, len(more))
+	}
+	allLeases := append(leases, more...)
+	now = now.Add(3 * time.Second)
+	after = time.Now().Add(6 * time.Second)
+	results := make(chan *httptest.ResponseRecorder, 40)
+	for _, lease := range allLeases {
+		go func(lease store.PoolLease) {
+			results <- serveV2Request(router, http.MethodGet, "/api/v1/pool/leases/"+lease.ID+"/code?wait_seconds=5&after="+url.QueryEscape(after.Format(time.RFC3339Nano)), "", map[string]string{"Authorization": "Bearer " + key})
+		}(lease)
+	}
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		env.server.aliasDemandRateMu.Lock()
+		active := env.server.accountPickupActive[account.ID]
+		env.server.aliasDemandRateMu.Unlock()
+		if active == 40 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("concurrent waiting readers=%d, want 40", active)
+		}
+		select {
+		case <-waitSubscribed:
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	// One arrival must unblock only its root; the other 39 remain waiting.
+	appendMail("root-0+wave-a@icloud.com", "200000", after.Add(time.Second))
+	select {
+	case r := <-results:
+		if r.Code != 200 || !strings.Contains(r.Body.String(), `"otp":"200000"`) {
+			t.Fatalf("first staggered root: %d %s", r.Code, r.Body.String())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("first staggered arrival missed")
+	}
+	for i := 1; i < 40; i++ {
+		appendMail(fmt.Sprintf("root-%d+wave-b@icloud.com", i), fmt.Sprintf("%06d", 200000+i), after.Add(time.Second))
+	}
+	for i := 1; i < 40; i++ {
+		select {
+		case r := <-results:
+			if r.Code != 200 || !strings.Contains(r.Body.String(), `"success":true`) {
+				t.Fatalf("staggered wait: %d %s", r.Code, r.Body.String())
+			}
+		case <-time.After(6 * time.Second):
+			t.Fatal("parallel wait missed a committed arrival")
+		}
+	}
+	trace.mu.Lock()
+	defer trace.mu.Unlock()
+	if trace.logins != 2 || len(trace.bodies) != 82 {
+		t.Fatalf("forty waiters logins=%d bodies=%d, want 2/82", trace.logins, len(trace.bodies))
 	}
 }

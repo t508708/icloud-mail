@@ -68,6 +68,75 @@ servers:
   # Admin operations below override this server with the installation-specific
   # path stored in the keys volume.
 paths:
+  /api/v1/pool/leases/{leaseID}/code:
+    get:
+      tags: [Mailbox Pool]
+      operationId: readPoolLeaseCode
+      summary: 读取项目所领取邮箱的最新验证码，可选有界等待
+      description: |
+        Pool Key 必须属于 lease 的项目。lease 为有效 leased 或 used，且主号和 alias 启用。
+        查询起点取 after 与领取时间较晚者，只返回严格晚于起点的验证码。
+        wait_seconds 默认 0，保留原单次按需读取；启用共享收件时正值允许等待新归档，
+        预算包含首轮同步。正常到期仍返回 no_code，首轮同步未完成或上游错误返回 503。
+        未配置共享通知时退回单次读取。等待不持有全局轮换/Pool 锁，最终重新校验归属及状态。
+        同 alias 在途及完成后 2 秒内受 429 限制，被拦截请求不延长冷却。
+      security:
+        - poolKey: []
+      parameters:
+        - name: leaseID
+          in: path
+          required: true
+          schema: {type: string}
+        - name: after
+          in: query
+          schema: {type: string, format: date-time}
+        - name: wait_seconds
+          in: query
+          description: 单个十进制整数；默认 0。HTTP 超时应留网络收尾余量。
+          schema: {type: integer, minimum: 0, maximum: 15, default: 0}
+      responses:
+        "200":
+          description: 命中新验证码或本次等待范围内无新码；不返回邮箱凭据。
+          headers:
+            Cache-Control:
+              schema: {type: string, const: no-store}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    oneOf:
+                      - type: object
+                        required: [success, otp, time, email]
+                        properties:
+                          success: {type: boolean, const: true}
+                          otp: {type: string}
+                          time: {type: string, format: date-time}
+                          email: {type: string, format: email}
+                      - type: object
+                        required: [success, code, retryable, email]
+                        properties:
+                          success: {type: boolean, const: false}
+                          code: {type: string, const: no_code}
+                          retryable: {type: boolean, const: true}
+                          email: {type: string, format: email}
+        "400":
+          description: INVALID_POOL_REQUEST，参数非法或 wait_seconds 重复。
+        "401":
+          description: INVALID_POOL_KEY，项目 Key 无效、已轮换或停用。
+        "404":
+          description: NOT_FOUND，lease 不存在或属于其他项目。
+        "409":
+          description: LEASE_CLOSED，领取关闭、过期或主号/alias 停用。
+        "429":
+          description: RATE_LIMITED，取件在途、冷却或容量已满。
+          headers:
+            Retry-After:
+              schema: {type: string, const: "2"}
+        "503":
+          description: SYNC_UNAVAILABLE 或 POOL_UNAVAILABLE；同步异常时 Retry-After 为 3。
   /api/v1/aliases:
     post:
       tags:

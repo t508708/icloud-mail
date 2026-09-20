@@ -251,6 +251,7 @@ type archiveIMAPFixture struct {
 
 	mu            sync.Mutex
 	selections    int
+	loginCount    int
 	headerFetches int
 	bodyUIDs      []imap.UID
 	blockUID      imap.UID
@@ -327,6 +328,13 @@ func (fixture *archiveIMAPFixture) initialState(t *testing.T) domain.IMAPSyncSta
 type archiveIMAPSession struct {
 	imapserver.Session
 	fixture *archiveIMAPFixture
+}
+
+func (session *archiveIMAPSession) Login(username, password string) error {
+	session.fixture.mu.Lock()
+	session.fixture.loginCount++
+	session.fixture.mu.Unlock()
+	return session.Session.Login(username, password)
 }
 
 func (session *archiveIMAPSession) Search(kind imapserver.NumKind, criteria *imap.SearchCriteria, options *imap.SearchOptions) (*imap.SearchData, error) {

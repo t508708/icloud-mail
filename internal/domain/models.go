@@ -370,6 +370,10 @@ type MailboxSnapshotPosition struct {
 // MailboxSyncResult contains the newly archived messages and committed cursor
 // for one bounded account-level sync batch.
 type MailboxSyncResult struct {
+	// Transient timing evidence; never persisted as mailbox data or credentials.
+	ConnectionReused        bool
+	ConnectionSetupDuration time.Duration
+	MailboxReadDuration     time.Duration
 	// RecoveryBoundaryUID records an explicit bounded-history recovery boundary.
 	RecoveryBoundaryUID   uint32
 	ArchivedMessages      []ArchivedMessage
