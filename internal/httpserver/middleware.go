@@ -3,6 +3,7 @@ package httpserver
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -121,7 +122,10 @@ func newWindowLimiter(limit int, window time.Duration) *windowLimiter {
 }
 
 func (l *windowLimiter) Allow(key string) bool {
-	now := time.Now()
+	return l.allowAt(key, time.Now()) == 0
+}
+
+func (l *windowLimiter) allowAt(key string, now time.Time) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.nextCleanup.IsZero() || !now.Before(l.nextCleanup) {
@@ -138,14 +142,17 @@ func (l *windowLimiter) Allow(key string) bool {
 	}
 	entry := l.items[key]
 	if _, exists := l.items[key]; !exists && len(l.items) >= l.maxItems {
-		return false
+		return max(l.window, time.Second)
 	}
-	if entry.reset.Before(now) {
+	if !entry.reset.After(now) {
 		entry = limiterEntry{reset: now.Add(l.window)}
+	}
+	if entry.count >= l.limit {
+		return max(entry.reset.Sub(now), time.Millisecond)
 	}
 	entry.count++
 	l.items[key] = entry
-	return entry.count <= l.limit
+	return 0
 }
 
 func (s *Server) requestContext() gin.HandlerFunc {
@@ -189,6 +196,10 @@ func (s *Server) requestContext() gin.HandlerFunc {
 		}
 		if status == http.StatusTooManyRequests {
 			key = c.FullPath() + " rate_limited"
+			if reason, ok := c.Get("pickup_limit_reason"); ok {
+				attrs = append(attrs, "limit_reason", reason, "retry_after_ms", c.Writer.Header().Get("X-Retry-After-Ms"))
+				key += " " + fmt.Sprint(reason)
+			}
 		}
 		if status == http.StatusTooManyRequests || c.Request.Method == http.MethodGet && status < http.StatusBadRequest && duration < time.Second {
 			if ok, suppressed := sampler.allow(key, time.Now()); !ok {

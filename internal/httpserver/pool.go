@@ -271,7 +271,8 @@ func (s *Server) poolLeaseCode(c *gin.Context) {
 		s.poolError(c, err)
 		return
 	}
-	release, ok := s.beginMailboxPickup(c, account.ID, alias.ID)
+	waiting := wait > 0 && s.sharedMailboxReceiver && s.mailboxChanges != nil
+	release, ok := s.beginMailboxPickupMode(c, account.ID, alias.ID, waiting)
 	if !ok {
 		return
 	}

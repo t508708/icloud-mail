@@ -148,7 +148,7 @@ curl 'https://mail.example.com/ADMIN_PATH/api/v1/pool/aliases/batch/jobs/retire-
 | `POST /api/v1/pool/leases/LEASE_ID/release` | 释放尚未确认使用的邮箱，并轮换邮箱凭据 |
 | `POST /api/v1/pool/leases/LEASE_ID/renew` | JSON `{"ttl_seconds":1800}`，从当前时间续期 |
 
-`code` 可追加 `after=RFC3339`，查询起点取 after 与领取时间中较晚者；`data.success=true` 时读取 `data.otp` 和 `data.time`，否则 `data.code=no_code`、`data.retryable=true`。请求与该邮箱的 OTP、Bearer 和直达链接共用限流，请求处理中及完成后 2 秒内返回 `429 RATE_LIMITED`、`Retry-After: 2`。被拦截请求不会延后冷却窗口，客户端应等响应完成后至少 2 秒再请求，并遵循 `Retry-After`。
+`code` 可追加 `after=RFC3339`，查询起点取 after 与领取时间中较晚者；`data.success=true` 时读取 `data.otp` 和 `data.time`，否则 `data.code=no_code`、`data.retryable=true`。请求与该邮箱的 OTP、Bearer 和直达链接共用速率预算：共享模式容量 2、每 2 秒恢复 1 次；长等待期间也恢复，完成后不追加冷却。普通读取和单个长等待可共存，第二个同类在途或额度/容量已满返回 `429 RATE_LIMITED`。`X-RateLimit-Reason` 标识原因，`Retry-After` 按剩余时间向上取整，`X-Retry-After-Ms` 提供毫秒值；被拦截请求不延期。旧非共享路径仍保持单 alias 独占和完成后 2 秒冷却。详见 [分层取件限流](PICKUP-RATE.md)。
 
 启用按需共享收件与 IMAP IDLE 时，同主号共用一个通知连接及一个活跃读取连接，不为 root 或 `+tag` 单独连接。每主号最多容纳 64 个 HTTP 取件请求、全站最多 128 个、每秒接纳 100 次，超量不排队；上游同步仍按主号串行，受独立并发与最短 2 秒启动间隔约束。连接空闲 10 分钟回收，主号停用、删除、凭据变化和服务关闭也会回收。未启用共享模式时保留每主号 2 个、全站 16 个请求上限。限制按服务进程计数。
 
@@ -161,7 +161,7 @@ curl 'https://mail.example.com/ADMIN_PATH/api/v1/pool/aliases/batch/jobs/retire-
 - `wait_seconds` 为单个整数 `0..15`，默认 `0`：兼容原先同步一次后立即返回的语义。空值、重复值、负值、小数及越界值返回 `400 INVALID_POOL_REQUEST`。
 - 启用共享收件后，正值指定本次等待预算（包含首轮同步等待）。若无符合 `after` 的验证码，等待共享归档提交或原有 5 秒按需补查期限；有新码立即返回原 DTO，到期返回原 `no_code`，不增加响应字段。未配置共享通知能力时退回原单次读取。
 - 首轮同步未完成或确有上游错误仍返回 `503 SYNC_UNAVAILABLE` 与 `Retry-After: 3`；它与正常无新码不同。HTTP 超时应比 `wait_seconds` 多留网络/解码余量，并受业务总 deadline 约束。
-- 同 root 只允许一个在途取件，等待不额外占上游连接，也不持有项目池或全量凭据轮换锁。每次归档检查及最终响应重新验证 Pool Key、项目/lease 归属、live 状态和主号/alias 启用状态。
+- 共享模式同 root 最多一个普通读取及一个长等待，共用上述速率预算；等待不额外占上游连接，也不持有项目池或全量凭据轮换锁。每次归档检查及最终响应重新验证 Pool Key、项目/lease 归属、live 状态和主号/alias 启用状态。
 - 客户端断开只结束自己的等待，不取消其他读者共享的同步。默认 OTP 直达链接及原有响应合同保持不变；常驻读取连接优化也适用于这些链接。
 
 ## 状态与凭据

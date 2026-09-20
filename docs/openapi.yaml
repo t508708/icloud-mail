@@ -79,7 +79,9 @@ paths:
         wait_seconds 默认 0，保留原单次按需读取；启用共享收件时正值允许等待新归档，
         预算包含首轮同步。正常到期仍返回 no_code，首轮同步未完成或上游错误返回 503。
         未配置共享通知时退回单次读取。等待不持有全局轮换/Pool 锁，最终重新校验归属及状态。
-        同 alias 在途及完成后 2 秒内受 429 限制，被拦截请求不延长冷却。
+        共享模式同 root 容量 2，每 2 秒恢复 1 次额度；最多一个普通读取和一个长等待，
+        等待期间额度恢复，完成后不追加冷却。旧非共享路径保持独占和完成后 2 秒冷却。
+        超额返回 429；被拦截请求不延长恢复时间。
       security:
         - poolKey: []
       parameters:
@@ -131,10 +133,18 @@ paths:
         "409":
           description: LEASE_CLOSED，领取关闭、过期或主号/alias 停用。
         "429":
-          description: RATE_LIMITED，取件在途、冷却或容量已满。
+          description: RATE_LIMITED，同类取件在途、速率预算不足或容量已满。在途/容量原因返回建议复查间隔。
           headers:
             Retry-After:
-              schema: {type: string, const: "2"}
+              description: 剩余等待时间向上取整的秒数。
+              schema: {type: string, pattern: '^[1-9][0-9]*$'}
+            X-Retry-After-Ms:
+              description: 剩余等待时间或建议复查间隔，单位毫秒。
+              schema: {type: string, pattern: '^[1-9][0-9]*$'}
+            X-RateLimit-Reason:
+              schema:
+                type: string
+                enum: [mailbox_rate, mailbox_waiting, mailbox_inflight, mailbox_cooldown, account_concurrency, global_concurrency, global_rate, mailbox_capacity]
         "503":
           description: SYNC_UNAVAILABLE 或 POOL_UNAVAILABLE；同步异常时 Retry-After 为 3。
   /api/v1/aliases:

@@ -152,8 +152,12 @@ func TestActiveReceiverHTTPFortyRootsPoolAndIdleArrival(t *testing.T) {
 		t.Fatalf("pool: %d %s", response.Code, response.Body.String())
 	}
 	duplicate := serveV2Request(router, http.MethodGet, paths[0], "", nil)
-	if duplicate.Code != 429 || duplicate.Header().Get("Retry-After") != "2" {
-		t.Fatal("root URL and pool lost shared cooldown")
+	if duplicate.Code != 200 {
+		t.Fatal("normal browser refresh should use the bounded shared burst")
+	}
+	duplicate = serveV2Request(router, http.MethodGet, paths[0], "", nil)
+	if duplicate.Code != 429 || duplicate.Header().Get("X-RateLimit-Reason") != "mailbox_rate" {
+		t.Fatal("root URL and pool lost their shared burst budget")
 	}
 
 	// New mail must reach the archive through real TLS IDLE, without API polling.
@@ -197,6 +201,12 @@ func TestActiveReceiverHTTPFortyRootsPoolAndIdleArrival(t *testing.T) {
 	case <-waitSubscribed:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Pool reader did not subscribe")
+	}
+	// A browser read shares the already committed archive without interrupting
+	// the Pool waiter or opening another upstream connection.
+	refresh := serveV2Request(router, http.MethodGet, paths[0], "", nil)
+	if refresh.Code != 200 || !strings.Contains(refresh.Body.String(), `"otp":"654321"`) {
+		t.Fatalf("ordinary read during Pool wait: %d %s", refresh.Code, refresh.Body.String())
 	}
 	appendMail("root-0+waiting@icloud.com", "456789", after.Add(time.Second))
 	select {
