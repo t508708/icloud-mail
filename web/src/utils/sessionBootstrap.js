@@ -1,9 +1,15 @@
 export function consumeSessionBootstrap(
   document = globalThis.document,
   now = Date.now(),
-  navigationAge = globalThis.performance?.now?.() ?? Infinity,
+  navigationAge,
 ) {
   try {
+    // Keep the native receiver explicit; optional calls in default parameters
+    // can lose their binding when transformed for older browser targets.
+    if (navigationAge === undefined) {
+      const clock = globalThis.performance;
+      navigationAge = clock && typeof clock.now === "function" ? clock.now() : Infinity;
+    }
     const node = document?.getElementById?.("icloud-admin-session");
     if (!node) return null;
     node.remove?.();

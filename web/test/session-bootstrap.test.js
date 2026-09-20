@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
+import vm from "node:vm";
+import { transform } from "esbuild";
 
 import { useAuth } from "../src/stores/auth.js";
 import { consumeSessionBootstrap } from "../src/utils/sessionBootstrap.js";
@@ -122,4 +125,18 @@ test("bootstrap is rejected outside the navigation age window", () => {
   const { document } = fixture(valid);
   assert.equal(consumeSessionBootstrap(document, 0, -1), null);
   assert.equal(consumeSessionBootstrap(document, 0, Infinity), null);
+});
+
+test("production browser transform retains the Performance receiver", async () => {
+  const source = await readFile(new URL("../src/utils/sessionBootstrap.js", import.meta.url), "utf8");
+  const { code } = await transform(source, {
+    format: "cjs", minify: true, target: ["es2020", "edge88", "firefox78", "chrome87", "safari14"],
+  });
+  const { document, node } = fixture(valid);
+  const clock = { now() { assert.equal(this, clock); return 100; } };
+  const module = { exports: {} };
+  vm.runInNewContext(code, { module, document, performance: clock });
+  const result = module.exports.consumeSessionBootstrap();
+  assert.equal(result?.username, "admin");
+  assert.equal(node.removed, true);
 });
