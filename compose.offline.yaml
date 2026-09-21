@@ -1,8 +1,8 @@
 # Load the release image archive before starting with this overlay.
 services:
   icloud-api:
-    image: icloud-api:v0.2.0
+    image: icloud-api:v0.2.1
     pull_policy: never
   postgres:
-    image: icloud-api-postgres:v0.2.0
+    image: icloud-api-postgres:v0.2.1
     pull_policy: never

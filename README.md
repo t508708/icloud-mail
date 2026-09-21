@@ -2,7 +2,7 @@
 
 自托管的 **iCloud 隐藏邮箱管理、邮箱池与 API 取码服务**，带本地化 Web 控制面板。
 
-**当前版本：v0.2.0** · [下载与发布说明](https://github.com/t508708/icloud-mail/releases/tag/v0.2.0) · [更新日志](CHANGELOG.md) · [安装文档](DELIVERY.md)
+**当前版本：v0.2.1** · [下载与发布说明](https://github.com/t508708/icloud-mail/releases/tag/v0.2.1) · [更新日志](CHANGELOG.md) · [安装文档](DELIVERY.md)
 
 ## 核心功能
 
@@ -15,13 +15,10 @@
 | 邮件接收 | 按需增量收件、同主号连接复用、MIME 归档、只读 IMAPS |
 | 独立凭据 | 每邮箱 API Key、IMAP 密码及 OAuth 凭据，由本网关签发 |
 
-## v0.2.0 更新重点
+## v0.2.1 更新重点
 
-- **收件提速**：共享主号连接，Pool 支持最多 15 秒等待新码，减少重复登录和轮询。
-- **取码修复**：兼容 Apple 投递头、补齐 `+tag` 归属，修复游标已追平仍报同步失败；冷却为 2 秒，刷新不延期。
-- **后台优化**：预载本地页面资源，复用已验证会话，减少打开和刷新的串行请求。
-- **创建与续期**：手动批量/探测独立于自动额度，恢复陈旧待确认地址；保活采用随机 4-6 分钟间隔。
-- **Pool 退休删除**：新增双重鉴权、幂等提交与保留租约历史的异步接口。
+- **取件限流**：共享取件容量为 2，每 2 秒恢复 1 次；等待读取与普通读取分开，被拦截的请求不消耗额度，也不延期冷却。
+- **自动创建**：每主号 19+4 错峰、独立通道冷却默认 1 小时，并尊重 Apple 返回的更长等待时间；手动探测保持独立。
 
 从初版 `v0.1.0` 起的完整新增、调整、修复与验证记录见 [更新日志](CHANGELOG.md)。
 
@@ -32,8 +29,8 @@
 **1. 下载并校验**
 
 ```sh
-curl -fLO https://github.com/t508708/icloud-mail/releases/download/v0.2.0/icloud-mail-v0.2.0-linux-amd64.zip
-curl -fLO https://github.com/t508708/icloud-mail/releases/download/v0.2.0/SHA256SUMS
+curl -fLO https://github.com/t508708/icloud-mail/releases/download/v0.2.1/icloud-mail-v0.2.1-linux-amd64.zip
+curl -fLO https://github.com/t508708/icloud-mail/releases/download/v0.2.1/SHA256SUMS
 sha256sum --ignore-missing -c SHA256SUMS
 ```
 
@@ -42,8 +39,8 @@ sha256sum --ignore-missing -c SHA256SUMS
 **2. 导入镜像并启动**
 
 ```sh
-unzip icloud-mail-v0.2.0-linux-amd64.zip
-cd icloud-mail-v0.2.0
+unzip icloud-mail-v0.2.1-linux-amd64.zip
+cd icloud-mail-v0.2.1
 cp -n .env.example .env
 docker load -i images/linux-amd64.tar.gz
 docker compose -f compose.yaml -f compose.offline.yaml up -d --no-build --pull never --wait
@@ -71,7 +68,7 @@ ssh -N -L 8788:127.0.0.1:8788 USER@SERVER
 希望自行构建时使用：
 
 ```sh
-git clone --branch v0.2.0 https://github.com/t508708/icloud-mail.git
+git clone --branch v0.2.1 https://github.com/t508708/icloud-mail.git
 cd icloud-mail
 cp -n .env.example .env
 docker compose up -d --build --wait
