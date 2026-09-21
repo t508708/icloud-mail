@@ -269,7 +269,7 @@ func (s *Server) runAliasCreationJob(waitCtx context.Context, creator manualChan
 			var uncertain interface{ RemoteSideEffectPossible() bool }
 			ambiguous := errors.Is(err, hmesync.ErrAliasConfirmationPending) || errors.As(err, &pending) && pending.PendingConfirmation() || errors.As(err, &uncertain) && uncertain.RemoteSideEffectPossible()
 			if !ambiguous && (errors.Is(err, hmesync.ErrRateLimited) || apple.IsRateLimited(err)) {
-				delay := max(24*time.Hour, apple.RetryDelay(err))
+				delay := max(domain.AppleCreationRateLimitCooldown, apple.RetryDelay(err))
 				next := time.Now().UTC().Add(delay)
 				j.Status = "waiting"
 				j.NextRunAt = &next

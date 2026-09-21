@@ -123,6 +123,7 @@ func explicitRateLimitRejection(err error) bool {
 func IsRateLimitStatus(message string) bool {
 	value := strings.TrimSpace(message)
 	return value == "APPLE_RATE_LIMITED" || value == aliasCreationErrorReason("APPLE_RATE_LIMITED") ||
+		value == "Apple 请求被限流，当前周期剩余计划槽已跳过，冷却后会继续执行" ||
 		value == "APPLE_CREATION_BUDGET_WAIT" || value == aliasCreationErrorReason("APPLE_CREATION_BUDGET_WAIT")
 }
 
@@ -862,7 +863,7 @@ func aliasCreationErrorReason(code string) string {
 	case "APPLE_HME_AUTH_FAILED":
 		return "Apple 账户已通过验证，但隐藏邮箱目录未接受此会话；登录状态已保留，自动创建已暂停，请检查 iCloud 网页的隐藏邮箱服务"
 	case "APPLE_RATE_LIMITED":
-		return "Apple 请求被限流，当前周期剩余计划槽已跳过，冷却后会继续执行"
+		return "Apple 请求被限流，受影响通道冷却后继续执行；公共前置请求限流时暂停主号计划"
 	case "APPLE_CREATION_BUDGET_WAIT":
 		return "本地主号创建预算已用尽，冷却后将自动继续"
 	case "APPLE_ACCOUNT_MISMATCH":

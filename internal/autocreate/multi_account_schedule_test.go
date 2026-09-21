@@ -9,7 +9,7 @@ import (
 	"icloud-api/internal/domain"
 )
 
-func TestScheduleUsesEighteenSlotsAcrossOneHour(t *testing.T) {
+func TestScheduleUsesTwentyThreeSlotsAcrossOneHour(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	repo := newFakeRepository()
 	m, err := New(repo, func(context.Context, int64) (domain.Alias, error) { return domain.Alias{}, nil }, slog.Default(), WithClock(func() time.Time { return now }), WithRandom(fixedRandom(0)))
@@ -20,7 +20,7 @@ func TestScheduleUsesEighteenSlotsAcrossOneHour(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(s.PlannedAt) != 18 {
+	if len(s.PlannedAt) != 23 {
 		t.Fatalf("slots=%d", len(s.PlannedAt))
 	}
 	if span := s.PlannedAt[len(s.PlannedAt)-1].Sub(now); span != time.Hour {
@@ -35,7 +35,7 @@ func TestScheduleUsesEighteenSlotsAcrossOneHour(t *testing.T) {
 	}
 }
 
-func TestMultipleAccountsEachHaveIndependentEighteenSlotPlans(t *testing.T) {
+func TestMultipleAccountsEachHaveIndependentTwentyThreeSlotPlans(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	repo := newFakeRepository()
 	m, err := New(repo, func(context.Context, int64) (domain.Alias, error) { return domain.Alias{}, nil }, slog.Default(), WithClock(func() time.Time { return now }), WithRandom(fixedRandom(0)))
@@ -47,7 +47,7 @@ func TestMultipleAccountsEachHaveIndependentEighteenSlotPlans(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		if len(s.PlannedAt) != 18 {
+		if len(s.PlannedAt) != 23 {
 			t.Fatalf("account %d slots=%d", id, len(s.PlannedAt))
 		}
 	}

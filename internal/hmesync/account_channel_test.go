@@ -65,7 +65,7 @@ func (c *accountTestClient) CreateAccountAlias(ctx context.Context, s apple.Acco
 	return c.accountCreate(ctx, s)
 }
 
-func TestAccountChannelsShareLongCooldownAndNeverFallbackOnRateLimit(t *testing.T) {
+func TestAccountChannelsFallbackOnlyOnDefiniteRateLimit(t *testing.T) {
 	for _, uncertain := range []bool{false, true} {
 		t.Run(map[bool]string{false: "rate", true: "uncertain"}[uncertain], func(t *testing.T) {
 			now := time.Now()
@@ -91,12 +91,15 @@ func TestAccountChannelsShareLongCooldownAndNeverFallbackOnRateLimit(t *testing.
 					t.Fatalf("uncertain result replayed: %v %v", alias, err)
 				}
 			} else {
-				if err == nil || alias.HME != "" || oldCalls != 0 {
-					t.Fatalf("rate limit fell back: %v %v", alias, err)
+				if err != nil || alias.HME != "old@icloud.com" || oldCalls != 1 {
+					t.Fatalf("rate limit did not fall back: %v %v", alias, err)
 				}
 				_, _, _ = service.createRemoteAliasWithChannel(context.Background(), 1, returned, client, "auto")
-				if managedCalls != 1 || oldCalls != 0 {
-					t.Fatalf("shared cooldown ignored: %d %d", managedCalls, oldCalls)
+				if managedCalls != 1 || oldCalls != 2 {
+					t.Fatalf("channel cooldown ignored: %d %d", managedCalls, oldCalls)
+				}
+				if !service.creationCooldowns[1]["apple_account"].Equal(now.Add(time.Hour)) || !service.creationCooldowns[1]["icloud_web"].IsZero() {
+					t.Fatal("default cooldown is not one hour on the affected channel")
 				}
 			}
 			if returned.Account.SCNT != "rotated" {
@@ -106,7 +109,7 @@ func TestAccountChannelsShareLongCooldownAndNeverFallbackOnRateLimit(t *testing.
 	}
 }
 
-func TestExplicitChannelsRespectSharedCooldown(t *testing.T) {
+func TestExplicitChannelsRespectIndependentCooldown(t *testing.T) {
 	now := time.Now()
 	client := &accountTestClient{}
 	managedCalls, webCalls := 0, 0
@@ -123,14 +126,14 @@ func TestExplicitChannelsRespectSharedCooldown(t *testing.T) {
 	if _, _, err := service.createRemoteAliasWithChannel(context.Background(), 1, web, client, "apple_account"); err == nil {
 		t.Fatal("expected Apple Account rate limit")
 	}
-	if _, _, err := service.createRemoteAliasWithChannel(context.Background(), 1, web, client, "icloud_web"); err == nil {
-		t.Fatal("expected shared cooldown on explicit Web channel")
+	if _, _, err := service.createRemoteAliasWithChannel(context.Background(), 1, web, client, "icloud_web"); err != nil {
+		t.Fatalf("Web channel shared Account cooldown: %v", err)
 	}
-	if managedCalls != 1 || webCalls != 0 {
+	if managedCalls != 1 || webCalls != 1 {
 		t.Fatalf("cooldown allowed request: account=%d web=%d", managedCalls, webCalls)
 	}
-	if service.creationCooldowns[1]["apple_account"].Before(now.Add(48*time.Hour)) || service.creationCooldowns[1]["icloud_web"].Before(now.Add(48*time.Hour)) {
-		t.Fatal("shared cooldown did not honor longer Retry-After")
+	if service.creationCooldowns[1]["apple_account"].Before(now.Add(48*time.Hour)) || !service.creationCooldowns[1]["icloud_web"].IsZero() {
+		t.Fatal("channel cooldown did not honor longer Retry-After")
 	}
 }
 

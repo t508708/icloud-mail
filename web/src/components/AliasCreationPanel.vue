@@ -13,7 +13,7 @@
     <RequestAlert v-if="probeError" :error="probeError" :message="probeErrorMessage(probeError)" :type="probeError.code === 'APPLE_RATE_LIMITED' ? 'info' : 'error'" closable @close="probeError = null" />
     <details class="creation-job-panel__budget-details">
       <summary>创建节奏与等待说明</summary>
-      <p>手动批量创建和单次探测均不使用本地创建额度，成功后不额外等待；仍受 Apple 实际响应影响。自动计划按滚动 1 小时最多 18 次、尝试至少间隔 2 分钟执行，自动只选择本轮初始通道，不因限流切换。本地上限不是 Apple 官方配额保证；任务生命周期为 7 天。</p>
+      <p>手动批量创建和单次探测均不使用本地创建额度，成功后不额外等待；仍受 Apple 实际响应影响。自动计划每主号滚动 1 小时最多 23 次：Apple Account 新通道 19 次、iCloud Web 旧通道 4 次，尝试至少间隔 2 分钟并错峰执行。本地上限不是 Apple 官方配额保证；任务生命周期为 7 天。仅自动计划在明确限流且未产生地址时切换到另一通道；结果不确定或目录确认中的尝试不会自动补造。</p>
     </details>
     <RequestAlert v-if="error" :error="error" closable @close="error = null" />
     <div v-if="job && active" class="creation-job-panel__status" aria-live="polite">
@@ -44,14 +44,14 @@ const active = computed(() => ["running", "waiting"].includes(job.value?.status)
 const statusLabel = computed(() => {
   if (job.value?.status === "waiting") {
     if (isLocalBudgetWait(job.value?.last_error)) return "等待本地主号共享预算恢复";
-    if (isAppleRateLimited(job.value?.last_error)) return "Apple 限流暂停中（至少 24 小时）";
+    if (isAppleRateLimited(job.value?.last_error)) return "Apple 限流暂停中（默认 1 小时；更长 Retry-After 以 Apple 为准）";
     return "等待任务继续";
   }
   return ({ running: "创建中", completed: "已完成", stopped: "已停止", failed: "本轮已停止", interrupted: "已中断" }[job.value?.status] || "任务");
 });
 function jobErrorMessage(value) {
   if (isLocalBudgetWait(value)) return "本地主号创建预算已用尽，本地等待不表示 Apple 返回了限流。";
-  if (isAppleRateLimited(value)) return "Apple 返回限流；该通道暂停至少 24 小时，不会自动切换通道。";
+  if (isAppleRateLimited(value)) return "Apple 返回限流；该通道默认暂停 1 小时（更长 Retry-After 以 Apple 为准）。";
   return value;
 }
 function probeErrorMessage(error) {

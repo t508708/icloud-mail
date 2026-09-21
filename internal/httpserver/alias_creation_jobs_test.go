@@ -132,7 +132,7 @@ func TestAliasCreationJobRateWaitCanStop(t *testing.T) {
 		t.Fatalf("start: %d", response.Code)
 	}
 	j := waitCreationJob(t, env.store, account.ID, "waiting")
-	if j.NextRunAt == nil || time.Until(*j.NextRunAt) < 24*time.Hour-time.Second {
+	if j.NextRunAt == nil || time.Until(*j.NextRunAt) < time.Hour-time.Second || time.Until(*j.NextRunAt) > time.Hour+time.Second {
 		t.Fatalf("cooldown: %+v", j)
 	}
 	response = env.request(t, http.MethodPost, path+"/stop", []byte(`{}`), "application/json", []*http.Cookie{cookie}, csrf)

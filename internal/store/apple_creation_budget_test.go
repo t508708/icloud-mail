@@ -62,12 +62,12 @@ func TestAppleCreationBudgetRollingHourlyDailyAndMinInterval(t *testing.T) {
 	if err := db.ClaimAppleCreationAttempt(ctx, account.ID, start.Add(store.AppleCreationMinInterval-time.Second)); !isAppleBudgetWait(err) {
 		t.Fatalf("claim inside minimum interval = %v, want budget wait", err)
 	}
-	for attempt := 1; attempt < 18; attempt++ {
+	for attempt := 1; attempt < store.AppleCreationHourlyLimit; attempt++ {
 		if err := db.ClaimAppleCreationAttempt(ctx, account.ID, start.Add(time.Duration(attempt)*store.AppleCreationMinInterval)); err != nil {
 			t.Fatalf("hourly attempt %d: %v", attempt+1, err)
 		}
 	}
-	hourlyWaitAt := start.Add(36 * time.Minute)
+	hourlyWaitAt := start.Add(store.AppleCreationHourlyLimit * store.AppleCreationMinInterval)
 	err := db.ClaimAppleCreationAttempt(ctx, account.ID, hourlyWaitAt)
 	if !isAppleBudgetWait(err) || !budgetUntil(err).Equal(start.Add(time.Hour)) {
 		t.Fatalf("rolling-hour overflow claim = %v, until=%v; want wait until %v", err, budgetUntil(err), start.Add(time.Hour))
@@ -76,22 +76,24 @@ func TestAppleCreationBudgetRollingHourlyDailyAndMinInterval(t *testing.T) {
 	if !errors.As(err, &hourlyBudgetErr) {
 		t.Fatalf("hourly wait error type = %T, want AppleCreationBudgetError", err)
 	}
-	if delay := hourlyBudgetErr.RetryDelay(); delay != 24*time.Minute {
-		t.Fatalf("hourly RetryDelay = %v, want 24m", delay)
+	if delay := hourlyBudgetErr.RetryDelay(); delay != start.Add(time.Hour).Sub(hourlyWaitAt) {
+		t.Fatalf("hourly RetryDelay = %v", delay)
 	}
 	if err := db.ClaimAppleCreationAttempt(ctx, account.ID, start.Add(time.Hour)); err != nil {
 		t.Fatalf("claim after oldest hourly attempt expired: %v", err)
 	}
 
 	dailyAccount := createAccount(t, ctx, db, "Daily budget", "daily-budget@icloud.com")
-	dailyStep := 24 * time.Hour / time.Duration(store.AppleCreationDailyLimit)
+	dailyStep := (24*time.Hour + time.Duration(store.AppleCreationDailyLimit) - 1) / time.Duration(store.AppleCreationDailyLimit)
 	for attempt := 0; attempt < store.AppleCreationDailyLimit; attempt++ {
 		at := start.Add(time.Duration(attempt) * dailyStep)
 		if err := db.ClaimAppleCreationAttempt(ctx, dailyAccount.ID, at); err != nil {
 			t.Fatalf("daily attempt %d: %v", attempt+1, err)
 		}
 	}
-	dailyWaitUntil := start.Add(24 * time.Hour)
+	// Rounding the step upward can keep the newest rolling-hour window full
+	// a few nanoseconds beyond midnight, independently of the daily ceiling.
+	dailyWaitUntil := start.Add(time.Duration(store.AppleCreationDailyLimit-store.AppleCreationHourlyLimit)*dailyStep + time.Hour)
 	lastDailyAttempt := start.Add(time.Duration(store.AppleCreationDailyLimit-1) * dailyStep)
 	err = db.ClaimAppleCreationAttempt(ctx, dailyAccount.ID, lastDailyAttempt.Add(store.AppleCreationMinInterval))
 	if !isAppleBudgetWait(err) || !budgetUntil(err).Equal(dailyWaitUntil) {

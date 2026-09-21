@@ -33,7 +33,7 @@ const (
 	CycleDuration = time.Hour
 
 	// appleRateLimitCooldown is a conservative pause after explicit upstream throttling.
-	appleRateLimitCooldown = 24 * time.Hour
+	appleRateLimitCooldown = domain.AppleCreationRateLimitCooldown
 
 	defaultPollInterval                  = 5 * time.Second
 	defaultOverdueGrace                  = 2 * time.Minute
@@ -261,7 +261,7 @@ func (m *Manager) UpgradeCadence(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
-	return upgrader.UpgradeAliasCreationCadence(ctx, "18-per-hour-independent-probes-v4", m.now(), m.newPlan)
+	return upgrader.UpgradeAliasCreationCadence(ctx, "23-per-hour-channel-19-4-v5", m.now(), m.newPlan)
 }
 
 // GetSchedule returns a persisted schedule. An absent row means the feature
@@ -543,6 +543,8 @@ func (m *Manager) processDue(ctx context.Context, schedule domain.AliasCreationS
 	creatorContext := domain.WithAliasCreationProgressReporter(ctx, func(update domain.AliasCreationProgressUpdate) {
 		m.logAliasCreationProgress(ctx, schedule.AccountID, &flow, update)
 	})
+	slot := CreationsPerCycle - len(futurePlanIncludingCurrent(schedule.PlannedAt, expected))
+	creatorContext = domain.WithScheduledCreationSlot(creatorContext, slot)
 	alias, createErr := m.creator(creatorContext, schedule.AccountID)
 	address := strings.TrimSpace(alias.Address)
 	if createErr == nil && address == "" {
@@ -886,6 +888,11 @@ func failureMessage(err error) string {
 }
 
 func aliasCreationRequiresRateLimitCooldown(err error) bool {
+	var scoped interface{ CreationChannelScoped() bool }
+	if errors.As(err, &scoped) && scoped.CreationChannelScoped() {
+		// The channel ledger owns this pause; keep the other channel's slots.
+		return false
+	}
 	// Keep the stable diagnostic-code path for callers that only expose a
 	// classified error, but also inspect wrapped Apple causes. A reserve can
 	// return a rate-limit response while a session checkpoint fails, in which

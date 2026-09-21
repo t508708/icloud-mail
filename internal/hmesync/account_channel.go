@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"icloud-api/internal/apple"
+	"icloud-api/internal/domain"
 	"icloud-api/internal/store"
 )
 
@@ -314,8 +315,8 @@ func (s *Service) ClearAccountAuth(ctx context.Context, id int64) error {
 	return err
 }
 
-// Called under the account operation lock. Both APIs share the cooldown;
-// a throttled or uncertain completion never changes channels.
+// Called under the account operation lock. Channel limits are independent;
+// an uncertain result or a returned candidate never triggers another create.
 func (s *Service) createRemoteAliasWithChannel(ctx context.Context, id int64, web apple.Session, legacy AutoAliasClient, channel string) (apple.Alias, apple.Session, error) {
 	return s.createRemoteAliasWithMode(ctx, id, web, legacy, channel, false)
 }
@@ -338,20 +339,35 @@ func (s *Service) createRemoteAliasWithMode(ctx context.Context, id int64, web a
 	if channel == "auto" {
 		channels = []string{"icloud_web"}
 		if web.Account != nil && web.Account.APIKey != "" {
-			channels = []string{"apple_account"}
+			channels = []string{"apple_account", "icloud_web"}
+			if domain.ScheduledCreationChannel(ctx) == "icloud_web" && !probe {
+				channels = []string{"icloud_web", "apple_account"}
+			}
 		}
 	}
 	var earliest time.Time
-	for _, selected := range channels {
-		until := cooldowns["apple_account"]
-		if webUntil := cooldowns["icloud_web"]; webUntil.After(until) {
-			until = webUntil
+	var waitErr error
+	rememberWait := func(until time.Time, err error) {
+		if earliest.IsZero() || until.Before(earliest) {
+			earliest, waitErr = until, err
 		}
+	}
+	for _, selected := range channels {
+		until := cooldowns[selected]
 		if !probe && s.now().Before(until) {
-			if earliest.IsZero() || until.Before(earliest) {
-				earliest = until
-			}
+			rememberWait(until, &apple.Error{Op: "creation channel cooling down", Kind: apple.ErrService, StatusCode: http.StatusTooManyRequests, RetryAfter: until.Sub(s.now())})
 			continue
+		}
+		budget, hasBudget := s.repo.(appleChannelCreationBudgetRepository)
+		if !probe && hasBudget {
+			if err := budget.ClaimAppleChannelCreationAttempt(ctx, id, selected, s.now()); err != nil {
+				var limit *store.AppleCreationBudgetError
+				if !errors.As(err, &limit) {
+					return apple.Alias{}, web, err
+				}
+				rememberWait(limit.Until, err)
+				continue
+			}
 		}
 		var alias apple.Alias
 		var err error
@@ -379,12 +395,27 @@ func (s *Service) createRemoteAliasWithMode(ctx context.Context, id int64, web a
 		if probe || err == nil || strings.TrimSpace(alias.HME) != "" || !apple.IsRateLimited(err) {
 			return alias, web, err
 		}
-		until = s.now().Add(max(24*time.Hour, apple.RetryDelay(err)))
-		cooldowns["apple_account"] = until
-		cooldowns["icloud_web"] = until
-		if earliest.IsZero() || until.Before(earliest) {
-			earliest = until
+		var possible interface{ RemoteSideEffectPossible() bool }
+		if errors.As(err, &possible) && possible.RemoteSideEffectPossible() {
+			return alias, web, err
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return alias, web, err
+		}
+		until = s.now().Add(max(domain.AppleCreationRateLimitCooldown, apple.RetryDelay(err)))
+		cooldowns[selected] = until
+		if hasBudget {
+			persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), autoCreatePersistTimeout)
+			persistErr := budget.PauseAppleChannelCreation(persistCtx, id, selected, until)
+			cancel()
+			if persistErr != nil {
+				return alias, web, &creationChannelWaitError{cause: errors.Join(wrapPersistenceError(persistErr), err)}
+			}
+		}
+		rememberWait(until, &apple.Error{Op: "creation channel cooling down", Kind: apple.ErrService, StatusCode: http.StatusTooManyRequests, RetryAfter: until.Sub(s.now()), Err: err})
+		if ctx.Err() != nil {
+			return alias, web, &creationChannelWaitError{cause: waitErr}
 		}
 	}
-	return apple.Alias{}, web, &apple.Error{Op: "creation channels cooling down", Kind: apple.ErrService, StatusCode: http.StatusTooManyRequests, RetryAfter: max(time.Second, earliest.Sub(s.now()))}
+	return apple.Alias{}, web, &creationChannelWaitError{cause: waitErr}
 }

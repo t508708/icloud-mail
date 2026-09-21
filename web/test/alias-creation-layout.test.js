@@ -36,8 +36,8 @@ test("batch creation stays compact without progress or created-address summary",
   assert.match(source, /<details class="creation-job-panel__budget-details">/);
   assert.match(source, /手动批量创建和单次探测均不使用本地创建额度/);
   assert.match(source, /任务生命周期为 7 天/);
-  assert.match(source, /自动只选择本轮初始通道，不因限流切换/);
-  assert.match(source, /Apple 限流暂停中（至少 24 小时）/);
+  assert.match(source, /Apple Account 新通道 19 次、iCloud Web 旧通道 4 次/);
+  assert.match(source, /Apple 限流暂停中（默认 1 小时；更长 Retry-After 以 Apple 为准）/);
   assert.match(source, /手动探测 1 个/);
   assert.match(source, /createAliasNow/);
   assert.match(source, /本地主号创建预算已用尽，本地等待不表示 Apple 返回了限流/);

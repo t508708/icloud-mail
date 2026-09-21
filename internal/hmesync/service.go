@@ -578,9 +578,13 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 		if claimedBackgroundBudget == nil || (!errors.Is(resultErr, ErrRateLimited) && !apple.IsRateLimited(resultErr)) {
 			return
 		}
+		var scoped interface{ CreationChannelScoped() bool }
+		if errors.As(resultErr, &scoped) && scoped.CreationChannelScoped() {
+			return
+		}
 		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), autoCreatePersistTimeout)
 		defer cancel()
-		until := s.now().Add(max(24*time.Hour, apple.RetryDelay(resultErr)))
+		until := s.now().Add(max(domain.AppleCreationRateLimitCooldown, apple.RetryDelay(resultErr)))
 		if err := claimedBackgroundBudget.PauseAppleCreation(persistCtx, accountID, until); err != nil {
 			resultErr = errors.Join(resultErr, wrapPersistenceError(err))
 		}
@@ -1146,7 +1150,8 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 	var mappedCreateErr error
 	if createErr != nil {
 		mappedCreateErr = createErr
-		if Code(createErr) == "" {
+		var localBudget *store.AppleCreationBudgetError
+		if Code(createErr) == "" && !errors.As(createErr, &localBudget) {
 			mappedCreateErr = mapAppleError(createErr, false)
 		}
 	}

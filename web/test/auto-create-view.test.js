@@ -79,7 +79,7 @@ test("account detail exposes automatic alias creation with persistent credential
   );
   assert.equal(
     formatAutoCreationError("APPLE_RATE_LIMITED"),
-    "Apple 返回了限流；该创建计划已暂停至少 24 小时，不会自动切换到另一通道。",
+    "Apple 返回了限流；对应通道默认暂停 1 小时，更长 Retry-After 以 Apple 为准。",
   );
   assert.match(
     formatAutoCreationError("APPLE_CREATION_BUDGET_WAIT"),

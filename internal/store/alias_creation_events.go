@@ -33,6 +33,9 @@ func (s *Store) migrateAliasCreationEvents(ctx context.Context, tx *sql.Tx) erro
 	if err := s.migrateAppleCreationBudget(ctx, tx); err != nil {
 		return err
 	}
+	if err := s.migrateAppleCreationChannelBudget(ctx, tx); err != nil {
+		return err
+	}
 	return nil
 }
 

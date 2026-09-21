@@ -2284,7 +2284,7 @@ components:
           items:
             type: string
             format: date-time
-          description: 当前剩余计划的全部 UTC 时间点，最多 5 个。
+          description: 当前剩余计划的全部 UTC 时间点，最多 23 个。完整小时计划含新通道 19 槽、旧通道 4 槽；滚动额度分别计数，实际成功量以 Apple 返回为准。
         next_run_at:
           type:
             - string

@@ -325,7 +325,7 @@
           <details class="settings-disclosure">
             <summary>计划详情</summary>
             <p>
-              手动批量创建和单次探测均不使用本地创建额度，成功后不额外等待；仍受 Apple 实际响应影响。自动计划按滚动 1 小时最多 18 次、尝试至少间隔 2 分钟执行。自动只选择本轮初始通道，限流后不会切换通道。Apple 明确限流后暂停至少 24 小时。这是本项目的保守上限，不代表 Apple 官方配额保证；一次多件请使用上方批量任务。
+              手动批量创建和单次探测均不使用本地创建额度，成功后不额外等待；仍受 Apple 实际响应影响。自动计划每主号滚动 1 小时最多 23 次：Apple Account 新通道 19 次、iCloud Web 旧通道 4 次，尝试至少间隔 2 分钟并错峰执行。仅在明确限流且未产生地址时切换到另一通道；结果不确定、含 HME 或目录确认中的尝试不会自动补造。明确限流默认暂停对应通道 1 小时，更长 Retry-After 以 Apple 为准；公共前置限流仍暂停整个主号。这是本项目的保守上限，不代表 Apple 官方配额保证；一次多件请使用上方批量任务。
             </p>
             <dl class="auto-creation-metrics">
             <div>
@@ -1203,7 +1203,7 @@ const AUTO_CREATION_ERROR_MESSAGES = Object.freeze({
   APPLE_ACCOUNT_ACTION_REQUIRED:
     "Apple 账户需要完成条款确认或其他账户操作，请前往 Apple 官网处理后重试",
   APPLE_RATE_LIMITED:
-    "Apple 返回了限流；该创建计划已暂停至少 24 小时，不会自动切换到另一通道。",
+    "Apple 返回了限流；对应通道默认暂停 1 小时，更长 Retry-After 以 Apple 为准。",
   APPLE_UPSTREAM_ERROR:
     "Apple 服务暂时异常，请稍后再试；自动创建会按计划继续执行",
   APPLE_ALIAS_CONFIRMATION_PENDING:
