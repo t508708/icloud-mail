@@ -22,6 +22,10 @@
 
 从初版 `v0.1.0` 起的完整新增、调整、修复与验证记录见 [更新日志](CHANGELOG.md)。
 
+## QQ 群
+
+项目交流与部署问题可加入 QQ 群 **1105888476**：[一键加群](https://qm.qq.com/q/6KWBNKKDEk)。
+
 ## Docker 部署
 
 需要 Docker Engine、Docker Compose v2、`curl` 和 `unzip`。预构建包适用于 **Linux x86_64 / amd64**，包含应用与 PostgreSQL 镜像，建议至少 2 核、4 GB 内存。
@@ -83,10 +87,6 @@ docker compose up -d --build --wait
 [安装与升级](DELIVERY.md) · [公网部署](docs/PUBLIC.md) · [邮箱池与 API](docs/POOL.md) · [OpenAPI](docs/openapi.yaml)
 
 [配置与兼容说明](docs/REFERENCE.md) · [收件设计](docs/MAIL-RECEPTION.md) · [测试与实测记录](docs/RECEIVER-VALIDATION.md)
-
-## QQ 群
-
-项目交流与部署问题可加入 QQ 群 **1105888476**：[一键加群](https://qm.qq.com/q/6KWBNKKDEk)。
 
 ## 来源与许可
 
