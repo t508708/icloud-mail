@@ -84,6 +84,10 @@ docker compose up -d --build --wait
 
 [配置与兼容说明](docs/REFERENCE.md) · [收件设计](docs/MAIL-RECEPTION.md) · [测试与实测记录](docs/RECEIVER-VALIDATION.md)
 
+## QQ 群
+
+项目交流与部署问题可加入 QQ 群 **1105888476**：[一键加群](https://qun.qq.com/join.html?groupcode=1105888476)。
+
 ## 来源与许可
 
 本项目由 [t508708/icloud-mail](https://github.com/t508708/icloud-mail) 维护，基于 [mangobubu/icloud-api](https://github.com/mangobubu/icloud-api) 开发，保留来源与 Git 历史。

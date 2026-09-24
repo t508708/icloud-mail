@@ -51,6 +51,7 @@
 
 <script setup>
 import {
+  ChatDotRound,
   Connection,
   Document,
   Lock,
@@ -77,6 +78,7 @@ const auth = useAuth();
 const page = usePageHeader();
 const drawerOpen = ref(false);
 const logoutLoading = ref(false);
+const qqGroupURL = "https://qun.qq.com/join.html?groupcode=1105888476";
 
 const menuItems = [
   { to: { name: "accounts" }, label: "主号管理", icon: Connection, section: "accounts" },
@@ -134,6 +136,18 @@ const SidebarFooter = defineComponent({
     };
     return () =>
       h("div", { class: "admin-sidebar__footer" }, [
+        h(
+          "a",
+          {
+            class: "admin-sidebar__qq",
+            href: qqGroupURL,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            title: "加入 QQ 群 1105888476",
+          },
+          [h(ChatDotRound, { "aria-hidden": "true" }), h("span", "加入 QQ 群")],
+        ),
+        h("div", { class: "admin-sidebar__footer-main" }, [
         h("span", { class: "admin-sidebar__username", title: auth.state.username }, auth.state.username),
         h(
           "button",
@@ -145,6 +159,7 @@ const SidebarFooter = defineComponent({
           },
           [h(SwitchButton, { "aria-hidden": "true" }), h("span", logoutLoading.value ? "退出中" : "退出")],
         ),
+        ]),
       ]);
   },
 });
