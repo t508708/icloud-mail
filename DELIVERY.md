@@ -1,6 +1,6 @@
 # 安装与交付
 
-公开仓库：<https://github.com/t508708/icloud-mail>。当前发布为 **v0.2.1**，提供源码和 Linux amd64 预构建镜像包，变化见 [更新日志](CHANGELOG.md)。源码包含 Web 控制面板、Go 服务、测试和 Docker 构建配置，不含账号、邮件、密码、证书或现有服务器的数据。来源与许可见 [NOTICE.md](NOTICE.md)。
+公开仓库：<https://github.com/t508708/icloud-mail>。当前发布为 **v0.2.2**，提供 GHCR 多架构镜像、源码和 Linux amd64 离线镜像包，变化见 [更新日志](CHANGELOG.md)。源码包含 Web 控制面板、Go 服务、测试和 Docker 构建配置，不含账号、邮件、密码、证书或现有服务器的数据。来源与许可见 [NOTICE.md](NOTICE.md)。
 
 ## GHCR latest 安装
 
@@ -69,18 +69,18 @@ docker compose up -d --wait
 
 ## 离线与固定版本
 
-无 GHCR 网络或需要可复现版本时，从 [v0.2.1 Release](https://github.com/t508708/icloud-mail/releases/tag/v0.2.1) 下载 `icloud-mail-v0.2.1-linux-amd64.zip` 和 `SHA256SUMS`。该历史镜像包仅适用于 Linux x86_64 / amd64：
+无 GHCR 网络或需要可复现版本时，从 [v0.2.2 Release](https://github.com/t508708/icloud-mail/releases/tag/v0.2.2) 下载 `icloud-mail-v0.2.2-linux-amd64.zip` 和 `SHA256SUMS`。该镜像包仅适用于 Linux x86_64 / amd64：
 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
-unzip icloud-mail-v0.2.1-linux-amd64.zip
-cd icloud-mail-v0.2.1
+unzip icloud-mail-v0.2.2-linux-amd64.zip
+cd icloud-mail-v0.2.2
 cp -n .env.example .env
 docker load -i images/linux-amd64.tar.gz
 docker compose -f compose.yaml -f compose.offline.yaml up -d --no-build --pull never --wait
 ```
 
-包内包含 `icloud-api:v0.2.1` 与 `icloud-api-postgres:v0.2.1`，`RELEASE.json` 记录源码提交、架构和镜像 ID，包内 `SHA256SUMS` 可再次校验各文件。后续命令继续带上 `-f compose.yaml -f compose.offline.yaml`。历史 `handoff-2026.09.14` 包继续使用其自带的编排和镜像，不混用不同版本的离线文件。
+包内包含 `icloud-api:v0.2.2` 与 `icloud-api-postgres:v0.2.2`，`RELEASE.json` 记录源码提交、架构和镜像 ID，包内 `SHA256SUMS` 可再次校验各文件。后续命令继续带上 `-f compose.yaml -f compose.offline.yaml`。历史 `handoff-2026.09.14` 包继续使用其自带的编排和镜像，不混用不同版本的离线文件。
 
 已有镜像包升级时，先备份，再下载并校验新包、导入新镜像、更新项目中的发布文件。保留原 `.env`、`COMPOSE_PROJECT_NAME` 和数据卷；沿用原项目目录，避免更换项目名后被识别为新安装：
 

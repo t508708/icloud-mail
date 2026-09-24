@@ -2,6 +2,17 @@
 
 本文件记录 `t508708/icloud-mail` 的发布版本，与 API 路径、数据库 schema 和邮箱凭据版本分别管理。
 
+## v0.2.2 - 2026-09-24
+
+- 默认 Docker 部署改为匿名拉取 GHCR `latest`，应用与 PostgreSQL 镜像同时发布 linux/amd64、linux/arm64；保留版本标签、镜像 digest 和离线包用于可复现部署与回滚。
+- 新增 GitHub Actions 容器发布流程：`main` 自动更新 `latest`，正式版本标签同步发布对应版本镜像与提交短标签，镜像包含来源、版本和 revision 元数据。
+- 将本地源码构建拆分到 `compose.build.yaml`；README、交付文档和宝塔单文件流程默认使用 `docker compose pull`，历史离线包继续使用 `compose.offline.yaml`。
+- GitHub 仓库迁移为独立仓库；保留完整 Git 历史、`mangobubu/icloud-api` 上游来源、许可现状说明和原 fork 归档地址。
+- 后台侧栏及移动抽屉增加 QQ 群 `1105888476` 入口，README 同步提供官方一键加群链接。
+- 验证包含 240 项前端与发布元数据测试、Compose 三种部署路径、Actions 静态检查、GHCR 匿名拉取、多架构清单和本机 `latest` 升级健康检查。
+
+完整源码比较：[v0.2.1...v0.2.2](https://github.com/t508708/icloud-mail/compare/v0.2.1...v0.2.2)。
+
 ## v0.2.1 - 2026-09-21
 
 - 自动创建改为每主号每小时 23 个错峰计划槽，新通道最多 19 次、旧通道最多 4 次，分别持久化滚动额度与冷却。明确限流且未产生地址时可使用另一通道的剩余额度；待确认和不确定结果继续走原确认流程。
