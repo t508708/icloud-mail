@@ -9,10 +9,17 @@
 3. HTTPS 反向代理指向 `http://127.0.0.1:8788`。宝塔中的 SSL 证书用于 Web 代理；仅使用 HTTP API 时无需配置应用内 IMAPS 证书。
 4. 在 `.env` 设置 `ICLOUD_API_COOKIE_SECURE=true`，重建应用容器使设置生效。保持单实例。
 
-源码安装：
+GHCR `latest` 安装：
 
 ```sh
+docker compose pull
 docker compose up -d --no-deps --wait icloud-api
+```
+
+源码构建安装：
+
+```sh
+docker compose -f compose.yaml -f compose.build.yaml up -d --build --no-deps --wait icloud-api
 ```
 
 镜像包安装：
@@ -64,7 +71,7 @@ ICLOUD_API_PUBLIC_IMAP_TLS_CERT_FILE=/app/public-tls/fullchain.pem
 ICLOUD_API_PUBLIC_IMAP_TLS_KEY_FILE=/app/public-tls/privkey.pem
 ```
 
-4. 启动时增加 `-f compose.public.yaml` 挂载证书目录；镜像包安装同时保留 `-f compose.offline.yaml`。
+4. 启动时增加 `-f compose.public.yaml` 挂载证书目录；源码构建同时增加 `-f compose.build.yaml`，历史离线包同时增加 `-f compose.offline.yaml`。
 5. 用 Nginx stream 等 TCP 透传代理将公网 `993` 转发到 `127.0.0.1:1993`，放通相应防火墙端口；TLS 握手由应用完成。
 6. 证书续期后同步更新挂载文件，并重建应用以加载新证书。
 
@@ -80,8 +87,10 @@ openssl s_client -connect imap.example.com:993 \
 部分宝塔版本把 Docker 返回的多个配置路径当成一个文件名，出现 `[.../compose.yaml,.../compose.public.yaml] 文件不存在`。使用单文件入口可解决这个兼容问题：
 
 ```sh
-# 默认合并基础配置和公网证书挂载，保留环境变量占位符。
+# 默认合并 GHCR latest 基础配置和公网证书挂载，保留环境变量占位符。
 bash scripts/render-baota-compose.sh
+# 本地源码构建使用：
+# bash scripts/render-baota-compose.sh compose.yaml compose.build.yaml compose.public.yaml
 # 镜像包安装则使用下面这条生成命令：
 # bash scripts/render-baota-compose.sh compose.yaml compose.offline.yaml compose.public.yaml
 ```
@@ -90,10 +99,11 @@ bash scripts/render-baota-compose.sh
 
 ```sh
 docker compose stop icloud-api
-docker compose up -d --force-recreate --no-build --pull never --wait --wait-timeout 120
+docker compose pull
+docker compose up -d --force-recreate --wait --wait-timeout 120
 docker compose ls
 ```
 
-操作前确认本地镜像标签指向要运行的版本。重建沿用原项目数据卷；`docker compose ls` 中本项目的 `ConfigFiles` 应只显示 `compose.baota.yaml` 的绝对路径。然后刷新宝塔容器编排页。
+操作前确认镜像已成功拉取；需要回滚时在 `.env` 将镜像变量改为目标 digest。重建沿用原项目数据卷；`docker compose ls` 中本项目的 `ConfigFiles` 应只显示 `compose.baota.yaml` 的绝对路径。然后刷新宝塔容器编排页。
 
 后续通过普通 `docker compose` 命令管理，避免再传多个 `-f`。更新基础编排或覆盖文件后，先重新运行生成命令，再部署；生成会覆盖在宝塔直接编辑的单文件内容。`compose.baota.yaml` 是本地生成文件，已排除版本控制。

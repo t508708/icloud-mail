@@ -32,6 +32,32 @@ test("release documentation retains upstream attribution and license notice", as
   assert.ok((await read("README.md")).includes("[NOTICE.md](NOTICE.md)"));
 });
 
+test("default deployment pulls GHCR latest while source builds stay opt-in", async () => {
+  const compose = await read("compose.yaml");
+  assert.ok(compose.includes("ghcr.io/t508708/icloud-mail:latest"));
+  assert.ok(compose.includes("ghcr.io/t508708/icloud-mail-postgres:latest"));
+  assert.equal(compose.includes("    build:\n"), false);
+  assert.equal((compose.match(/pull_policy: always/g) || []).length, 2);
+
+  const build = await read("compose.build.yaml");
+  assert.ok(build.includes("image: icloud-api:local"));
+  assert.ok(build.includes("image: icloud-api-postgres:local"));
+  assert.ok(build.includes("target: postgres-runtime"));
+
+  const readme = await read("README.md");
+  const deployment = readme.slice(readme.indexOf("## Docker 部署"), readme.indexOf("## 文档"));
+  assert.ok(deployment.includes("docker compose pull"));
+  assert.ok(deployment.includes("docker compose up -d --wait"));
+  assert.ok(deployment.includes("compose.build.yaml"));
+  assert.equal(deployment.includes("git clone --branch"), false);
+
+  const workflow = await read(".github/workflows/publish-images.yml");
+  assert.ok(workflow.includes("packages: write"));
+  assert.ok(workflow.includes("platforms: linux/amd64,linux/arm64"));
+  assert.ok(workflow.includes("target: postgres-runtime"));
+  assert.ok(workflow.includes("type=raw,value=latest"));
+});
+
 test("local links in release documentation resolve after reference extraction", async () => {
   for (const path of ["README.md", "NOTICE.md", "DELIVERY.md", "CHANGELOG.md", "docs/REFERENCE.md"]) {
     const source = await read(path);

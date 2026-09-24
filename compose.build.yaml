@@ -1,0 +1,23 @@
+services:
+  icloud-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        DOCKER_HUB_MIRROR: ${DOCKER_HUB_MIRROR:-docker.m.daocloud.io}
+        GOPROXY: ${GOPROXY:-https://goproxy.cn}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+        ALPINE_MIRROR: ${ALPINE_MIRROR:-mirrors.aliyun.com}
+    image: icloud-api:local
+    pull_policy: build
+
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: postgres-runtime
+      args:
+        DOCKER_HUB_MIRROR: ${DOCKER_HUB_MIRROR:-docker.m.daocloud.io}
+        ALPINE_MIRROR: ${ALPINE_MIRROR:-mirrors.aliyun.com}
+    image: icloud-api-postgres:local
+    pull_policy: build

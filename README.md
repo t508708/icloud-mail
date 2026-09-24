@@ -28,35 +28,32 @@
 
 ## Docker 部署
 
-需要 Docker Engine、Docker Compose v2、`curl` 和 `unzip`。预构建包适用于 **Linux x86_64 / amd64**，包含应用与 PostgreSQL 镜像，建议至少 2 核、4 GB 内存。
+需要 Docker Engine、Docker Compose v2 和 Git。GHCR 镜像支持 **linux/amd64** 与 **linux/arm64**，建议至少 2 核、4 GB 内存。
 
-**1. 下载并校验**
-
-```sh
-curl -fLO https://github.com/t508708/icloud-mail/releases/download/v0.2.1/icloud-mail-v0.2.1-linux-amd64.zip
-curl -fLO https://github.com/t508708/icloud-mail/releases/download/v0.2.1/SHA256SUMS
-sha256sum --ignore-missing -c SHA256SUMS
-```
-
-确认校验结果为 `OK` 后继续。
-
-**2. 导入镜像并启动**
+**1. 获取部署配置**
 
 ```sh
-unzip icloud-mail-v0.2.1-linux-amd64.zip
-cd icloud-mail-v0.2.1
+git clone --depth 1 https://github.com/t508708/icloud-mail.git
+cd icloud-mail
 cp -n .env.example .env
-docker load -i images/linux-amd64.tar.gz
-docker compose -f compose.yaml -f compose.offline.yaml up -d --no-build --pull never --wait
-docker compose -f compose.yaml -f compose.offline.yaml ps
 ```
+
+**2. 拉取 `latest` 并启动**
+
+```sh
+docker compose pull
+docker compose up -d --wait
+docker compose ps
+```
+
+默认使用 `ghcr.io/t508708/icloud-mail:latest` 与 `ghcr.io/t508708/icloud-mail-postgres:latest`。每次更新执行 `git pull --ff-only && docker compose pull && docker compose up -d --wait`，已有数据库、密钥和邮件归档卷会继续复用。
 
 **3. 登录后台**
 
 默认地址：**http://127.0.0.1:8788/admin/**，用户名 `admin`。查看首次生成的密码：
 
 ```sh
-docker compose -f compose.yaml -f compose.offline.yaml exec -T icloud-api cat /app/keys/admin-password
+docker compose exec -T icloud-api cat /app/keys/admin-password
 ```
 
 远程服务器可在自己的电脑运行以下命令，再打开上面的本地地址：
@@ -69,16 +66,13 @@ ssh -N -L 8788:127.0.0.1:8788 USER@SERVER
 
 ### 从源码构建
 
-希望自行构建时使用：
+需要本机构建时叠加 `compose.build.yaml`：
 
 ```sh
-git clone --branch v0.2.1 https://github.com/t508708/icloud-mail.git
-cd icloud-mail
-cp -n .env.example .env
-docker compose up -d --build --wait
+docker compose -f compose.yaml -f compose.build.yaml up -d --build --wait
 ```
 
-两种方式使用同一控制面板。登录后添加主号、配置收件、连接 Apple 并同步地址，再复制取码链接或将邮箱加入池。直连 iCloud 收件使用 **App 专用密码**；Apple 登录用于地址管理。
+需要固定发布或离线安装时，使用 GitHub Release 中带校验文件的镜像包，步骤见 [安装文档](DELIVERY.md#离线与固定版本)。两种方式使用同一控制面板。登录后添加主号、配置收件、连接 Apple 并同步地址，再复制取码链接或将邮箱加入池。直连 iCloud 收件使用 **App 专用密码**；Apple 登录用于地址管理。
 
 升级前按 [安装文档](DELIVERY.md) 备份数据库、密钥与邮件归档，保留 `.env` 和数据卷。
 

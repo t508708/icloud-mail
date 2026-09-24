@@ -1,15 +1,8 @@
 services:
   icloud-api:
     container_name: icloud-api
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        DOCKER_HUB_MIRROR: ${DOCKER_HUB_MIRROR:-docker.m.daocloud.io}
-        GOPROXY: ${GOPROXY:-https://goproxy.cn}
-        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
-        ALPINE_MIRROR: ${ALPINE_MIRROR:-mirrors.aliyun.com}
-    image: icloud-api:local
+    image: ${ICLOUD_API_IMAGE:-ghcr.io/t508708/icloud-mail:latest}
+    pull_policy: always
     restart: unless-stopped
     stop_grace_period: 2m
     deploy:
@@ -83,14 +76,8 @@ services:
       start_period: 10s
 
   postgres:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: postgres-runtime
-      args:
-        DOCKER_HUB_MIRROR: ${DOCKER_HUB_MIRROR:-docker.m.daocloud.io}
-        ALPINE_MIRROR: ${ALPINE_MIRROR:-mirrors.aliyun.com}
-    image: icloud-api-postgres:local
+    image: ${ICLOUD_API_POSTGRES_IMAGE:-ghcr.io/t508708/icloud-mail-postgres:latest}
+    pull_policy: always
     restart: unless-stopped
     stop_grace_period: 60s
     deploy:
