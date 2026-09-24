@@ -8,7 +8,7 @@
 
 核查对应上游 `main` 提交 [`2d5d570d8892c7de84a679d7d4e2bbc0360a759a`](https://github.com/mangobubu/icloud-api/tree/2d5d570d8892c7de84a679d7d4e2bbc0360a759a)：文件树及源码归档未发现 `LICENSE` / `COPYING` 许可证文件或 SPDX 许可声明。此提交仅用于固定许可核查证据，不表示本发布已合入该提交的全部功能。
 
-本次发布在 GitHub fork 中进行，只同步经过检查的项目源码。当前服务器的账号、邮件、凭据、证书、运行日志和本机运维历史均未作为发布内容。
+本项目现于独立 GitHub 仓库 [t508708/icloud-mail](https://github.com/t508708/icloud-mail) 维护；迁移前的 GitHub fork 留档于 [t508708/icloud-mail-fork-archive-20260924](https://github.com/t508708/icloud-mail-fork-archive-20260924)。仓库关系调整保留本项目 Git 历史、上游来源和上述许可说明，不改变各部分代码原有的权利归属。公开仓库只同步经过检查的项目源码；当前服务器的账号、邮件、凭据、证书、运行日志和本机运维历史均未作为发布内容。
 
 ## 参考项目
 
