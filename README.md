@@ -86,7 +86,7 @@ docker compose up -d --build --wait
 
 ## QQ 群
 
-项目交流与部署问题可加入 QQ 群 **1105888476**：[一键加群](https://qun.qq.com/join.html?groupcode=1105888476)。
+项目交流与部署问题可加入 QQ 群 **1105888476**：[一键加群](https://qun.qq.com/#/handy-tool/join-group?groupcode=1105888476)。
 
 ## 来源与许可
 

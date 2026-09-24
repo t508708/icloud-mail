@@ -78,7 +78,7 @@ const auth = useAuth();
 const page = usePageHeader();
 const drawerOpen = ref(false);
 const logoutLoading = ref(false);
-const qqGroupURL = "https://qun.qq.com/join.html?groupcode=1105888476";
+const qqGroupURL = "https://qun.qq.com/#/handy-tool/join-group?groupcode=1105888476";
 
 const menuItems = [
   { to: { name: "accounts" }, label: "主号管理", icon: Connection, section: "accounts" },
