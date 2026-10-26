@@ -68,6 +68,92 @@ servers:
   # Admin operations below override this server with the installation-specific
   # path stored in the keys volume.
 paths:
+  /api/v1/pool/capabilities:
+    get:
+      tags: [Mailbox Pool]
+      operationId: readPoolCapabilities
+      summary: 读取邮箱池批量确认能力
+      security:
+        - poolKey: []
+      responses:
+        "200":
+          description: 当前项目可使用的批量确认上限；响应禁止缓存。
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [batch_commit_max]
+                    properties:
+                      batch_commit_max: {type: integer, const: 50}
+        "401": {description: 项目 Key 无效}
+        "429": {description: 请求频率超出当前共享额度，遵守 Retry-After}
+  /api/v1/pool/leases/commit:
+    post:
+      tags: [Mailbox Pool]
+      operationId: commitPoolLeases
+      summary: 批量确认项目已领取邮箱的使用状态
+      description: |
+        每组1至50个不同lease，仅操作当前项目有效已领取或已为used的记录。
+        同一事务提交，任一项无效或已关闭则整组不提交。重复提交used保持幂等。
+        成功记录沿输入顺序返回，不包含取件凭据。应答未知时先读取原lease确认结果，
+        不使用新request_id另领邮箱，也不将未知批量写直接替换为单项写。
+      security:
+        - poolKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lease_ids]
+              properties:
+                lease_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 50
+                  uniqueItems: true
+                  items: {type: string, minLength: 1}
+      responses:
+        "200":
+          description: 整组确认使用完成；响应禁止缓存。
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [leases]
+                    properties:
+                      leases:
+                        type: array
+                        minItems: 1
+                        maxItems: 50
+                        items:
+                          type: object
+                          required: [id, alias_id, address, client_id, project, request_id, state, created_at, expires_at, updated_at]
+                          properties:
+                            id: {type: string}
+                            alias_id: {type: integer, minimum: 0}
+                            address: {type: string, format: email}
+                            client_id: {type: string}
+                            project: {type: string}
+                            request_id: {type: string}
+                            state: {type: string, const: used}
+                            created_at: {type: string, format: date-time}
+                            expires_at: {type: string, format: date-time}
+                            updated_at: {type: string, format: date-time}
+        "400": {description: lease_ids为空、超长、重复或格式有误}
+        "401": {description: 项目 Key 无效}
+        "404": {description: lease不存在或属于其他项目}
+        "409": {description: lease已关闭或过期，整组不提交}
+        "429": {description: 请求频率超出当前共享额度，遵守 Retry-After}
+        "503": {description: 邮箱池暂时不可用，先保留原租约并读取结果}
   /api/v1/pool/leases/{leaseID}/code:
     get:
       tags: [Mailbox Pool]

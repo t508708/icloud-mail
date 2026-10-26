@@ -64,6 +64,10 @@ func (s *Server) registerPoolRoutes(api *gin.RouterGroup) {
 	api.GET("/leases/:leaseID/code", s.poolAuth(), s.poolLeaseCode)
 	api.Use(s.poolLock(), s.poolAuth())
 	api.POST("/claim", s.poolClaim)
+	api.GET("/capabilities", func(c *gin.Context) {
+		c.JSON(200, gin.H{"data": gin.H{"batch_commit_max": 50}})
+	})
+	api.POST("/leases/commit", s.poolCommitLeases)
 	api.GET("/leases", s.poolListLeases)
 	api.GET("/leases/:leaseID", s.poolGetLease)
 	api.POST("/leases/:leaseID/commit", s.poolLeaseAction("commit", false))

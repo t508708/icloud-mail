@@ -82,6 +82,20 @@ type PoolPage[T any] struct {
 	Total int `json:"total"`
 }
 
+// The address survives alias deletion in lease history. Keep this expression
+// identical to pool_lease_consumed_address so each candidate is an index probe.
+const poolUnconsumedAliasSQL = `NOT EXISTS (SELECT 1 FROM pool_leases consumed
+ WHERE lower(trim(consumed.address))=lower(trim(al.address))
+ AND consumed.state IN ('used','retiring','retired'))`
+
+const poolClaimableAliasSQL = `al.enabled=TRUE AND a.enabled=TRUE
+ AND al.credential_mode='v2' AND al.credential_version>0 AND ` + poolUnconsumedAliasSQL
+
+// Snapshot only an available conflict as paused; preserve actual live states.
+// The same expression also handles snapshots left by older deployments.
+const poolSnapshotMemberStateSQL = `CASE WHEN m.state='available' AND NOT (` + poolUnconsumedAliasSQL + `)
+ THEN 'paused' ELSE m.state END`
+
 func poolID() (string, error) {
 	var b [24]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -128,11 +142,15 @@ func (s *Store) migratePool(ctx context.Context, tx *sql.Tx) error {
 	if err := s.migratePoolLeaseStates(ctx, tx); err != nil {
 		return err
 	}
+	if _, err := s.txExecContext(ctx, tx, `CREATE INDEX IF NOT EXISTS pool_lease_consumed_address
+		ON pool_leases(lower(trim(address))) WHERE state IN ('used','retiring','retired')`); err != nil {
+		return fmt.Errorf("index consumed pool addresses: %w", err)
+	}
 	if err := s.migratePoolAliasRetirementJobs(ctx, tx); err != nil {
 		return err
 	}
 	if _, err := s.txExecContext(ctx, tx, `INSERT INTO pool_suspended_members(alias_id,state,updated_at)
-		SELECT m.alias_id,m.state,m.updated_at FROM pool_members m
+		SELECT m.alias_id,`+poolSnapshotMemberStateSQL+`,m.updated_at FROM pool_members m
 		JOIN aliases al ON al.id=m.alias_id JOIN accounts a ON a.id=al.account_id
 		WHERE a.enabled=FALSE ON CONFLICT(alias_id) DO NOTHING`); err != nil {
 		return fmt.Errorf("snapshot disabled-account pool members: %w", err)
@@ -330,7 +348,7 @@ func (s *Store) UpdatePoolClient(ctx context.Context, id string, enabled bool, r
 func (s *Store) ListPoolAccounts(ctx context.Context) ([]PoolAccount, error) {
 	rows, err := s.queryContext(ctx, `SELECT a.id,a.email,COALESCE(p.auto_enroll,FALSE),COALESCE(p.target,0),
 	 (SELECT COUNT(*) FROM pool_members m JOIN aliases al ON al.id=m.alias_id
-	  WHERE al.account_id=a.id AND al.enabled=TRUE AND a.enabled=TRUE AND m.state='available')
+	  WHERE al.account_id=a.id AND m.state='available' AND `+poolClaimableAliasSQL+`)
 	 FROM accounts a LEFT JOIN pool_accounts p ON p.account_id=a.id ORDER BY a.id`)
 	if err != nil {
 		return nil, err
@@ -381,7 +399,9 @@ func (s *Store) EnrollPoolAliases(ctx context.Context, ids []int64) error {
 	for _, id := range ids {
 		var eligible int
 		err = s.txQueryRowContext(ctx, tx, `SELECT COUNT(*) FROM aliases al JOIN accounts a ON a.id=al.account_id
-		 WHERE al.id=? AND al.enabled=TRUE AND a.enabled=TRUE AND al.credential_mode='v2' AND al.credential_version>0`, id).Scan(&eligible)
+		 WHERE al.id=? AND al.enabled=TRUE AND a.enabled=TRUE AND al.credential_mode='v2' AND al.credential_version>0
+		 AND (`+poolUnconsumedAliasSQL+` OR EXISTS (SELECT 1 FROM pool_members existing
+		 WHERE existing.alias_id=al.id AND existing.state IN ('leased','used')))`, id).Scan(&eligible)
 		if err != nil {
 			return err
 		}
@@ -404,7 +424,11 @@ func (s *Store) SetPoolMember(ctx context.Context, id int64, state string) error
 		return err
 	}
 	defer tx.Rollback()
-	result, err := s.txExecContext(ctx, tx, `UPDATE pool_members SET state=?,updated_at=? WHERE alias_id=? AND state IN ('available','paused')`, state, timestamp(s.now()), id)
+	query := `UPDATE pool_members SET state=?,updated_at=? WHERE alias_id=? AND state IN ('available','paused')`
+	if state == "available" {
+		query += ` AND EXISTS (SELECT 1 FROM aliases al WHERE al.id=pool_members.alias_id AND ` + poolUnconsumedAliasSQL + `)`
+	}
+	result, err := s.txExecContext(ctx, tx, query, state, timestamp(s.now()), id)
 	if err != nil {
 		return err
 	}
@@ -421,7 +445,9 @@ func (s *Store) SetPoolMember(ctx context.Context, id int64, state string) error
 func (s *Store) ListPoolMembers(ctx context.Context, state, search string, limit, offset int) (PoolPage[PoolMember], error) {
 	page := PoolPage[PoolMember]{Items: []PoolMember{}}
 	where := ` FROM pool_members m JOIN aliases al ON al.id=m.alias_id JOIN accounts a ON a.id=al.account_id
-	 LEFT JOIN mail_groups g ON g.id=al.group_id WHERE (?='' OR m.state=?) AND LOWER(al.address) LIKE ?`
+	 LEFT JOIN mail_groups g ON g.id=al.group_id
+	 WHERE (m.state<>'available' OR (` + poolClaimableAliasSQL + `))
+	 AND (?='' OR m.state=?) AND LOWER(al.address) LIKE ?`
 	args := []any{state, state, "%" + strings.ToLower(search) + "%"}
 	if err := s.queryRowContext(ctx, `SELECT COUNT(*)`+where, args...).Scan(&page.Total); err != nil {
 		return page, err
@@ -533,7 +559,7 @@ func (s *Store) ClaimPool(ctx context.Context, clientID string, input PoolClaim)
 		return nil, err
 	}
 	rows, err := s.txQueryContext(ctx, tx, `SELECT al.id,al.account_id FROM pool_members m JOIN aliases al ON al.id=m.alias_id JOIN accounts a ON a.id=al.account_id
-	 WHERE m.state='available' AND al.enabled=TRUE AND a.enabled=TRUE AND al.credential_mode='v2' AND al.credential_version>0
+	 WHERE m.state='available' AND `+poolClaimableAliasSQL+`
 	 AND (?=0 OR a.id=?) AND (?=0 OR al.group_id=?) ORDER BY a.id,al.id LIMIT ?`, input.AccountID, input.AccountID, input.GroupID, input.GroupID, input.Count)
 	if err != nil {
 		return nil, err
@@ -619,6 +645,14 @@ func (s *Store) ActPoolLease(ctx context.Context, id, clientID, action string, t
 		return PoolLease{}, err
 	}
 	defer tx.Rollback()
+	v, err := s.actPoolLeaseTx(ctx, tx, id, clientID, action, ttl)
+	if err != nil {
+		return v, err
+	}
+	return v, tx.Commit()
+}
+
+func (s *Store) actPoolLeaseTx(ctx context.Context, tx *sql.Tx, id, clientID, action string, ttl int) (PoolLease, error) {
 	v, err := scanPoolLease(s.txQueryRowContext(ctx, tx, poolLeaseSelect+` WHERE l.id=? AND (?='' OR l.client_id=?)`, id, clientID, clientID))
 	if err != nil {
 		return v, err
@@ -646,7 +680,7 @@ func (s *Store) ActPoolLease(ctx context.Context, id, clientID, action string, t
 		if _, err = s.txExecContext(ctx, tx, `UPDATE pool_leases SET state=?,updated_at=? WHERE id=?`, v.State, timestamp(now), v.ID); err != nil {
 			return v, err
 		}
-		return v, tx.Commit()
+		return v, nil
 	}
 	var accountID int64
 	if err = s.txQueryRowContext(ctx, tx, `SELECT account_id FROM aliases WHERE id=?`, v.AliasID).Scan(&accountID); err != nil {
@@ -675,6 +709,14 @@ func (s *Store) ActPoolLease(ctx context.Context, id, clientID, action string, t
 			return v, err
 		}
 		memberState = "available"
+		var consumed bool
+		if err = s.txQueryRowContext(ctx, tx, `SELECT EXISTS(SELECT 1 FROM pool_leases
+			WHERE lower(trim(address))=lower(trim(?)) AND state IN ('used','retiring','retired'))`, alias.Address).Scan(&consumed); err != nil {
+			return v, err
+		}
+		if consumed {
+			memberState = "paused"
+		}
 		v.State = "released"
 		if action == "expire" {
 			v.State = "expired"
@@ -693,7 +735,7 @@ func (s *Store) ActPoolLease(ctx context.Context, id, clientID, action string, t
 			return v, err
 		}
 	}
-	return v, tx.Commit()
+	return v, nil
 }
 
 // RefreshPool adds only addresses created after opting an account into the pool.
@@ -708,6 +750,7 @@ func (s *Store) RefreshPool(ctx context.Context) error {
 	 SELECT al.id,'available',? FROM aliases al JOIN pool_accounts p ON p.account_id=al.account_id
 	 JOIN accounts a ON a.id=al.account_id WHERE p.auto_enroll=TRUE AND al.id>p.enroll_after
 	 AND al.enabled=TRUE AND a.enabled=TRUE AND al.credential_mode='v2' AND al.credential_version>0
+	 AND `+poolUnconsumedAliasSQL+`
 	 ON CONFLICT(alias_id) DO NOTHING`, timestamp(s.now()))
 	if err != nil {
 		return err
@@ -760,6 +803,7 @@ func (s *Store) PoolCreationAllowed(ctx context.Context, accountID int64) (bool,
 	var count int
 	err = s.queryRowContext(ctx, `SELECT COUNT(*) FROM aliases al LEFT JOIN pool_members m ON m.alias_id=al.id
 	 WHERE al.account_id=? AND al.enabled=TRUE AND al.credential_mode='v2' AND al.credential_version>0
+	 AND `+poolUnconsumedAliasSQL+`
 	 AND (m.state='available' OR (m.alias_id IS NULL AND al.id>?))`, accountID, after).Scan(&count)
 	return count < target, err
 }

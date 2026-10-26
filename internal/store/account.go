@@ -235,7 +235,7 @@ func (s *Store) UpdateAccount(ctx context.Context, account domain.Account) (doma
 	reenabled := !currentEnabled && account.Enabled
 	if !account.Enabled {
 		if _, err := s.txExecContext(ctx, tx, `INSERT INTO pool_suspended_members(alias_id,state,updated_at)
-			SELECT m.alias_id,m.state,m.updated_at FROM pool_members m
+			SELECT m.alias_id,`+poolSnapshotMemberStateSQL+`,m.updated_at FROM pool_members m
 			JOIN aliases al ON al.id=m.alias_id WHERE al.account_id=?
 			ON CONFLICT(alias_id) DO NOTHING`, account.ID); err != nil {
 			return domain.Account{}, fmt.Errorf("snapshot pool members after account disable: %w", err)
@@ -256,8 +256,8 @@ func (s *Store) UpdateAccount(ctx context.Context, account domain.Account) (doma
 	}
 	if reenabled {
 		if _, err := s.txExecContext(ctx, tx, `INSERT INTO pool_members(alias_id,state,updated_at)
-			SELECT suspended.alias_id,suspended.state,suspended.updated_at
-			FROM pool_suspended_members suspended JOIN aliases al ON al.id=suspended.alias_id
+			SELECT m.alias_id,`+poolSnapshotMemberStateSQL+`,m.updated_at
+			FROM pool_suspended_members m JOIN aliases al ON al.id=m.alias_id
 			WHERE al.account_id=? ON CONFLICT(alias_id) DO NOTHING`, account.ID); err != nil {
 			return domain.Account{}, fmt.Errorf("restore pool members after account re-enable: %w", err)
 		}

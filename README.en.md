@@ -8,7 +8,7 @@
 
 Self-hosted · Multiple primary accounts · Mailbox pools · On-demand mail retrieval · Light and dark themes
 
-**Current version: v0.2.8**
+**Current version: v0.2.9**
 
 [Downloads and release notes](https://github.com/t508708/icloud-mail/releases) · [Docker deployment](#docker-deployment) · [API documentation](docs/POOL.md) · [Changelog](CHANGELOG.md)
 
@@ -36,16 +36,12 @@ Discuss your experience, report issues, suggest features, share deployment tips,
 
 ## Recent Updates
 
-**v0.2.8: Fewer repeated manual logins.**
+**v0.2.9: Prevent reused addresses and show accurate available inventory.**
 
-- Enable automatic session maintenance per primary account, storing the Apple account password, two-factor code retrieval URL, and account region to support automatic re-login for both channels.
-- Recovery is triggered by events such as session expiration, reducing repeated checks. Ordinary rate limits, creation quotas, and temporary network errors do not trigger repeated logins.
-- Fixed issues with some code retrieval URLs and directory reads, as well as page jumps when opening or closing the connection management dialog.
-
-**Subsequent fixes on the main branch, not yet included in a new formal release:**
-
-- Directory synchronization now follows Apple's current complete directory, removing local addresses and pool members that no longer exist upstream and closing invalid leases. The dashboard shows a single mailbox count.
-- Fixed long-pending candidates blocking later creation, and added tests for directory reconciliation across both channels and cleanup rollback.
+- Previously used addresses stay excluded even after deletion and re-import under a new ID. Inventory lists, filtered totals, and claimable counts follow the same rules.
+- Re-enabling a primary account keeps addresses with prior usage paused while preserving other mailbox states and project ownership.
+- Confirm up to 50 acquired mailboxes in one request, reducing API calls for larger workloads.
+- Includes complete-directory cleanup and fixes for long-pending addresses, with updated deployment and API documentation.
 
 See [CHANGELOG.md](CHANGELOG.md) for full feature changes, fixes, and upgrade notes.
 
