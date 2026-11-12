@@ -34,7 +34,25 @@
         <p class="field-help">密码仅用于本次登录，完成后保存加密会话。</p>
       </el-form>
       <el-form v-else label-position="top" :disabled="blocked" @submit.prevent="verify">
-        <p class="field-help">在受信任的 Apple 设备上允许登录，并填写六位验证码。</p>
+        <p class="field-help">{{ verificationHint() }}</p>
+        <template v-if="verification">
+          <el-alert v-if="verification.delivery_warning" :title="verification.delivery_warning" type="warning" :closable="false" show-icon />
+          <el-form-item label="验证码接收方式">
+            <el-select v-model="verificationMethod" style="width:100%">
+              <el-option v-if="verification.phones?.length" label="手机号短信" value="sms" />
+              <el-option label="受信任的 Apple 设备" value="device" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="verificationMethod === 'sms'" label="受信任手机号">
+            <el-select v-model="verificationPhoneId" style="width:100%">
+              <el-option v-for="phone in verification.phones" :key="phone.id" :label="phone.label" :value="phone.id" />
+            </el-select>
+          </el-form-item>
+          <el-button v-if="!(verificationMethod === 'sms' && verification.sms_hidden)" :loading="loading" @click="requestCode">
+            {{ verificationMethod === 'sms' ? '发送短信验证码' : '请求设备验证码' }}
+          </el-button>
+          <p class="field-help">已经收到验证码可直接填写，不必重发；每次发送至少间隔 60 秒，Apple 要求更久时继续等待。</p>
+        </template>
         <el-form-item label="验证码"><el-input v-model="code" maxlength="6" inputmode="numeric" autocomplete="one-time-code" /></el-form-item>
       </el-form>
       <template #footer>
@@ -47,7 +65,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { getAppleAccountAuth, loginAppleAccountAuth, verifyAppleAccountAuth, deleteAppleAccountAuth } from "../api/admin.js";
+import { getAppleAccountAuth, loginAppleAccountAuth, verifyAppleAccountAuth, deleteAppleAccountAuth, requestAppleAccountVerificationCode } from "../api/admin.js";
 import { ElMessage } from "element-plus";
 import RequestAlert from "./RequestAlert.vue";
 
@@ -55,6 +73,7 @@ const props = defineProps({ accountId: { type: [Number, String], required: true 
 const emit = defineEmits(["busy", "session-change", "open-web-login", "disconnect-web"]);
 const visible = ref(false), loading = ref(false), error = ref(null), session = ref(null), step = ref("manage");
 const appleId = ref(""), password = ref(""), region = ref("global"), code = ref(""), challengeId = ref("");
+const verification = ref(null), verificationMethod = ref("device"), verificationPhoneId = ref(null);
 const accountAuthenticated = computed(() => session.value?.status === "authenticated");
 const statusLabel = computed(() => session.value?.health === "retry_wait" ? "等待续期重试" : ({ authenticated: "已登录", expired: "需重新登录", verification_required: "待验证" }[session.value?.status] || "未登录"));
 function connectionTime(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? "待确认" : date.toLocaleString("zh-CN", { hour12: false }); }
@@ -62,7 +81,20 @@ const blocked = computed(() => props.busy || loading.value);
 let alive = true, generation = 0, sessionRequest = 0;
 function guard() { const g = generation, id = props.accountId; return () => alive && g === generation && id === props.accountId; }
 function publish() { emit("session-change", session.value); }
-function clearSecrets() { password.value = ""; code.value = ""; challengeId.value = ""; }
+function clearSecrets() { password.value = ""; code.value = ""; challengeId.value = ""; verification.value = null; }
+function applyVerification(info) {
+  verification.value = info || null;
+  verificationMethod.value = info?.method || (info?.phones?.length ? "sms" : "device");
+  verificationPhoneId.value = info?.method === "sms" ? info.phone_id : (info?.phones?.[0]?.id ?? null);
+}
+function verificationHint() {
+  const info = verification.value;
+  if (!info) return "在受信任的 Apple 设备上允许登录，并填写六位验证码。";
+  if (info.method === "sms" && info.sent) return "Apple 已接受短信请求，请填写对应手机号收到的验证码。";
+  if (info.method === "device" && info.sent) return "Apple 已接受设备验证码请求，请查看受信任的 Apple 设备。";
+  if (info.phones?.length) return "请选择短信或设备验证；若已经收到短信，选择对应手机号后直接填写即可。";
+  return "Apple 本次未提供可识别的短信手机号，请填写当前登录收到的设备验证码。";
+}
 watch(loading, busy => emit("busy", busy), { flush: "sync" });
 
 async function load() {
@@ -107,6 +139,7 @@ async function login() {
     if (result.status === "verification_required") {
       if (!result.challengeId) throw new Error("登录未返回验证标识，请重新登录。");
       challengeId.value = result.challengeId; step.value = "verification";
+      applyVerification(result.verification);
     } else if (result.status === "authenticated") {
       step.value = "manage"; clearSecrets(); ElMessage.success("新建连接已登录");
     } else throw new Error("登录状态未确认，请重新登录。");
@@ -119,13 +152,30 @@ async function verify() {
   if (!/^\d{6}$/.test(code.value)) { error.value = new Error("请填写六位数字验证码"); return; }
   const current = guard(); ++sessionRequest; loading.value = true; error.value = null;
   try {
-    const result = await verifyAppleAccountAuth(props.accountId, { challenge_id: challengeId.value, code: code.value }, props.csrfToken);
+    const payload = { challenge_id: challengeId.value, code: code.value };
+    if (verification.value) {
+      payload.verification_method = verificationMethod.value;
+      if (verificationMethod.value === "sms") payload.phone_id = verificationPhoneId.value;
+    }
+    const result = await verifyAppleAccountAuth(props.accountId, payload, props.csrfToken);
     if (!current()) return;
     if (result.status !== "authenticated") throw new Error("登录验证尚未完成，请重试。");
     session.value = result.appleSession; publish(); clearSecrets(); step.value = "manage";
     ElMessage.success("新建连接已登录");
   } catch (e) { if (current()) error.value = e; }
   finally { if (current()) { code.value = ""; loading.value = false; } }
+}
+async function requestCode() {
+  if (blocked.value || !challengeId.value) return;
+  const current = guard(); ++sessionRequest; loading.value = true; error.value = null; code.value = "";
+  try {
+    const result = await requestAppleAccountVerificationCode(props.accountId, {
+      challenge_id: challengeId.value, method: verificationMethod.value,
+      phone_id: verificationMethod.value === "sms" ? verificationPhoneId.value : 0,
+    }, props.csrfToken);
+    if (current()) applyVerification(result.verification);
+  } catch (e) { if (current()) error.value = e; }
+  finally { if (current()) loading.value = false; }
 }
 async function logoutAccount() {
   if (blocked.value) return;

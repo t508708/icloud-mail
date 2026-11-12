@@ -9,25 +9,29 @@ import (
 )
 
 const (
-	CodeLoginRequired               = "APPLE_LOGIN_REQUIRED"
-	CodeSessionExpired              = "APPLE_SESSION_EXPIRED"
-	CodeHMEUnavailable              = "APPLE_HME_UNAVAILABLE"
-	CodeHMEAuthentication           = "APPLE_HME_AUTH_FAILED"
-	CodeCredentialsInvalid          = "APPLE_CREDENTIALS_INVALID"
-	CodeVerificationInvalid         = "APPLE_VERIFICATION_INVALID"
-	CodeFlowExpired                 = "APPLE_FLOW_EXPIRED"
-	CodeAccountActionRequired       = "APPLE_ACCOUNT_ACTION_REQUIRED"
-	CodeRateLimited                 = "APPLE_RATE_LIMITED"
-	CodeUpstreamError               = "APPLE_UPSTREAM_ERROR"
-	CodeForwardingTargetMissing     = "APPLE_FORWARDING_TARGET_MISSING"
-	CodeAliasConfirmationPending    = domain.AppleAliasConfirmationPending
-	CodeAccountMismatch             = "APPLE_ACCOUNT_MISMATCH"
-	CodeAccountChanged              = "ACCOUNT_CHANGED"
-	CodeAliasOwnershipConflict      = "ALIAS_OWNERSHIP_CONFLICT"
-	CodeAccountDisabled             = "ACCOUNT_DISABLED"
-	CodePersistenceError            = "AUTO_CREATION_PERSISTENCE_ERROR"
-	CodeCryptoError                 = "AUTO_CREATION_CRYPTO_ERROR"
-	CodeMailboxAuthenticationPaused = "IMAP_AUTHENTICATION_PAUSED"
+	CodeLoginRequired                 = "APPLE_LOGIN_REQUIRED"
+	CodeSessionExpired                = "APPLE_SESSION_EXPIRED"
+	CodeHMEUnavailable                = "APPLE_HME_UNAVAILABLE"
+	CodeHMEAuthentication             = "APPLE_HME_AUTH_FAILED"
+	CodeCredentialsInvalid            = "APPLE_CREDENTIALS_INVALID"
+	CodeVerificationInvalid           = "APPLE_VERIFICATION_INVALID"
+	CodeFlowExpired                   = "APPLE_FLOW_EXPIRED"
+	CodePhoneSelectionRequired        = "APPLE_PHONE_SELECTION_REQUIRED"
+	CodeVerificationMethodUnavailable = "APPLE_VERIFICATION_METHOD_UNAVAILABLE"
+	CodeAccountActionRequired         = "APPLE_ACCOUNT_ACTION_REQUIRED"
+	CodeRateLimited                   = "APPLE_RATE_LIMITED"
+	CodeAliasCapacity                 = "APPLE_ALIAS_CAPACITY_REACHED"
+	CodeCreationNotAllowed            = "APPLE_CREATION_NOT_ALLOWED"
+	CodeUpstreamError                 = "APPLE_UPSTREAM_ERROR"
+	CodeForwardingTargetMissing       = "APPLE_FORWARDING_TARGET_MISSING"
+	CodeAliasConfirmationPending      = domain.AppleAliasConfirmationPending
+	CodeAccountMismatch               = "APPLE_ACCOUNT_MISMATCH"
+	CodeAccountChanged                = "ACCOUNT_CHANGED"
+	CodeAliasOwnershipConflict        = "ALIAS_OWNERSHIP_CONFLICT"
+	CodeAccountDisabled               = "ACCOUNT_DISABLED"
+	CodePersistenceError              = "AUTO_CREATION_PERSISTENCE_ERROR"
+	CodeCryptoError                   = "AUTO_CREATION_CRYPTO_ERROR"
+	CodeMailboxAuthenticationPaused   = "IMAP_AUTHENTICATION_PAUSED"
 )
 
 var (
@@ -39,6 +43,8 @@ var (
 	ErrFlowExpired              = errors.New("Apple verification flow expired")
 	ErrAccountActionRequired    = errors.New("Apple account action required")
 	ErrRateLimited              = errors.New("Apple request rate limited")
+	ErrAliasCapacity            = errors.New("Apple alias capacity reached")
+	ErrCreationNotAllowed       = errors.New("Apple alias creation precondition not met")
 	ErrUpstream                 = errors.New("Apple upstream request failed")
 	ErrForwardingTargetMissing  = errors.New("Apple forwarding target is missing")
 	ErrAliasConfirmationPending = errors.New("Apple alias confirmation pending")
@@ -217,6 +223,10 @@ func mapAppleError(err error, duringVerification bool) error {
 		return err
 	}
 	switch {
+	case errors.Is(err, apple.ErrAliasCapacity):
+		return wrapError(CodeAliasCapacity, ErrAliasCapacity, err)
+	case errors.Is(err, apple.ErrCreationNotAllowed):
+		return wrapError(CodeCreationNotAllowed, ErrCreationNotAllowed, err)
 	case errors.Is(err, apple.ErrHMEUnavailable):
 		return wrapError(CodeHMEUnavailable, ErrHMEUnavailable, err)
 	case errors.Is(err, apple.ErrHMEAuthentication):

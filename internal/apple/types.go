@@ -54,6 +54,7 @@ func DefaultEndpoints(region Region) (Endpoints, error) {
 // Session is the complete resumable Apple web session. It intentionally has
 // no password field and can be encrypted and persisted as JSON by callers.
 type Session struct {
+	WebVerification             *WebVerification   `json:"web_verification,omitempty"`
 	Account                     *AccountSession    `json:"account_session,omitempty"`
 	Region                      Region             `json:"region"`
 	AppleID                     string             `json:"apple_id,omitempty"`

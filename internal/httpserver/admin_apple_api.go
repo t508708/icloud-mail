@@ -42,6 +42,8 @@ type adminAPIAppleAuthRequest struct {
 type adminAPIAppleVerifyRequest struct {
 	ChallengeID string `json:"challenge_id"`
 	Code        string `json:"code"`
+	Method      string `json:"verification_method,omitempty"`
+	PhoneID     *int64 `json:"phone_id,omitempty"`
 }
 
 type adminAPIAppleSessionDTO struct {
@@ -58,9 +60,10 @@ type adminAPIAppleSessionDTO struct {
 }
 
 type adminAPIAppleAuthResultDTO struct {
-	Status       string                   `json:"status"`
-	ChallengeID  string                   `json:"challenge_id,omitempty"`
-	AppleSession *adminAPIAppleSessionDTO `json:"apple_session"`
+	Status       string                       `json:"status"`
+	ChallengeID  string                       `json:"challenge_id,omitempty"`
+	AppleSession *adminAPIAppleSessionDTO     `json:"apple_session"`
+	Verification *hmesync.WebVerificationInfo `json:"verification,omitempty"`
 }
 
 type adminAPIAppleSyncSummaryDTO struct {
@@ -133,6 +136,7 @@ func (s *Server) adminAPIStartAppleAuth(c *gin.Context) {
 		return
 	}
 	s.audit(c, &adminSession.AdminID, adminSession.Username, "apple_auth_start", "account", strconv.FormatInt(accountID, 10), "success", result.Status)
+	s.logAppleVerification(accountID, result, requestID(c))
 	writeAdminAPIData(c, status, adminAPIAppleAuthResult(result))
 }
 
@@ -152,16 +156,34 @@ func (s *Server) adminAPIVerifyAppleAuth(c *gin.Context) {
 		writeAdminAPIError(c, http.StatusBadRequest, "VALIDATION_FAILED", "验证码请求信息无效")
 		return
 	}
+	if input.Method != "" && input.Method != "sms" && input.Method != "device" || input.Method == "sms" && input.PhoneID == nil || input.PhoneID != nil && (*input.PhoneID < 0 || *input.PhoneID > 9007199254740991) {
+		writeAdminAPIError(c, http.StatusBadRequest, "VALIDATION_FAILED", "请选择本次登录提供的验证方式和手机号")
+		return
+	}
 
 	adminSession := mustSession(c)
 	if s.hmeSync == nil {
 		s.adminAPIFinishAppleFailure(c, adminSession, accountID, "apple_auth_verify", adminAPIAppleServiceUnavailable())
 		return
 	}
-	result, err := s.hmeSync.VerifyAuth(
-		c.Request.Context(), adminSession.AdminID, accountID,
-		input.ChallengeID, input.Code,
-	)
+	var result hmesync.AuthResult
+	var err error
+	if input.Method != "" {
+		service, ok := s.hmeSync.(interface {
+			VerifyAuthWithMethod(context.Context, int64, int64, string, string, string, int64) (hmesync.AuthResult, error)
+		})
+		if !ok {
+			s.adminAPIFinishAppleFailure(c, adminSession, accountID, "apple_auth_verify", adminAPIAppleServiceUnavailable())
+			return
+		}
+		phoneID := int64(0)
+		if input.PhoneID != nil {
+			phoneID = *input.PhoneID
+		}
+		result, err = service.VerifyAuthWithMethod(c.Request.Context(), adminSession.AdminID, accountID, input.ChallengeID, input.Code, input.Method, phoneID)
+	} else {
+		result, err = s.hmeSync.VerifyAuth(c.Request.Context(), adminSession.AdminID, accountID, input.ChallengeID, input.Code)
+	}
 	input.Code = ""
 	if err != nil {
 		s.adminAPIFinishAppleFailure(c, adminSession, accountID, "apple_auth_verify", classifyAdminAPIAppleError(err))
@@ -300,6 +322,7 @@ func adminAPIAppleAuthResult(result hmesync.AuthResult) adminAPIAppleAuthResultD
 		Status:       result.Status,
 		ChallengeID:  result.ChallengeID,
 		AppleSession: adminAPIAppleSessionFromInfo(result.Session),
+		Verification: result.Verification,
 	}
 }
 
@@ -362,13 +385,14 @@ func (s *Server) adminAPIAppleCreatedAliases(created []hmesync.CreatedAlias) ([]
 }
 
 type adminAPIAppleError struct {
-	Status                int
-	Code                  string
-	Message               string
-	UpstreamOperation     string
-	UpstreamStatus        int
-	UpstreamServiceCode   string
-	WebSessionDiagnostics *apple.WebSessionDiagnostics
+	Status                    int
+	Code                      string
+	Message                   string
+	UpstreamOperation         string
+	UpstreamStatus            int
+	UpstreamServiceCode       string
+	AccountFailureDiagnostics *apple.AccountFailureDiagnostics
+	WebSessionDiagnostics     *apple.WebSessionDiagnostics
 }
 
 func adminAPIAppleServiceUnavailable() adminAPIAppleError {
@@ -386,6 +410,7 @@ func classifyAdminAPIAppleError(err error) (result adminAPIAppleError) {
 			result.UpstreamOperation = upstream.Op
 			result.UpstreamStatus = upstream.StatusCode
 			result.UpstreamServiceCode = upstream.ServiceCode
+			result.AccountFailureDiagnostics = upstream.AccountFailure
 			result.WebSessionDiagnostics = upstream.WebSession
 		}
 	}()
@@ -411,6 +436,10 @@ func classifyAdminAPIAppleError(err error) (result adminAPIAppleError) {
 			code = hmesync.CodeAccountActionRequired
 		case errors.Is(err, hmesync.ErrRateLimited):
 			code = hmesync.CodeRateLimited
+		case errors.Is(err, hmesync.ErrAliasCapacity):
+			code = hmesync.CodeAliasCapacity
+		case errors.Is(err, hmesync.ErrCreationNotAllowed):
+			code = hmesync.CodeCreationNotAllowed
 		case errors.Is(err, hmesync.ErrAccountMismatch):
 			code = hmesync.CodeAccountMismatch
 		case errors.Is(err, hmesync.ErrAccountChanged):
@@ -443,12 +472,20 @@ func classifyAdminAPIAppleError(err error) (result adminAPIAppleError) {
 		return adminAPIAppleError{Status: http.StatusUnprocessableEntity, Code: code, Message: "Apple ID 或密码不正确"}
 	case hmesync.CodeVerificationInvalid:
 		return adminAPIAppleError{Status: http.StatusUnprocessableEntity, Code: code, Message: "验证码不正确，请重新输入"}
+	case hmesync.CodePhoneSelectionRequired:
+		return adminAPIAppleError{Status: http.StatusConflict, Code: code, Message: "Apple 返回多个受信任手机号，请在目录连接登录页选择接收短信的手机号后继续"}
+	case hmesync.CodeVerificationMethodUnavailable:
+		return adminAPIAppleError{Status: http.StatusUnprocessableEntity, Code: code, Message: "所选验证方式或手机号未出现在本次 Apple 登录选项中，请重新选择"}
 	case hmesync.CodeFlowExpired:
 		return adminAPIAppleError{Status: http.StatusGone, Code: code, Message: "验证流程已过期，请重新登录"}
 	case hmesync.CodeAccountActionRequired:
 		return adminAPIAppleError{Status: http.StatusConflict, Code: code, Message: "Apple 账户需要完成条款确认或其他账户操作，请前往 Apple 官网处理后重试"}
 	case hmesync.CodeRateLimited:
 		return adminAPIAppleError{Status: http.StatusTooManyRequests, Code: code, Message: "Apple 请求过于频繁，请稍后再试"}
+	case hmesync.CodeAliasCapacity:
+		return adminAPIAppleError{Status: http.StatusConflict, Code: code, Message: "Apple 已明确返回隐藏邮箱数量达到上限，请先在 Apple 端整理不再使用的地址后再试；重新登录不会增加容量"}
+	case hmesync.CodeCreationNotAllowed:
+		return adminAPIAppleError{Status: http.StatusConflict, Code: code, Message: "Apple 暂未允许创建隐藏邮箱（HTTP 412），返回信息未明确说明原因；这不代表需要处理账户条款，请结合请求编号查看操作日志"}
 	case hmesync.CodeAccountMismatch:
 		return adminAPIAppleError{Status: http.StatusConflict, Code: code, Message: "Apple 登录账户或转发邮箱与该主号不匹配"}
 	case hmesync.CodeAccountChanged:
@@ -456,6 +493,13 @@ func classifyAdminAPIAppleError(err error) (result adminAPIAppleError) {
 	case hmesync.CodeAliasOwnershipConflict:
 		return adminAPIAppleError{Status: http.StatusConflict, Code: code, Message: "隐私邮箱已属于其他主号"}
 	default:
+		var upstream *apple.Error
+		if errors.As(err, &upstream) && strings.HasPrefix(upstream.Op, "request sms two-factor code") {
+			return adminAPIAppleError{Status: http.StatusBadGateway, Code: hmesync.CodeUpstreamError, Message: "Apple 未确认短信验证码发送成功，请稍后重试；本次不会自动重复发送"}
+		}
+		if errors.As(err, &upstream) && strings.HasPrefix(upstream.Op, "request device two-factor code") {
+			return adminAPIAppleError{Status: http.StatusBadGateway, Code: hmesync.CodeUpstreamError, Message: "Apple 未确认设备验证码发送成功，请检查受信任设备或使用手机号短信验证"}
+		}
 		return adminAPIAppleError{Status: http.StatusBadGateway, Code: hmesync.CodeUpstreamError, Message: "Apple 服务暂时异常，请稍后再试"}
 	}
 }
@@ -478,6 +522,7 @@ func (s *Server) adminAPIFinishAppleFailure(
 		"upstream_operation", apiErr.UpstreamOperation,
 		"upstream_status", apiErr.UpstreamStatus,
 		"upstream_service_code", apiErr.UpstreamServiceCode,
+		"account_failure_diagnostics", apiErr.AccountFailureDiagnostics,
 		"hme_request_diagnostics", diagnostics,
 		"request_id", requestID(c),
 	)

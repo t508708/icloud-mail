@@ -27,6 +27,7 @@ const accountAuth = "https://idmsa.apple.com/appleauth/auth"
 const accountUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
 
 type AccountSession struct {
+	Verification         *WebVerification   `json:"verification,omitempty"`
 	AppleID              string             `json:"apple_id"`
 	Region               Region             `json:"region"`
 	SCNT                 string             `json:"scnt,omitempty"`
@@ -189,10 +190,22 @@ func (c *Client) accountCallPolicy(ctx context.Context, s *AccountSession, metho
 	if int64(len(r.body)) > c.maxResponseBytes {
 		return r, r.operationError("account response", ErrResponseTooLarge, nil)
 	}
+	if s.Verification != nil && s.APIKey == "" && s.AuthenticatedAt.IsZero() && u.Host == "idmsa.apple.com" &&
+		(u.Path == "/appleauth/auth/verify/phone" || u.Path == "/appleauth/auth/verify/phone/securitycode" || u.Path == "/appleauth/auth/verify/trusteddevice/securitycode") {
+		// Pending authentication can rotate its anti-replay state on a rejected
+		// code. This never changes a persisted, authenticated management session.
+		s.Cookies = jar.Export()
+		if value := r.header.Get("scnt"); value != "" {
+			s.SCNT = value
+		}
+		if value := r.header.Get("X-Apple-ID-Session-Id"); value != "" {
+			s.SessionID = value
+		}
+	}
 	_, repair := loginRepairLocation(r, headers.Get("X-Apple-Widget-Key"))
 	repair = allowRepair && repair && method == http.MethodPost &&
-		(u.Path == "/appleauth/auth/signin/complete" || u.Path == "/appleauth/auth/verify/trusteddevice/securitycode")
-	if repair && u.Path == "/appleauth/auth/verify/trusteddevice/securitycode" {
+		(u.Path == "/appleauth/auth/signin/complete" || u.Path == "/appleauth/auth/verify/trusteddevice/securitycode" || u.Path == "/appleauth/auth/verify/phone/securitycode")
+	if repair && (u.Path == "/appleauth/auth/verify/trusteddevice/securitycode" || u.Path == "/appleauth/auth/verify/phone/securitycode") {
 		repair = repairCodeWasAccepted(r)
 	}
 	accepted := r.status >= 200 && r.status < 300 || allowConflict && r.status == 409 || repair
@@ -257,18 +270,10 @@ func accountResponseError(r responseData, kind error) *Error {
 		if _, err := strconv.ParseInt(value, 10, 64); err == nil {
 			e.ServiceCode = value
 		}
-		message := strings.ToLower(envelope.ErrorMessage)
-		for _, item := range envelope.ServiceErrors {
-			message += " " + strings.ToLower(item.Message)
-		}
-		if strings.Contains(message, "limit of addresses") || strings.Contains(message, "maximum number of") || strings.Contains(message, "too many") {
-			e.ServiceCode = hmeRateLimitCodeBatch
-		}
 		if strings.EqualFold(strings.TrimSpace(envelope.IneligibilityReason), "rate_limit_exceeded") {
 			// This explicit settings response is a throttle, including on HTTP
 			// 412. Do not expose it as an account-terms action to service callers.
-			e.ServiceCode = hmeRateLimitCodeBatch
-			e.Kind = ErrService
+			e.Kind = ErrRateLimited
 		}
 	}
 	return e
@@ -283,6 +288,10 @@ func (c *Client) accountManagementCall(ctx context.Context, s *AccountSession, m
 	var upstream *Error
 	if errors.As(err, &upstream) {
 		upstream.Op = "account " + method + " " + path
+		if method == http.MethodPost && path == "/account/manage/email/private/add" ||
+			method == http.MethodPut && path == "/account/manage/email/private/add/complete" {
+			classifyAccountCreationFailure(r, upstream)
+		}
 	}
 	return r, err
 }
@@ -505,7 +514,15 @@ func (c *Client) SignInAccount(ctx context.Context, appleID, password string, re
 		h.Set("Accept", "text/html")
 		h.Del("Origin")
 		h.Del("Content-Type")
-		_, _ = c.accountCall(ctx, &s, http.MethodGet, accountAuth, nil, h, false)
+		options, readErr := c.accountCall(ctx, &s, http.MethodGet, accountAuth, nil, h, false)
+		s.Verification = decodeWebVerification(options.body)
+		s.Verification.DiscoveryStatus = options.status
+		if s.Verification.SelectedPhonePresent {
+			s.Verification.Method = "sms"
+		}
+		if readErr != nil {
+			s.Verification.DeliveryFailed = true
+		}
 		return s, true, nil
 	}
 	if r.status == http.StatusPreconditionFailed {
@@ -535,7 +552,18 @@ func (c *Client) VerifyAccountCode(ctx context.Context, s AccountSession, code s
 	h.Set("Accept", "application/json, text/plain, */*")
 	h.Set("X-Apple-App-Id", accountWidget)
 	h.Del("X-Requested-With")
-	r, err := c.accountLoginCall(ctx, &s, "/verify/trusteddevice/securitycode", map[string]any{"securityCode": map[string]string{"code": code}}, h, false)
+	path := "/verify/trusteddevice/securitycode"
+	payload := map[string]any{"securityCode": map[string]string{"code": code}}
+	if v := s.Verification; v != nil && v.Method == "sms" {
+		phone, ok := v.selectedPhone(v.PhoneID)
+		if !ok {
+			return s, ErrInvalidConfig
+		}
+		path = "/verify/phone/securitycode"
+		payload["phoneNumber"] = phone.verificationPayload()
+		payload["mode"] = "sms"
+	}
+	r, err := c.accountLoginCall(ctx, &s, path, payload, h, false)
 	if err != nil {
 		if r.status == 400 || r.status == 401 || r.status == 403 || r.status == 409 || r.status == 422 {
 			return s, accountResponseError(r, ErrTwoFactorCode)
@@ -554,7 +582,11 @@ func (c *Client) VerifyAccountCode(ctx context.Context, s AccountSession, code s
 	if err = c.trustAccountSession(ctx, &s); err != nil {
 		return s, err
 	}
-	return c.RefreshAccountSession(ctx, s)
+	s, err = c.RefreshAccountSession(ctx, s)
+	if err == nil {
+		s.Verification = nil
+	}
+	return s, err
 }
 
 func (c *Client) trustAccountSession(ctx context.Context, s *AccountSession) error {
@@ -626,7 +658,7 @@ func (c *Client) CompleteAccountAlias(ctx context.Context, s AccountSession, ema
 	if err != nil {
 		// Only explicit rejection clears the candidate. Ambiguous completion
 		// retains it for durable staging and read-only directory confirmation.
-		if IsRateLimited(err) || errors.Is(err, ErrInvalidSession) {
+		if IsRateLimited(err) || errors.Is(err, ErrAliasCapacity) || errors.Is(err, ErrInvalidSession) {
 			return Alias{}, s, err
 		}
 		return alias, s, err

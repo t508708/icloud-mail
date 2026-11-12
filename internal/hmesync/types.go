@@ -144,9 +144,33 @@ type SessionInfo struct {
 }
 
 type AuthResult struct {
-	Status      string
-	ChallengeID string
-	Session     SessionInfo
+	Status       string
+	ChallengeID  string
+	Session      SessionInfo
+	Verification *WebVerificationInfo
+}
+
+// WebVerificationInfo exposes only method and opaque phone choices, never a number.
+type WebVerificationInfo struct {
+	Method            string                 `json:"method"`
+	Sent              bool                   `json:"sent"`
+	PhoneID           int64                  `json:"phone_id"`
+	Phones            []WebVerificationPhone `json:"phones"`
+	RequestAfter      *time.Time             `json:"request_after,omitempty"`
+	DiscoveryStatus   int                    `json:"discovery_status,omitempty"`
+	DeliveryStatus    int                    `json:"delivery_status,omitempty"`
+	DeliveryWarning   string                 `json:"delivery_warning,omitempty"`
+	OptionsSource     string                 `json:"options_source,omitempty"`
+	PhoneListPresent  bool                   `json:"phone_list_present"`
+	RawPhoneCount     int                    `json:"raw_phone_count"`
+	InvalidPhoneCount int                    `json:"invalid_phone_count"`
+	SMSHidden         bool                   `json:"sms_hidden"`
+	AutomaticSMS      bool                   `json:"automatic_sms"`
+}
+
+type WebVerificationPhone struct {
+	ID    int64  `json:"id"`
+	Label string `json:"label"`
 }
 
 type SyncSummary struct {

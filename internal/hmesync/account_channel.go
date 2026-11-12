@@ -279,7 +279,7 @@ func (s *Service) StartAccountAuth(ctx context.Context, owner, id int64, appleID
 		s.challengeMu.Lock()
 		s.accountAuthChallenges[id] = flow
 		s.challengeMu.Unlock()
-		return AuthResult{Status: StatusVerificationRequired, ChallengeID: flowID, Session: SessionInfo{Status: StatusVerificationRequired, AppleID: appleID, Region: string(region), ExpiresAt: &flow.expires}}, nil
+		return AuthResult{Status: StatusVerificationRequired, ChallengeID: flowID, Verification: verificationInfo(managed.Verification), Session: SessionInfo{Status: StatusVerificationRequired, AppleID: appleID, Region: string(region), ExpiresAt: &flow.expires}}, nil
 	}
 	if managed.APIKey == "" || managed.AuthenticatedAt.IsZero() {
 		return AuthResult{}, wrapError(CodeAccountSessionExpired, ErrSessionExpired, nil)
@@ -291,6 +291,14 @@ func (s *Service) StartAccountAuth(ctx context.Context, owner, id int64, appleID
 }
 
 func (s *Service) VerifyAccountAuth(ctx context.Context, owner, id int64, challengeID, code string) (AuthResult, error) {
+	return s.verifyAccountAuth(ctx, owner, id, challengeID, code, "", 0)
+}
+
+func (s *Service) VerifyAccountAuthWithMethod(ctx context.Context, owner, id int64, challengeID, code, method string, phoneID int64) (AuthResult, error) {
+	return s.verifyAccountAuth(ctx, owner, id, challengeID, code, method, phoneID)
+}
+
+func (s *Service) verifyAccountAuth(ctx context.Context, owner, id int64, challengeID, code, method string, phoneID int64) (AuthResult, error) {
 	client, ok := s.client.(accountClient)
 	if !ok {
 		return AuthResult{}, wrapError(CodeUpstreamError, ErrUpstream, nil)
@@ -307,8 +315,6 @@ func (s *Service) VerifyAccountAuth(ctx context.Context, owner, id int64, challe
 		s.challengeMu.Unlock()
 		return AuthResult{}, wrapError(CodeFlowExpired, ErrFlowExpired, nil)
 	}
-	flow.attempts++
-	s.accountAuthChallenges[id] = flow
 	s.challengeMu.Unlock()
 	account, err := s.repo.GetAccount(ctx, id)
 	if err != nil {
@@ -324,6 +330,17 @@ func (s *Service) VerifyAccountAuth(ctx context.Context, owner, id int64, challe
 	if webErr == nil && !sameEmail(webRecord.AppleID, flow.session.AppleID) {
 		return AuthResult{}, wrapError(CodeAccountChanged, ErrAccountChanged, nil)
 	}
+	if method != "" {
+		updated, selectErr := selectVerification(flow.session.Verification, method, phoneID)
+		if selectErr != nil {
+			return AuthResult{}, selectErr
+		}
+		flow.session.Verification = updated
+	}
+	flow.attempts++
+	s.challengeMu.Lock()
+	s.accountAuthChallenges[id] = flow
+	s.challengeMu.Unlock()
 	managed, err := client.VerifyAccountCode(ctx, flow.session, code)
 	if err != nil {
 		flow.session = managed

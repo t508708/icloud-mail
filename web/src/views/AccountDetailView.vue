@@ -78,8 +78,26 @@
           @submit.prevent="submitAppleVerification"
         >
           <p class="dialog-form__lead">
-            请在受信任的 Apple 设备上查看验证码。
+            {{ appleVerificationHint() }}
           </p>
+          <template v-if="appleWebVerification">
+            <el-alert v-if="appleWebVerification.delivery_warning" :title="appleWebVerification.delivery_warning" type="warning" :closable="false" show-icon />
+            <el-form-item label="验证码接收方式">
+              <el-select v-model="appleCodeMethod" style="width: 100%">
+                <el-option v-if="appleWebVerification.phones?.length" label="手机号短信" value="sms" />
+                <el-option label="受信任的 Apple 设备" value="device" />
+              </el-select>
+            </el-form-item>
+            <el-form-item v-if="appleCodeMethod === 'sms'" label="受信任手机号">
+              <el-select v-model="appleCodePhoneId" style="width: 100%">
+                <el-option v-for="phone in appleWebVerification.phones" :key="phone.id" :label="phone.label" :value="phone.id" />
+              </el-select>
+            </el-form-item>
+            <el-button v-if="!(appleCodeMethod === 'sms' && appleWebVerification.sms_hidden)" :loading="appleAuthLoading" @click="requestAppleVerificationCodeNow">
+              {{ appleCodeMethod === 'sms' ? '发送短信验证码' : '请求设备验证码' }}
+            </el-button>
+            <p class="form-hint">每次发送后至少等待 60 秒；Apple 要求更久时按其返回时间等待。</p>
+          </template>
           <el-form-item label="6 位验证码" prop="code">
             <el-input
               v-model="appleVerificationForm.code"
@@ -922,6 +940,7 @@ import {
   getAllAliases,
   getMailGroups,
   loginAppleSession,
+  requestAppleVerificationCode,
   moveAliasToGroup as moveAliasToGroupRequest,
   rotateAlias,
   setAliasAutoCreation,
@@ -1090,6 +1109,9 @@ const aliasForm = reactive({ address: "", label: "" });
 const appleLoginForm = reactive({ appleId: "", password: "", region: "global" });
 const appleVerificationForm = reactive({ code: "" });
 const appleAuthChallenge = reactive({ challengeId: "", flow: "" });
+const appleWebVerification = ref(null);
+const appleCodeMethod = ref("device");
+const appleCodePhoneId = ref(null);
 const appleLoginRules = {
   appleId: [{ required: true, message: "请填写 Apple ID", trigger: "blur" }],
   password: [{ required: true, message: "请填写 Apple 账户密码", trigger: "blur" }],
@@ -1200,12 +1222,18 @@ const AUTO_CREATION_ERROR_MESSAGES = Object.freeze({
     "Apple 登录凭据无效，请退出 Apple 登录并重新登录后重试",
   APPLE_VERIFICATION_INVALID:
     "Apple 验证码无效，请重新登录 Apple 账户并完成双重认证后重试",
+  APPLE_PHONE_SELECTION_REQUIRED:
+    "Apple 返回多个受信任手机号，请在目录连接登录页选择接收短信的手机号后继续",
   APPLE_FLOW_EXPIRED:
     "Apple 验证流程已过期，请重新登录 Apple 账户并完成双重认证后重试",
   APPLE_ACCOUNT_ACTION_REQUIRED:
     "Apple 账户需要完成条款确认或其他账户操作，请前往 Apple 官网处理后重试",
   APPLE_RATE_LIMITED:
     "Apple 返回了限流；对应通道默认暂停 1 小时，更长 Retry-After 以 Apple 为准。",
+  APPLE_ALIAS_CAPACITY_REACHED:
+    "Apple 已明确返回隐藏邮箱数量达到上限，请先在 Apple 端整理不再使用的地址；重新登录不会增加容量",
+  APPLE_CREATION_NOT_ALLOWED:
+    "Apple 暂未允许创建隐藏邮箱（HTTP 412），返回信息未明确说明原因；这不代表需要处理账户条款，原因记录见操作日志",
   APPLE_UPSTREAM_ERROR:
     "Apple 服务暂时异常，请稍后再试；自动创建会按计划继续执行",
   APPLE_ALIAS_CONFIRMATION_PENDING:
@@ -1816,6 +1844,7 @@ async function changeMailTransport(transport) {
 }
 
 function resetAppleAuthForm() {
+  appleWebVerification.value = null;
   appleAuthError.value = null;
   appleLoginForm.password = "";
   appleVerificationForm.code = "";
@@ -1828,6 +1857,7 @@ function openAppleLogin({
   resumeAutoCreation = false,
 } = {}) {
   if (!account.value) return;
+  appleWebVerification.value = null;
   resumeAliasSyncAfterAuth = resumeSync;
   resumeAutoCreationAfterAuth = resumeAutoCreation;
   appleAuthStep.value = "login";
@@ -1926,6 +1956,7 @@ async function submitAppleLogin() {
         challengeId: result.challengeId,
         flow: result.flow,
       });
+      applyAppleWebVerification(result.verification);
       appleAuthStep.value = "verification";
       await nextTick();
       appleVerificationFormRef.value?.clearValidate();
@@ -1936,6 +1967,45 @@ async function submitAppleLogin() {
       return;
     }
     throw new Error("Apple 登录返回了未知状态，请重试。");
+  } catch (error) {
+    if (!isCurrentAccount(accountId)) return;
+    appleAuthError.value = error;
+  } finally {
+    appleAuthLoading.value = false;
+  }
+}
+
+function applyAppleWebVerification(info) {
+  appleWebVerification.value = info || null;
+  appleCodeMethod.value = info?.method || (info?.phones?.length ? "sms" : "device");
+  appleCodePhoneId.value = info?.method === "sms" ? info.phone_id : (info?.phones?.[0]?.id ?? null);
+}
+
+function appleVerificationHint() {
+  const info = appleWebVerification.value;
+  if (!info) return "请在受信任的 Apple 设备上查看验证码。";
+  if (info.method === "sms" && info.sent) return "Apple 已接受短信验证码请求，请查看该受信任手机号收到的短信。";
+  if (info.method === "device" && info.sent) return "Apple 已接受设备验证码请求，请查看受信任的 Apple 设备。";
+  if (info.sms_hidden) return "Apple 当前未开放短信重发；如果已经收到短信，请选择对应手机号并直接填写验证码。";
+  if (!info.method && info.phones?.length) return "请选择接收短信的受信任手机号；已有短信可直接填写，否则点击发送。";
+  return "Apple 尚未确认本次验证码发送。可查看设备已有的验证码，或选择手机号发送短信。";
+}
+
+async function requestAppleVerificationCodeNow() {
+  if (appleAuthLoading.value || !account.value || !appleAuthChallenge.challengeId) return;
+  const accountId = account.value.id;
+  appleAuthLoading.value = true;
+  appleAuthError.value = null;
+  appleVerificationForm.code = "";
+  if (appleWebVerification.value) appleWebVerification.value = { ...appleWebVerification.value, sent: false };
+  try {
+    const result = await requestAppleVerificationCode(accountId, {
+      challenge_id: appleAuthChallenge.challengeId,
+      method: appleCodeMethod.value,
+      phone_id: appleCodeMethod.value === "sms" ? appleCodePhoneId.value : 0,
+    }, auth.state.csrfToken);
+    if (!isCurrentAccount(accountId)) return;
+    applyAppleWebVerification(result.verification);
   } catch (error) {
     if (!isCurrentAccount(accountId)) return;
     appleAuthError.value = error;
@@ -1959,6 +2029,10 @@ async function submitAppleVerification() {
       challenge_id: appleAuthChallenge.challengeId,
       code: appleVerificationForm.code.trim(),
     };
+    if (appleWebVerification.value) {
+      verificationPayload.verification_method = appleCodeMethod.value;
+      if (appleCodeMethod.value === "sms") verificationPayload.phone_id = appleCodePhoneId.value;
+    }
     if (appleAuthChallenge.flow) {
       verificationPayload.flow = appleAuthChallenge.flow;
     }

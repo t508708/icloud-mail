@@ -55,7 +55,26 @@ func (s *Server) adminAPIAccountAuth(c *gin.Context) {
 				writeAdminAPIError(c, 400, "VALIDATION_FAILED", "请填写六位验证码")
 				return
 			}
-			result, err = service.VerifyAccountAuth(c.Request.Context(), admin.AdminID, id, in.ChallengeID, in.Code)
+			if in.Method != "" && in.Method != "sms" && in.Method != "device" || in.Method == "sms" && in.PhoneID == nil || in.PhoneID != nil && (*in.PhoneID < 0 || *in.PhoneID > 9007199254740991) {
+				writeAdminAPIError(c, 400, "VALIDATION_FAILED", "请选择本次登录提供的验证方式和手机号")
+				return
+			}
+			if in.Method != "" {
+				selected, ok := s.hmeSync.(interface {
+					VerifyAccountAuthWithMethod(context.Context, int64, int64, string, string, string, int64) (hmesync.AuthResult, error)
+				})
+				if !ok {
+					writeAdminAPIError(c, 503, "APPLE_SERVICE_UNAVAILABLE", "Apple Account 服务暂未就绪")
+					return
+				}
+				phoneID := int64(0)
+				if in.PhoneID != nil {
+					phoneID = *in.PhoneID
+				}
+				result, err = selected.VerifyAccountAuthWithMethod(c.Request.Context(), admin.AdminID, id, in.ChallengeID, in.Code, in.Method, phoneID)
+			} else {
+				result, err = service.VerifyAccountAuth(c.Request.Context(), admin.AdminID, id, in.ChallengeID, in.Code)
+			}
 			in.Code = ""
 			action = "apple_account_verify"
 		} else {
@@ -80,6 +99,7 @@ func (s *Server) adminAPIAccountAuth(c *gin.Context) {
 		return
 	}
 	s.audit(c, &admin.AdminID, admin.Username, action, "account", strconv.FormatInt(id, 10), "success", result.Status)
+	s.logAppleVerificationChannel(id, result, requestID(c), "apple_account")
 	if c.Request.Method == http.MethodDelete {
 		c.Status(http.StatusNoContent)
 		return

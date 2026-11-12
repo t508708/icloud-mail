@@ -156,7 +156,7 @@ func TestAccountAliasCompleteUnknownSettingsReasonKeepsCandidate(t *testing.T) {
 				return accountResp(412, body), nil
 			})
 			a, _, err := c.CreateAccountAlias(context.Background(), AccountSession{SCNT: "s", APIKey: "k", ExpiresAt: time.Now().Add(time.Hour)}, "L", "")
-			if n != 2 || a.HME != "a@icloud.com" || err == nil || !errors.Is(err, ErrTermsRequired) || IsRateLimited(err) {
+			if n != 2 || a.HME != "a@icloud.com" || err == nil || !errors.Is(err, ErrCreationNotAllowed) || errors.Is(err, ErrTermsRequired) || IsRateLimited(err) {
 				t.Fatalf("alias=%+v calls=%d err=%v", a, n, err)
 			}
 		})

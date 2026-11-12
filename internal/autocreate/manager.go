@@ -665,7 +665,7 @@ func (m *Manager) processDue(ctx context.Context, schedule domain.AliasCreationS
 		disableOperation := ""
 		disableMessage := ""
 		switch {
-		case errors.Is(createErr, ErrCapacityReached):
+		case errors.Is(createErr, ErrCapacityReached), errors.Is(createErr, apple.ErrAliasCapacity):
 			disableOperation = "disable_creation_schedule"
 			disableMessage = "达到容量上限后关闭自动创建失败"
 		case disableAliasCreationAfterError(createErr) && !(m.channelAvailability != nil && creationSessionError(createErr)):

@@ -257,6 +257,14 @@ func (s *Service) startAutomaticLogin(ctx context.Context, attempt *automaticLog
 		if err == nil && !sameEmail(attempt.managed.AppleID, attempt.appleID) {
 			return wrapError(CodeAccountMismatch, ErrAccountMismatch, nil)
 		}
+		if err == nil && attempt.verify && attempt.managed.Verification != nil {
+			if attempt.managed.Verification.Method == "" {
+				return wrapError(CodePhoneSelectionRequired, ErrAccountActionRequired, nil)
+			}
+			if attempt.managed.Verification.DeliveryFailed {
+				return mapAppleError(&apple.Error{Op: "read Account two-factor options", Kind: apple.ErrService, StatusCode: attempt.managed.Verification.DiscoveryStatus}, false)
+			}
+		}
 	} else {
 		previous := s.previousSession(ctx, attempt.account.ID, attempt.appleID, region)
 		attempt.web, attempt.verify, err = s.client.SignIn(ctx, attempt.appleID, attempt.credentials.Password, region, previous)
@@ -266,6 +274,12 @@ func (s *Service) startAutomaticLogin(ctx context.Context, attempt *automaticLog
 		normalizeSession(&attempt.web, attempt.appleID, region, s.now())
 		if err == nil && !sameEmail(attempt.web.AppleID, attempt.appleID) {
 			return wrapError(CodeAccountMismatch, ErrAccountMismatch, nil)
+		}
+		if err == nil && attempt.verify && attempt.web.WebVerification != nil && attempt.web.WebVerification.Method == "" {
+			return wrapError(CodePhoneSelectionRequired, ErrAccountActionRequired, nil)
+		}
+		if err == nil && attempt.verify && attempt.web.WebVerification != nil && attempt.web.WebVerification.DeliveryFailed {
+			return mapAppleError(&apple.Error{Op: "request " + attempt.web.WebVerification.Method + " two-factor code", Kind: apple.ErrService, StatusCode: attempt.web.WebVerification.DeliveryStatus}, false)
 		}
 	}
 	if err != nil {

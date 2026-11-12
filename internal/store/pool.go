@@ -46,6 +46,13 @@ type PoolAccount struct {
 	Available  int    `json:"available"`
 }
 
+// PoolClaimableAccount is the deliberately minimal inventory view exposed to
+// a doubly authenticated Pool client. Available matches ClaimPool eligibility.
+type PoolClaimableAccount struct {
+	AccountID int64 `json:"account_id"`
+	Available int   `json:"available"`
+}
+
 type PoolMember struct {
 	AliasID   int64     `json:"alias_id"`
 	AccountID int64     `json:"account_id"`
@@ -361,6 +368,33 @@ func (s *Store) ListPoolAccounts(ctx context.Context) ([]PoolAccount, error) {
 			return nil, err
 		}
 		result = append(result, v)
+	}
+	return result, rows.Err()
+}
+
+// ListPoolClaimableAccounts returns enabled iCloud primary accounts with an
+// availability count that uses the same alias predicates as ClaimPool. The
+// snapshot is advisory; ClaimPool rechecks it atomically before leasing.
+func (s *Store) ListPoolClaimableAccounts(ctx context.Context) ([]PoolClaimableAccount, error) {
+	rows, err := s.queryContext(ctx, `SELECT a.id,COUNT(m.alias_id)
+		FROM accounts a
+		LEFT JOIN account_mailbox_settings ms ON ms.account_id=a.id
+		LEFT JOIN aliases al ON al.account_id=a.id AND al.enabled=TRUE
+			AND al.credential_mode='v2' AND al.credential_version>0
+		LEFT JOIN pool_members m ON m.alias_id=al.id AND m.state='available'
+		WHERE a.enabled=TRUE AND COALESCE(ms.mailbox_type,'icloud')='icloud'
+		GROUP BY a.id ORDER BY a.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []PoolClaimableAccount{}
+	for rows.Next() {
+		var account PoolClaimableAccount
+		if err := rows.Scan(&account.AccountID, &account.Available); err != nil {
+			return nil, err
+		}
+		result = append(result, account)
 	}
 	return result, rows.Err()
 }

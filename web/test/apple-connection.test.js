@@ -15,9 +15,10 @@ function fixture(overrides = {}) {
     loginAppleAccountAuth: async (...args) => { calls.push(["login", ...args]); return { status: "verification_required", challengeId: "fixture-challenge", appleSession: { status: "verification_required" } }; },
     verifyAppleAccountAuth: async (...args) => { calls.push(["verify", ...args]); return { status: "authenticated", appleSession: { status: "authenticated", appleId: "fixture@example.test" } }; },
     deleteAppleAccountAuth: async (...args) => { calls.push(["delete", ...args]); },
+    requestAppleAccountVerificationCode: async (...args) => { calls.push(["send", ...args]); return { status: "verification_required", verification: { method: "sms", phone_id: 7, sent: true, phones: [{ id: 7, label: "受信任手机号 1" }] } }; },
     ...overrides,
   };
-  const factory = Function("computed", "onBeforeUnmount", "ref", "watch", "defineProps", "defineEmits", "ElMessage", ...Object.keys(api), `${script}\nreturn { visible, loading, error, session, statusLabel, step, appleId, password, code, challengeId, openManager, closeManager, openLogin, login, verify, logoutAccount, manageWeb };`);
+  const factory = Function("computed", "onBeforeUnmount", "ref", "watch", "defineProps", "defineEmits", "ElMessage", ...Object.keys(api), `${script}\nreturn { visible, loading, error, session, statusLabel, step, appleId, password, code, challengeId, verification, verificationMethod, verificationPhoneId, requestCode, openManager, closeManager, openLogin, login, verify, logoutAccount, manageWeb };`);
   const component = factory(computed, fn => { dispose = fn; }, ref, watch, () => props, () => (...args) => events.push(args), { success() {} }, ...Object.values(api));
   return { component, props, calls, events, dispose: () => dispose() };
 }
@@ -99,5 +100,22 @@ test("temporary renewal failure remains distinct from a rejected login", async (
   assert.equal(c.statusLabel.value, "等待续期重试");
   c.session.value = { status: "expired", health: "login_required" };
   assert.equal(c.statusLabel.value, "需重新登录");
+  dispose();
+});
+
+test("Account connection selects SMS and submits a received code without resending", async () => {
+  const { component: c, calls, dispose } = fixture({ loginAppleAccountAuth: async (...args) => {
+    calls.push(["login", ...args]);
+    return { status: "verification_required", challengeId: "pending", verification: { method: "device", sent: false, phones: [{ id: 7, label: "受信任手机号 1" }, { id: 9, label: "受信任手机号 2" }] } };
+  } });
+  await nextTick(); c.openLogin(); c.password.value = "fixture-password";
+  await c.login();
+  assert.equal(c.verification.value.phones.length, 2);
+  c.verificationMethod.value = "sms"; c.verificationPhoneId.value = 9; c.code.value = "123456";
+  await c.verify();
+  assert.equal(c.step.value, "manage");
+  assert.deepEqual(calls.map(item => item[0]), ["login", "verify"]);
+  assert.deepEqual(calls[1][2], { challenge_id: "pending", code: "123456", verification_method: "sms", phone_id: 9 });
+  assert.equal(c.verification.value, null);
   dispose();
 });

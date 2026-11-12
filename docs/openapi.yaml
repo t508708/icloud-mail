@@ -110,6 +110,7 @@ paths:
             schema:
               type: object
               required: [lease_ids]
+              additionalProperties: false
               properties:
                 lease_ids:
                   type: array
@@ -986,6 +987,45 @@ paths:
           $ref: "#/components/responses/AdminUnsupportedMediaType"
         "500":
           $ref: "#/components/responses/AdminInternalError"
+
+  /api/v1/pool/accounts/available:
+    servers:
+      - url: https://HOST/{admin_path}
+        description: 安装级管理 API 前缀；将 admin_path 替换为 keys 卷中管理路径去掉首尾斜杠后的形式
+        variables:
+          admin_path:
+            default: 00000000000000000000000000000000/admin
+      - url: https://HOST/admin
+        description: 固定兼容管理入口；管理员 Session 与 Pool Key 规则相同
+    get:
+      tags: [Mailbox Pool, Administration]
+      operationId: listPoolClaimableAccounts
+      summary: 读取项目可领取的 iCloud 主号库存快照
+      description: |
+        同时校验管理员 Session 和 Pool Key；GET 不要求 CSRF。响应只含启用 iCloud 主号的
+        account_id 和可领取数量 available，不返回邮箱地址、隐藏邮箱地址、API Key、IMAP/OAuth
+        凭据、Cookie 或邮件内容。available 仅计入启用、已确认可用且具完整 v2 凭据的池成员，
+        与领取条件一致；它是快照，随后 claim 会在事务中重新校验。
+
+        每个 account_id 最多领取 5 个地址时，调用方应提交 count=min(5, available)，并处理
+        并发竞争导致的 POOL_EMPTY。
+      security:
+        - adminSession: []
+          poolKey: []
+      responses:
+        "200":
+          description: 当前可领取 iCloud 主号库存快照。
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+            Cache-Control:
+              $ref: "#/components/headers/AdminNoStore"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PoolClaimableAccountsResponse"
+        "401":
+          $ref: "#/components/responses/AdminAuthUnauthorized"
 
   /api/v1/pool/aliases/batch:
     servers:
@@ -2938,6 +2978,28 @@ components:
             format: int64
             minimum: 1
           description: 需要从 Apple 永久删除的本地隐私邮箱 ID。
+    PoolClaimableAccountsResponse:
+      type: object
+      additionalProperties: false
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/PoolClaimableAccount"
+    PoolClaimableAccount:
+      type: object
+      additionalProperties: false
+      required: [account_id, available]
+      properties:
+        account_id:
+          type: integer
+          format: int64
+          minimum: 1
+        available:
+          type: integer
+          minimum: 0
+          description: 与 Pool claim 条件一致的当前可领取地址数；仅作快照使用。
     PoolAliasRetirementRequest:
       type: object
       additionalProperties: false

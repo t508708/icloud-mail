@@ -313,6 +313,7 @@ func (m *Manager) logAliasCreationFailureWithOperation(
 	attributes = append(attributes, aliasCreationTimingAttrs(scheduledFor, attemptedAt, nextRunAt)...)
 	if info.upstream != nil {
 		attributes = append(attributes,
+			slog.Any("account_failure_diagnostics", info.upstream.AccountFailure),
 			slog.String("operation", safeAppleOperation(info.upstream.Op)),
 			slog.Bool("retryable", info.retryable),
 			slog.Bool("upstream_retryable", info.retryable),
@@ -661,6 +662,10 @@ func diagnoseAliasCreationError(err error) aliasCreationErrorInfo {
 			info.code = "APPLE_CREDENTIALS_INVALID"
 		case errors.Is(err, apple.ErrTermsRequired):
 			info.code = "APPLE_ACCOUNT_ACTION_REQUIRED"
+		case errors.Is(err, apple.ErrAliasCapacity):
+			info.code = "APPLE_ALIAS_CAPACITY_REACHED"
+		case errors.Is(err, apple.ErrCreationNotAllowed):
+			info.code = "APPLE_CREATION_NOT_ALLOWED"
 		}
 	}
 	if info.code == "" {
@@ -681,6 +686,10 @@ func diagnoseAliasCreationError(err error) aliasCreationErrorInfo {
 			switch {
 			case apple.IsRateLimited(err):
 				info.code = "APPLE_RATE_LIMITED"
+			case errors.Is(upstream, apple.ErrAliasCapacity):
+				info.code = "APPLE_ALIAS_CAPACITY_REACHED"
+			case errors.Is(upstream, apple.ErrCreationNotAllowed):
+				info.code = "APPLE_CREATION_NOT_ALLOWED"
 			case errors.Is(upstream, apple.ErrInvalidSession):
 				info.code = "APPLE_SESSION_EXPIRED"
 			case errors.Is(upstream, apple.ErrAuthentication):
@@ -726,6 +735,8 @@ func isAllowedAliasCreationErrorCode(code string) bool {
 		"APPLE_ACCOUNT_ACTION_REQUIRED",
 		"APPLE_HME_AUTH_FAILED",
 		"APPLE_RATE_LIMITED",
+		"APPLE_ALIAS_CAPACITY_REACHED",
+		"APPLE_CREATION_NOT_ALLOWED",
 		"APPLE_CREATION_BUDGET_WAIT",
 		"APPLE_UPSTREAM_ERROR",
 		"APPLE_ALIAS_CONFIRMATION_PENDING",
@@ -748,7 +759,7 @@ func isAllowedAliasCreationErrorCode(code string) bool {
 
 func aliasCreationErrorClass(code string) string {
 	switch {
-	case code == "ALIAS_LIMIT_REACHED":
+	case code == "ALIAS_LIMIT_REACHED" || code == "APPLE_ALIAS_CAPACITY_REACHED":
 		return "capacity"
 	case code == "AUTO_CREATE_PLAN_CORRECTION_FAILED" || code == "AUTO_CREATION_PERSISTENCE_ERROR":
 		return "persistence"
@@ -864,6 +875,10 @@ func aliasCreationErrorReason(code string) string {
 		return "Apple 账户已通过验证，但隐藏邮箱目录未接受此会话；登录状态已保留，自动创建已暂停，请检查 iCloud 网页的隐藏邮箱服务"
 	case "APPLE_RATE_LIMITED":
 		return "Apple 请求被限流，受影响通道冷却后继续执行；公共前置请求限流时暂停主号计划"
+	case "APPLE_ALIAS_CAPACITY_REACHED":
+		return "Apple 已明确返回隐藏邮箱数量达到上限，请先在 Apple 端整理不再使用的地址；重新登录不会增加容量"
+	case "APPLE_CREATION_NOT_ALLOWED":
+		return "Apple 暂未允许创建隐藏邮箱（HTTP 412），返回信息未明确说明原因；这不代表需要处理账户条款，原因记录见操作日志"
 	case "APPLE_CREATION_BUDGET_WAIT":
 		return "本地主号创建预算已用尽，冷却后将自动继续"
 	case "APPLE_ACCOUNT_MISMATCH":

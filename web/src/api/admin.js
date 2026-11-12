@@ -774,6 +774,7 @@ function appleSessionResult(data = {}) {
     flow: firstDefined(data, "flow", "Flow") || "",
     challengeId:
       firstDefined(data, "challenge_id", "challengeId", "ChallengeID") || "",
+    ...(data?.verification ? { verification: data.verification } : {}),
   };
 }
 
@@ -798,6 +799,21 @@ export async function verifyAppleSession(accountId, payload, csrfToken) {
       csrfToken,
     },
   );
+  return appleSessionResult(data);
+}
+
+export async function requestAppleVerificationCode(accountId, payload, csrfToken) {
+  const data = await apiRequest(
+    `/accounts/${encodeURIComponent(accountId)}/apple-auth/code`,
+    { method: "POST", body: payload, csrfToken },
+  );
+  return appleSessionResult(data);
+}
+
+export async function requestAppleAccountVerificationCode(accountId, payload, csrfToken) {
+  const data = await apiRequest(`/accounts/${encodeURIComponent(accountId)}/apple-account-auth/code`, {
+    method: "POST", body: payload, csrfToken,
+  });
   return appleSessionResult(data);
 }
 

@@ -144,6 +144,7 @@ func (c *Client) SignIn(ctx context.Context, appleID, password string, region Re
 		}
 	}
 	result.Region = region
+	result.WebVerification = nil
 	result.AppleID = appleID
 	result.FrameID, err = c.newUUID()
 	if err != nil {
@@ -193,9 +194,9 @@ func (c *Client) SignIn(ctx context.Context, appleID, password string, region Re
 	}
 	switch status {
 	case http.StatusConflict:
-		// Newer iOS versions need an explicit trigger. Some account variants
-		// answer 405 here even though a device code is already usable.
-		_, _ = op.requestTrustedDeviceCode(ctx)
+		if err := op.prepareWebVerification(ctx); err != nil {
+			return result, false, err
+		}
 		return result, true, nil
 	case http.StatusOK:
 		account, err := op.accountLogin(ctx)
@@ -211,22 +212,21 @@ func (c *Client) SignIn(ctx context.Context, appleID, password string, region Re
 	}
 }
 
-// RequestCode best-effort triggers a code on trusted Apple devices.
+// RequestCode repeats the selected verification method, subject to its delay.
 func (c *Client) RequestCode(ctx context.Context, session Session) (result Session, err error) {
 	result = session
+	result.WebVerification = cloneWebVerification(session.WebVerification)
 	op, err := c.newOperation(&result)
 	if err != nil {
 		return result, err
 	}
 	defer op.persist(&result)
-	status, err := op.requestTrustedDeviceCode(ctx)
-	if err != nil {
-		return result, err
+	method, phoneID := "device", int64(0)
+	if session.WebVerification != nil {
+		method, phoneID = session.WebVerification.Method, session.WebVerification.PhoneID
 	}
-	if status != http.StatusOK && status != http.StatusNoContent && status != http.StatusMethodNotAllowed {
-		return result, operationError("request two-factor code", ErrService, status, nil)
-	}
-	return result, nil
+	err = op.sendWebVerification(ctx, method, phoneID)
+	return result, err
 }
 
 // VerifyCode verifies a trusted-device code, trusts the browser, and exchanges
@@ -241,9 +241,20 @@ func (c *Client) VerifyCode(ctx context.Context, session Session, code string) (
 		return result, err
 	}
 	defer op.persist(&result)
-	response, err := op.request(ctx, "verify two-factor code", http.MethodPost, op.endpoints.Auth+"/verify/trusteddevice/securitycode", map[string]any{
+	path := "/verify/trusteddevice/securitycode"
+	payload := map[string]any{
 		"securityCode": map[string]string{"code": code},
-	}, op.authHeaders())
+	}
+	if verification := result.WebVerification; verification != nil && verification.Method == "sms" {
+		phone, ok := verification.selectedPhone(verification.PhoneID)
+		if !ok {
+			return result, operationError("verify SMS code without delivery", ErrTwoFactorCode, 0, nil)
+		}
+		path = "/verify/phone/securitycode"
+		payload["phoneNumber"] = phone.verificationPayload()
+		payload["mode"] = "sms"
+	}
+	response, err := op.request(ctx, "verify two-factor code", http.MethodPost, op.endpoints.Auth+path, payload, op.authHeaders())
 	if err != nil {
 		return result, err
 	}
@@ -281,6 +292,7 @@ func (c *Client) VerifyCode(ctx context.Context, session Session, code string) (
 	if requiresTwoFactor(result) {
 		return result, operationError("complete two-factor authentication", ErrTwoFactorCode, 0, nil)
 	}
+	result.WebVerification = nil
 	return result, nil
 }
 

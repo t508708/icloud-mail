@@ -204,7 +204,7 @@ func (s *Service) StartAuth(
 			return AuthResult{}, fmt.Errorf("create Apple verification challenge: %w", err)
 		}
 		info := sessionInfoFromSession(session, StatusVerificationRequired, nil, &flow.expiresAt)
-		return AuthResult{Status: StatusVerificationRequired, ChallengeID: flow.id, Session: info}, nil
+		return AuthResult{Status: StatusVerificationRequired, ChallengeID: flow.id, Session: info, Verification: webVerificationInfo(session)}, nil
 	}
 
 	if err := s.attachManagementForWebLogin(ctx, accountID, &session); err != nil {
@@ -223,6 +223,14 @@ func (s *Service) VerifyAuth(
 	ownerAdminID, accountID int64,
 	challengeID, code string,
 ) (AuthResult, error) {
+	return s.verifyAuth(ctx, ownerAdminID, accountID, challengeID, code, "", 0)
+}
+
+func (s *Service) VerifyAuthWithMethod(ctx context.Context, ownerAdminID, accountID int64, challengeID, code, method string, phoneID int64) (AuthResult, error) {
+	return s.verifyAuth(ctx, ownerAdminID, accountID, challengeID, code, method, phoneID)
+}
+
+func (s *Service) verifyAuth(ctx context.Context, ownerAdminID, accountID int64, challengeID, code, method string, phoneID int64) (AuthResult, error) {
 	if ownerAdminID < 1 || accountID < 1 {
 		return AuthResult{}, errors.New("owner and account IDs must be positive")
 	}
@@ -253,7 +261,29 @@ func (s *Service) VerifyAuth(
 		return AuthResult{}, wrapError(CodeAccountChanged, ErrAccountChanged, nil)
 	}
 
-	session, err := s.client.VerifyCode(ctx, flow.session, code)
+	verificationSession := flow.session
+	if method != "" {
+		if method != "sms" && method != "device" {
+			return AuthResult{}, wrapError(CodeVerificationMethodUnavailable, ErrUpstream, nil)
+		}
+		v := flow.session.WebVerification
+		if v == nil {
+			return AuthResult{}, wrapError(CodeVerificationMethodUnavailable, ErrUpstream, nil)
+		}
+		copy := *v
+		if method == "sms" {
+			found := false
+			for _, phone := range v.Phones {
+				found = found || phone.ID == phoneID
+			}
+			if !found {
+				return AuthResult{}, wrapError(CodeVerificationMethodUnavailable, ErrUpstream, nil)
+			}
+		}
+		copy.Method, copy.PhoneID = method, phoneID
+		verificationSession.WebVerification = &copy
+	}
+	session, err := s.client.VerifyCode(ctx, verificationSession, code)
 	code = ""
 	if err != nil {
 		mapped := mapAppleError(err, true)

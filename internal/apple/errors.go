@@ -16,16 +16,19 @@ const (
 )
 
 var (
-	ErrInvalidConfig     = errors.New("invalid Apple client configuration")
-	ErrInvalidSession    = errors.New("invalid or expired Apple session")
-	ErrHMEUnavailable    = errors.New("Hide My Email service is not available for this session")
-	ErrHMEAuthentication = errors.New("Hide My Email directory did not accept the web session")
-	ErrAuthentication    = errors.New("Apple authentication failed")
-	ErrTwoFactorCode     = errors.New("invalid Apple two-factor code")
-	ErrTermsRequired     = errors.New("Apple account action required")
-	ErrResponseTooLarge  = errors.New("Apple response exceeds configured limit")
-	ErrInvalidResponse   = errors.New("invalid Apple response")
-	ErrService           = errors.New("Apple service returned an error")
+	ErrInvalidConfig      = errors.New("invalid Apple client configuration")
+	ErrInvalidSession     = errors.New("invalid or expired Apple session")
+	ErrHMEUnavailable     = errors.New("Hide My Email service is not available for this session")
+	ErrHMEAuthentication  = errors.New("Hide My Email directory did not accept the web session")
+	ErrAuthentication     = errors.New("Apple authentication failed")
+	ErrTwoFactorCode      = errors.New("invalid Apple two-factor code")
+	ErrTermsRequired      = errors.New("Apple account action required")
+	ErrRateLimited        = errors.New("Apple request rate limited")
+	ErrAliasCapacity      = errors.New("Apple alias capacity reached")
+	ErrCreationNotAllowed = errors.New("Apple alias creation precondition not met")
+	ErrResponseTooLarge   = errors.New("Apple response exceeds configured limit")
+	ErrInvalidResponse    = errors.New("invalid Apple response")
+	ErrService            = errors.New("Apple service returned an error")
 )
 
 // Error is the typed error returned for transport, HTTP, protocol and service
@@ -39,9 +42,10 @@ type Error struct {
 	Retryable   bool
 	// RetryAfter is a non-sensitive server delay hint, not permission to replay
 	// the operation. Zero means no positive delay is available.
-	RetryAfter time.Duration
-	Err        error
-	WebSession *WebSessionDiagnostics
+	RetryAfter     time.Duration
+	Err            error
+	WebSession     *WebSessionDiagnostics
+	AccountFailure *AccountFailureDiagnostics
 }
 
 // WebSessionDiagnostics contains presence flags only, never cookie values,
@@ -192,8 +196,11 @@ func isRateLimitedError(upstream *Error) bool {
 	if upstream == nil {
 		return false
 	}
-	if upstream.StatusCode == http.StatusTooManyRequests {
+	if upstream.StatusCode == http.StatusTooManyRequests || upstream.Kind == ErrRateLimited {
 		return true
+	}
+	if upstream.Kind == ErrAliasCapacity {
+		return false
 	}
 	switch strings.TrimSpace(upstream.ServiceCode) {
 	case hmeRateLimitCodeBatch:

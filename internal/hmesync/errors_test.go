@@ -74,6 +74,24 @@ func TestMapAppleErrorKeepsStableCodesAndTypedCause(t *testing.T) {
 			wantKind: ErrAccountActionRequired,
 		},
 		{
+			name:     "explicit upstream capacity",
+			err:      &apple.Error{Kind: apple.ErrAliasCapacity, StatusCode: http.StatusPreconditionFailed},
+			wantCode: CodeAliasCapacity,
+			wantKind: ErrAliasCapacity,
+		},
+		{
+			name:     "unknown creation precondition is not an account action",
+			err:      &apple.Error{Kind: apple.ErrCreationNotAllowed, StatusCode: http.StatusPreconditionFailed},
+			wantCode: CodeCreationNotAllowed,
+			wantKind: ErrCreationNotAllowed,
+		},
+		{
+			name:     "explicit frequency restriction retains numeric service code",
+			err:      &apple.Error{Kind: apple.ErrRateLimited, StatusCode: http.StatusPreconditionFailed, ServiceCode: "123"},
+			wantCode: CodeRateLimited,
+			wantKind: ErrRateLimited,
+		},
+		{
 			name:               "verification authentication failure",
 			err:                apple.ErrAuthentication,
 			duringVerification: true,
