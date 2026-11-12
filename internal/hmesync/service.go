@@ -288,7 +288,7 @@ func (s *Service) verifyAuth(ctx context.Context, ownerAdminID, accountID int64,
 	if err != nil {
 		mapped := mapAppleError(err, true)
 		if errors.Is(mapped, ErrVerificationInvalid) {
-			s.recordFailedAttempt(flow)
+			s.recordFailedAttempt(flow, session)
 		} else {
 			s.deleteChallenge(challengeID)
 		}
@@ -2081,7 +2081,7 @@ func (s *Service) readChallenge(id string, ownerAdminID, accountID int64) (chall
 	return flow, true
 }
 
-func (s *Service) recordFailedAttempt(flow challenge) {
+func (s *Service) recordFailedAttempt(flow challenge, session apple.Session) {
 	s.challengeMu.Lock()
 	defer s.challengeMu.Unlock()
 	current, ok := s.challenges[flow.id]
@@ -2096,6 +2096,7 @@ func (s *Service) recordFailedAttempt(flow challenge) {
 		}
 		return
 	}
+	current.session = session
 	s.challenges[current.id] = current
 }
 

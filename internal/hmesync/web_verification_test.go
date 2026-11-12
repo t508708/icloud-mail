@@ -119,3 +119,40 @@ func TestWebAlreadyReceivedSMSCanBeSubmittedWithoutSendingAgain(t *testing.T) {
 		t.Fatalf("verify err=%v", err)
 	}
 }
+
+func TestWebSMSSelectionSurvivesInvalidCode(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	repo := newFakeRepository(domain.Account{ID: 12, Email: "owner@icloud.com", Enabled: true}, now)
+	client := &webCodeTestClient{}
+	client.signIn = func(context.Context, string, string, apple.Region, *apple.Session) (apple.Session, bool, error) {
+		return apple.Session{AppleID: "owner@icloud.com", Region: apple.RegionGlobal, WebVerification: &apple.WebVerification{Method: "device", Phones: []apple.TrustedPhone{{ID: 7}}}}, true, nil
+	}
+	verifyCalls := 0
+	client.verify = func(_ context.Context, session apple.Session, code string) (apple.Session, error) {
+		verifyCalls++
+		if session.WebVerification.Method != "sms" || session.WebVerification.PhoneID != 7 {
+			t.Fatalf("retry used wrong verification method: %#v", session.WebVerification)
+		}
+		if verifyCalls == 1 {
+			return session, &apple.Error{Kind: apple.ErrTwoFactorCode, StatusCode: 400}
+		}
+		if code != "654321" {
+			t.Fatalf("unexpected retry code: %s", code)
+		}
+		session.WebVerification = nil
+		return session, nil
+	}
+	s := newTestService(t, repo, client, &fakeLocker{}, func() time.Time { return now })
+	start, err := s.StartAuth(ctx, 5, 12, "owner@icloud.com", "fixture", apple.RegionGlobal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.VerifyAuthWithMethod(ctx, 5, 12, start.ChallengeID, "123456", "sms", 7); !errors.Is(err, ErrVerificationInvalid) {
+		t.Fatalf("invalid SMS code err=%v", err)
+	}
+	result, err := s.VerifyAuth(ctx, 5, 12, start.ChallengeID, "654321")
+	if err != nil || result.Status != StatusAuthenticated || verifyCalls != 2 {
+		t.Fatalf("SMS retry status=%v calls=%d err=%v", result.Status, verifyCalls, err)
+	}
+}

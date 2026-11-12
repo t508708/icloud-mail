@@ -126,6 +126,16 @@ func TestPoolClaimableAccountsRequiresDualAuthAndMatchesClaim(t *testing.T) {
 			t.Fatalf("gateway inventory selected ineligible alias: %#v", lease)
 		}
 	}
+	if _, err := env.store.ActPoolLease(ctx, leases[0].ID, client.ID, "commit", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.store.DB().ExecContext(ctx, `UPDATE pool_members SET state='available' WHERE alias_id=?`, leases[0].AliasID); err != nil {
+		t.Fatal(err)
+	}
+	response = callPoolClaimableAccounts(t, env, key, cookie)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"available":1`) {
+		t.Fatalf("used address reintroduced as available: %d %s", response.Code, response.Body.String())
+	}
 }
 
 func containsAny(value string, values ...string) bool {

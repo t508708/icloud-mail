@@ -8,7 +8,7 @@
 
 Self-hosted · Multiple primary accounts · Mailbox pools · On-demand mail retrieval · Light and dark themes
 
-**Current version: v0.2.9**
+**Current version: v0.2.10**
 
 [Downloads and release notes](https://github.com/t508708/icloud-mail/releases) · [Docker deployment](#docker-deployment) · [API documentation](docs/POOL.md) · [Changelog](CHANGELOG.md)
 
@@ -23,10 +23,10 @@ For users who want to manage iCloud Hide My Email addresses centrally, automatic
 | **Manage multiple primary accounts in one dashboard** | An Apple-style interface with Liquid Glass effects and light/dark modes; JavaScript and CSS are served locally by the application. |
 | **Bulk management of Hide My Email addresses** | Sync addresses, search and filter, select across pages, use drag selection, and create or delete addresses in batches. |
 | **Automatic address replenishment** | Manual batch creation and scheduled **automatic creation plans** work together; the new and legacy channels operate according to their respective limits and status. |
-| **Project mailbox pools** | Issue Pool Keys for different projects, with APIs to acquire addresses, confirm use, renew leases, release addresses, and retire them. |
-| **Verification codes via links and API** | Each mailbox has its own retrieval link; mail addressed to `+tag` variants of a registered root address can be retrieved through the root mailbox. |
+| **Project mailbox pools** | Issue Pool Keys for different projects to acquire addresses, confirm use in batches, renew, release, and retire leases. View claimable counts for enabled primary accounts. |
+| **Verification codes via links and API** | Each mailbox has its own retrieval link, with multilingual code extraction and support for `+tag` variants of registered root addresses. |
 | **On-demand mail retrieval** | Visiting a retrieval link or calling the API triggers incremental reads. Connections are reused within the same primary account to reduce duplicate requests and downloads of historical message bodies. |
-| **Separate credentials and connection recovery** | Each mailbox has its own rotatable API Key, IMAP password, and OAuth credentials. Optionally configure a two-factor authentication code retrieval URL to log in again automatically when a connection expires. |
+| **Separate credentials and connection recovery** | Each mailbox has its own rotatable API Key, IMAP password, and OAuth credentials. Apple Account and iCloud Web sign-in support trusted-device or SMS verification, plus optional automatic re-login with saved settings. |
 
 **About credentials:** Separate IMAP/OAuth credentials are issued by this gateway for connecting to this service. Access to Apple's upstream mailbox still requires the corresponding primary account's mail retrieval credentials.
 
@@ -36,12 +36,12 @@ Discuss your experience, report issues, suggest features, share deployment tips,
 
 ## Recent Updates
 
-**v0.2.9: Prevent reused addresses and show accurate available inventory.**
+**v0.2.10: More flexible Apple verification and clearer creation errors.**
 
-- Previously used addresses stay excluded even after deletion and re-import under a new ID. Inventory lists, filtered totals, and claimable counts follow the same rules.
-- Re-enabling a primary account keeps addresses with prior usage paused while preserving other mailbox states and project ownership.
-- Confirm up to 50 acquired mailboxes in one request, reducing API calls for larger workloads.
-- Includes complete-directory cleanup and fixes for long-pending addresses, with updated deployment and API documentation.
+- Apple Account and iCloud Web sign-in can select a trusted phone for SMS or use trusted-device verification, including sending and submitting codes. SMS retries retain the selected phone.
+- Hide My Email creation failures show more specific upstream causes and retry guidance.
+- Multilingual OTP extraction is expanded. An administrator session plus Pool Key can read claimable counts for enabled iCloud accounts; previously used addresses are excluded.
+- Includes v0.2.9's protections against reissuing consumed addresses, accurate inventory, and atomic confirmation of up to 50 leases per call.
 
 See [CHANGELOG.md](CHANGELOG.md) for full feature changes, fixes, and upgrade notes.
 

@@ -379,8 +379,7 @@ func (s *Store) ListPoolClaimableAccounts(ctx context.Context) ([]PoolClaimableA
 	rows, err := s.queryContext(ctx, `SELECT a.id,COUNT(m.alias_id)
 		FROM accounts a
 		LEFT JOIN account_mailbox_settings ms ON ms.account_id=a.id
-		LEFT JOIN aliases al ON al.account_id=a.id AND al.enabled=TRUE
-			AND al.credential_mode='v2' AND al.credential_version>0
+		LEFT JOIN aliases al ON al.account_id=a.id AND `+poolClaimableAliasSQL+`
 		LEFT JOIN pool_members m ON m.alias_id=al.id AND m.state='available'
 		WHERE a.enabled=TRUE AND COALESCE(ms.mailbox_type,'icloud')='icloud'
 		GROUP BY a.id ORDER BY a.id`)
