@@ -60,7 +60,11 @@ func acquireArchiveConnection(ctx context.Context, accountID int64, address, hos
 	}
 	unlock := func() {}
 	var client *imapclient.Client
-	identity := sha256.Sum256([]byte(fmt.Sprintf("%q", []string{address, host, username, password})))
+	proxyIdentity := ""
+	if settings.proxy != nil {
+		proxyIdentity = settings.proxy.Endpoint + "\x00" + settings.proxy.Upstream
+	}
+	identity := sha256.Sum256([]byte(fmt.Sprintf("%q", []string{address, host, username, password, proxyIdentity})))
 	if session != nil {
 		select {
 		case session.slot <- struct{}{}:

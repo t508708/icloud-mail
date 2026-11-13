@@ -173,7 +173,11 @@ func (c *Client) accountCallPolicy(ctx context.Context, s *AccountSession, metho
 		return responseData{}, err
 	}
 	req.Header = headers.Clone()
-	client := &http.Client{Transport: c.transport, Timeout: c.timeout, Jar: jar, CheckRedirect: checkRepairWidgetRedirect}
+	transport, err := c.requestTransport(ctx)
+	if err != nil {
+		return responseData{}, err
+	}
+	client := &http.Client{Transport: transport, Timeout: c.timeout, Jar: jar, CheckRedirect: checkRepairWidgetRedirect}
 	resp, err := client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {

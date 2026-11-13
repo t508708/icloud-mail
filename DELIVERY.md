@@ -1,6 +1,6 @@
 # 安装与交付
 
-公开仓库：<https://github.com/t508708/icloud-mail>。当前发布为 **v0.2.10**，提供 GHCR 多架构镜像、源码和 Linux amd64 离线镜像包，变化见 [更新日志](CHANGELOG.md)。源码包含 Web 控制面板、Go 服务、自动化用例和 Docker 构建配置，不含账号、邮件、密码、证书或现有服务器的数据。来源与许可见 [NOTICE.md](NOTICE.md)。
+公开仓库：<https://github.com/t508708/icloud-mail>。当前发布为 **v0.2.11**，提供 GHCR 多架构镜像、源码和 Linux amd64 离线镜像包，变化见 [更新日志](CHANGELOG.md)。源码包含 Web 控制面板、Go 服务、自动化用例和 Docker 构建配置，不含账号、邮件、密码、证书或现有服务器的数据。来源与许可见 [NOTICE.md](NOTICE.md)。
 
 ## GHCR latest 安装
 
@@ -52,7 +52,9 @@ ssh -N -L 127.0.0.1:8788:127.0.0.1:8788 USER@SERVER
 
 然后用本地浏览器访问管理入口。公网 HTTPS、域名与证书见 [公网部署](docs/PUBLIC.md)；宝塔多文件编排的兼容方式也在该文档中。
 
-默认按需共享同步并返回最新 OTP；共享取件容量为 2，每 2 秒恢复 1 次，等待读取与普通读取分开，被拦截请求不延长冷却。自动创建功能需主动开启；Apple 的限流、条款和会话状态以实际响应为准，长时会话恢复仍需持续验证。保持单个应用实例。
+默认按需共享同步并返回最新 OTP；共享取件容量为 2，每 2 秒恢复 1 次，等待读取与普通读取分开，被拦截请求不延长冷却。v0.2.11 的邮箱池长等待取码按时间直接查询最新有效验证码，减少并发读取的历史记录开销。自动创建功能需主动开启；Apple 的限流、条款和会话状态以实际响应为准，长时会话恢复仍需持续验证。保持单个应用实例。
+
+新建或编辑主号时，可单独开启 HTTP、HTTPS、SOCKS5 代理，并设置前置代理建立两级连接链路；填写后可在表单中检查连接。主号的 Apple 登录、保活、验证码提供方、IMAP 收件和 IDLE 连接将使用该配置。代理认证信息加密保存，编辑时留空沿用已有值；原有主号升级后默认保持直连。具体格式和管理方式见 [README](README.md#主号代理)。
 
 ## 数据备份与更新
 
@@ -69,18 +71,18 @@ docker compose up -d --wait
 
 ## 离线与固定版本
 
-无 GHCR 网络或需要固定版本时，从 [v0.2.10 Release](https://github.com/t508708/icloud-mail/releases/tag/v0.2.10) 下载 `icloud-mail-v0.2.10-linux-amd64.zip` 和 `SHA256SUMS`。该镜像包仅适用于 Linux x86_64 / amd64：
+无 GHCR 网络或需要固定版本时，从 [v0.2.11 Release](https://github.com/t508708/icloud-mail/releases/tag/v0.2.11) 下载 `icloud-mail-v0.2.11-linux-amd64.zip` 和 `SHA256SUMS`。该镜像包仅适用于 Linux x86_64 / amd64：
 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
-unzip icloud-mail-v0.2.10-linux-amd64.zip
-cd icloud-mail-v0.2.10
+unzip icloud-mail-v0.2.11-linux-amd64.zip
+cd icloud-mail-v0.2.11
 cp -n .env.example .env
 docker load -i images/linux-amd64.tar.gz
 docker compose -f compose.yaml -f compose.offline.yaml up -d --no-build --pull never --wait
 ```
 
-包内包含 `icloud-api:v0.2.10` 与 `icloud-api-postgres:v0.2.10`，`RELEASE.json` 记录源码提交、架构和镜像 ID，包内 `SHA256SUMS` 可再次确认文件完整。后续命令继续带上 `-f compose.yaml -f compose.offline.yaml`。历史 `handoff-2026.09.14` 包继续使用其自带的编排和镜像，不混用不同版本的离线文件。
+包内包含 `icloud-api:v0.2.11` 与 `icloud-api-postgres:v0.2.11`，`RELEASE.json` 记录源码提交、架构和镜像 ID，包内 `SHA256SUMS` 可再次确认文件完整。后续命令继续带上 `-f compose.yaml -f compose.offline.yaml`。历史 `handoff-2026.09.14` 包继续使用其自带的编排和镜像，不混用不同版本的离线文件。
 
 已有镜像包升级时，先备份，再下载并校验新包、导入新镜像、更新项目中的发布文件。保留原 `.env`、`COMPOSE_PROJECT_NAME` 和数据卷；沿用原项目目录，避免更换项目名后被识别为新安装：
 

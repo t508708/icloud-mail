@@ -2,6 +2,29 @@
 
 本文件记录 `t508708/icloud-mail` 的发布版本，与 API 路径、数据库 schema 和邮箱凭据版本分别管理。
 
+## v0.2.11 - 2026-11-13
+
+### 主号独立代理
+
+- 新建及编辑主号可开启专属代理；落地代理必填，前置代理可选，支持 HTTP、HTTPS、SOCKS5 及认证，按 `服务器 → 前置代理 → 落地代理 → 目标` 建立连接。
+- 支持带协议的 `scheme://user:password@host:port` 和无协议的 `host:port`、`host:port:user:password`、`user:password@host:port`、`host:port@user:password`；省略协议默认 HTTP。
+- 代理凭据由主密钥加密，编辑时留空沿用原配置，前置代理可单独清除；连通检查显示请求耗时及 iCloud 的 HTTP 状态码。
+- 连通检查会区分前置与落地代理的认证、连接、TLS、隧道及超时故障，并提供对应提示；延长较慢代理的连接检查等待时间。
+- Apple Account、iCloud Web 登录及保活、别名管理、Webmail、IMAP 收件与已读标记、IDLE 监听和自动登录验证码提供方均使用该主号的代理；关闭开关后直连。
+- 每个主号独立维护 Apple HTTP 连接池。修改代理后更新 IMAP 共享连接与 IDLE 订阅；正在等待验证码的旧登录流程和持续执行的批量删除操作会识别设置变化。
+
+### 邮箱池并发获取
+
+- 邮箱池长等待取码改为由数据库按收件时间查找最新有效六位验证码，减少重复加载历史邮件及无效候选的处理开销；保留按主号复用收件连接和事件通知的机制。
+
+### 升级与发布
+
+- 原有主号默认关闭代理；数据库启动时自动建立 `account_proxy_configs`，不影响已经保存的收件凭据和邮件历史。
+- 更新中英文 README、管理接口 OpenAPI、版本信息及离线部署说明。
+- 发布应用和配套 PostgreSQL 的 AMD64/ARM64 镜像，附源码 ZIP、Linux amd64 离线 ZIP 与 `SHA256SUMS`。升级时保留原 `.env` 与 Docker 数据卷。
+
+完整源码比较：[v0.2.10...v0.2.11](https://github.com/t508708/icloud-mail/compare/v0.2.10...v0.2.11)。
+
 ## v0.2.10 - 2026-11-13
 
 ### Apple 登录与连接恢复

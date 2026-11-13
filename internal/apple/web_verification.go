@@ -134,7 +134,7 @@ func (op *operation) prepareWebVerification(ctx context.Context) error {
 func (c *Client) RequestWebVerification(ctx context.Context, session Session, method string, phoneID int64) (result Session, err error) {
 	result = session
 	result.WebVerification = cloneWebVerification(session.WebVerification)
-	op, err := c.newOperation(&result)
+	op, err := c.newOperationForContext(ctx, &result)
 	if err != nil {
 		return result, err
 	}

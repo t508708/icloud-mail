@@ -114,6 +114,7 @@ export function normalizeAccount(raw = {}) {
     firstDefined(raw, "imap_host", "imapHost", "IMAPHost"),
     firstDefined(raw, "imap_port", "imapPort", "IMAPPort"),
   );
+  const proxyRaw = firstDefined(raw, "proxy", "Proxy") || {};
 
   return {
     id: firstDefined(raw, "id", "ID"),
@@ -145,6 +146,11 @@ export function normalizeAccount(raw = {}) {
     imapUsername:
       firstDefined(raw, "imap_username", "imapUsername", "IMAPUsername") ||
       "",
+    proxy: {
+      enabled: Boolean(firstDefined(proxyRaw, "enabled", "Enabled")),
+      configured: Boolean(firstDefined(proxyRaw, "configured", "Configured")),
+      upstreamConfigured: Boolean(firstDefined(proxyRaw, "upstream_configured", "upstreamConfigured", "UpstreamConfigured")),
+    },
     enabled: Boolean(firstDefined(raw, "enabled", "Enabled")),
     mailTransport: firstDefined(raw, "mail_transport", "mailTransport") === "webmail" ? "webmail" : "imap",
     lastSyncStatus:
@@ -635,6 +641,19 @@ export async function updateAccount(id, payload, csrfToken) {
     csrfToken,
   });
   return normalizeAccount(data?.account || data || {});
+}
+
+export function testAccountProxy(accountID, config, csrfToken) {
+  const body = { proxy: { enabled: Boolean(config?.enabled) } };
+  if (accountID !== undefined && accountID !== null && String(accountID).trim()) {
+    body.account_id = Number(accountID);
+  }
+  for (const key of ["endpoint", "upstream"]) {
+    const value = String(config?.[key] ?? "").trim();
+    if (value) body.proxy[key] = value;
+  }
+  if (config?.clear_upstream) body.proxy.clear_upstream = true;
+  return apiRequest("/accounts/proxy-test", { method: "POST", body, csrfToken, timeoutMs: 30_000 });
 }
 
 export async function updateAccountMailTransport(id, transport, csrfToken) {

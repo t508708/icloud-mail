@@ -593,6 +593,63 @@ paths:
           $ref: "#/components/responses/AdminInternalError"
 
 
+  /api/v1/accounts/proxy-test:
+    servers:
+      - url: https://HOST/{admin_path}
+        variables:
+          admin_path:
+            default: 00000000000000000000000000000000/admin
+      - url: https://HOST/admin
+    post:
+      tags: [Admin Accounts]
+      operationId: testAdminAccountProxy
+      summary: 检查主号代理连通性
+      description: |
+        使用提交的代理配置，经落地代理或「前置代理 → 落地代理」访问
+        https://www.icloud.com/。编辑主号时可提供 account_id，并留空地址以使用已保存的
+        加密配置；只返回连通结果和耗时。代理关闭时返回 400。
+      security:
+        - adminSession: []
+      parameters:
+        - $ref: '#/components/parameters/AdminCSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [proxy]
+              properties:
+                account_id: {type: integer, format: int64, minimum: 1}
+                proxy:
+                  $ref: '#/components/schemas/AdminProxyInput'
+      responses:
+        '200':
+          description: 代理链路已建立，返回目标服务的实际 HTTP 状态码
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    required: [ok, duration_ms, status_code]
+                    properties:
+                      ok: {type: boolean}
+                      duration_ms: {type: integer, minimum: 0}
+                      status_code: {type: integer}
+        '400':
+          $ref: '#/components/responses/AdminAccountBadRequest'
+        '401':
+          $ref: '#/components/responses/AdminAuthUnauthorized'
+        '403':
+          $ref: '#/components/responses/AdminCSRFForbidden'
+        '404':
+          description: 指定的主号不存在
+        '502':
+          description: 代理链路或 iCloud 连接失败
+
   /api/v1/accounts/{id}/auto-login:
     servers:
       - url: https://HOST/{admin_path}
@@ -2059,6 +2116,40 @@ components:
               last_success_at: {type: [string, 'null'], format: date-time}
               next_attempt_at: {type: [string, 'null'], format: date-time}
 
+    AdminProxyInput:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+          description: 开启且已保存落地代理地址时启用；关闭后该主号直连。
+        endpoint:
+          type: string
+          writeOnly: true
+          description: |
+            落地代理。支持 http、https、socks5 协议，省略协议时默认 http。
+            支持 hostname:port、hostname:port:username:password、username:password@hostname:port、
+            hostname:port@username:password 和 socks5://username:password@host:port。
+            新建主号时启用必须填写；编辑时留空保留已保存的密文。
+        upstream:
+          type: string
+          writeOnly: true
+          description: 可选前置代理，格式与 endpoint 一致。链路为服务器 → 前置代理 → 落地代理 → 目标。
+        clear_upstream:
+          type: boolean
+          default: false
+          description: 编辑时移除已保存的前置代理，不能同时提供新的 upstream。
+
+    AdminProxyStatus:
+      type: object
+      additionalProperties: false
+      required: [enabled, configured, upstream_configured]
+      properties:
+        enabled: {type: boolean}
+        configured: {type: boolean}
+        upstream_configured: {type: boolean}
+
     AdminCreateAccountRequest:
       type: object
       additionalProperties: false
@@ -2132,6 +2223,8 @@ components:
           description: IMAP 登录用户名；服务会去除首尾空白。
         auto_login:
           $ref: '#/components/schemas/AdminAutoLoginInput'
+        proxy:
+          $ref: '#/components/schemas/AdminProxyInput'
         imap_password:
           type: string
           minLength: 1
@@ -2217,6 +2310,8 @@ components:
             和 OTP 历史，轮换公开 IMAPS 的 UIDVALIDITY，并重置同步状态。
         auto_login:
           $ref: '#/components/schemas/AdminAutoLoginInput'
+        proxy:
+          $ref: '#/components/schemas/AdminProxyInput'
         imap_password:
           type:
             - string
@@ -2321,6 +2416,7 @@ components:
         - mailbox_type
         - provider
         - email_suffix
+        - proxy
       properties:
         id:
           type: integer
@@ -2380,6 +2476,8 @@ components:
           description: 自定义邮箱生成使用的后缀；iCloud 模式为空字符串。
         sync_progress:
           $ref: "#/components/schemas/AdminSyncProgress"
+        proxy:
+          $ref: '#/components/schemas/AdminProxyStatus'
 
     AdminAccountDetail:
       type: object

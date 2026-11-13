@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"icloud-api/internal/domain"
+	"icloud-api/internal/store"
 )
 
 func TestPoolAPIIsolationCredentialsAndFreshCode(t *testing.T) {
@@ -156,6 +157,65 @@ func TestPoolAPIIsolationCredentialsAndFreshCode(t *testing.T) {
 	}
 	if r = call("GET", "/api/v1/pool/leases", "", newKey); r.Code != 200 {
 		t.Fatal("rotated project key failed")
+	}
+}
+
+func TestPoolLeaseCodeFindsValidOTPBeyondHistoryWindow(t *testing.T) {
+	env := newAdminAPITestEnv(t)
+	env.server.sync = nil
+	ctx := context.Background()
+	if err := env.store.ConfigureMailArchive(t.TempDir(), 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	account := adminAPITestCreateAccount(t, env, "pool-deep-otp@icloud.com")
+	alias, _ := createV2AliasFixture(t, env, account.ID, "pool-deep-otp-alias@icloud.com")
+	if err := env.store.EnrollPoolAliases(ctx, []int64{alias.ID}); err != nil {
+		t.Fatal(err)
+	}
+	client, key, err := env.store.CreatePoolClient(ctx, "deep-otp-project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leases, err := env.store.ClaimPool(ctx, client.ID, store.PoolClaim{RequestID: "deep-otp-request", Count: 1, TTLSeconds: 600})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := leases[0]
+	base := lease.CreatedAt.Add(-time.Hour)
+	account, err = env.store.GetAccount(ctx, account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias, err = env.store.GetAlias(ctx, alias.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := make([]domain.ArchivedMessage, 0, 120)
+	for index := 1; index <= 119; index++ {
+		messages = append(messages, domain.ArchivedMessage{
+			AccountID: account.ID, UIDValidity: 100, UID: uint32(index),
+			InternalDate: base.Add(time.Duration(index) * time.Second),
+			ContentState: domain.ArchiveContentMetadata, OTP: fmt.Sprintf("%06d", index), AliasIDs: []int64{alias.ID},
+		})
+	}
+	messages = append(messages, domain.ArchivedMessage{
+		AccountID: account.ID, UIDValidity: 100, UID: 120,
+		InternalDate: lease.CreatedAt.Add(time.Second), ContentState: domain.ArchiveContentMetadata,
+		OTP: "654321", AliasIDs: []int64{alias.ID},
+	})
+	if err := env.store.ApplyMailboxSync(ctx, account.ID, account.UpdatedAt, []domain.Alias{alias}, domain.MailboxSyncResult{
+		ArchivedMessages: messages,
+		State:            domain.IMAPSyncState{AccountID: account.ID, UIDValidity: 100, LastUID: 120, UpdatedAt: lease.CreatedAt.Add(2 * time.Second)}, Reset: true,
+	}, lease.CreatedAt.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	router, err := env.server.Router()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := serveV2Request(router, "GET", "/api/v1/pool/leases/"+lease.ID+"/code", "", map[string]string{"Authorization": "Bearer " + key})
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"otp":"654321"`) {
+		t.Fatalf("deep OTP response = %d %s", response.Code, response.Body.String())
 	}
 }
 

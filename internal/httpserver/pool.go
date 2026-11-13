@@ -392,21 +392,19 @@ func (s *Server) writePoolCodeIfReady(c *gin.Context, v store.PoolLease, alias d
 		s.poolError(c, store.ErrPoolClosed)
 		return true
 	}
-	records, err := s.store.ListAliasOTPs(c.Request.Context(), alias.ID, 100)
+	record, err := s.store.GetLatestAliasOTPAfter(c.Request.Context(), alias.ID, after)
+	if errors.Is(err, store.ErrNotFound) {
+		if final {
+			c.JSON(200, gin.H{"data": gin.H{"success": false, "code": "no_code", "retryable": true, "email": alias.Address}})
+		}
+		return final
+	}
 	if err != nil {
 		s.poolError(c, err)
 		return true
 	}
-	for _, record := range records {
-		if record.Time.After(after) {
-			c.JSON(200, gin.H{"data": gin.H{"success": true, "otp": record.OTP, "time": record.Time.UTC().Format(time.RFC3339Nano), "email": alias.Address}})
-			return true
-		}
-	}
-	if final {
-		c.JSON(200, gin.H{"data": gin.H{"success": false, "code": "no_code", "retryable": true, "email": alias.Address}})
-	}
-	return final
+	c.JSON(200, gin.H{"data": gin.H{"success": true, "otp": record.OTP, "time": record.Time.UTC().Format(time.RFC3339Nano), "email": alias.Address}})
+	return true
 }
 
 func (s *Server) adminPoolAccounts(c *gin.Context) {

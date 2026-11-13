@@ -39,7 +39,7 @@ func (c *Client) ReadAliasMail(ctx context.Context, session Session, aliasAddres
 	if err != nil || !strings.EqualFold(alias.Address, strings.TrimSpace(aliasAddress)) {
 		return result, checkpoint, fmt.Errorf("invalid alias address")
 	}
-	op, err := c.newOperation(&session)
+	op, err := c.newOperationForContext(ctx, &session)
 	if err != nil {
 		return result, checkpoint, err
 	}

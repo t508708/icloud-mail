@@ -131,7 +131,7 @@ func (b *aliasDeletionBatch) beforeRequest(ctx context.Context, operation string
 	if err != nil {
 		return err
 	}
-	if !sameIdentity(identityOf(account), identityOf(b.account)) {
+	if !sameIdentity(identityOf(account), identityOf(b.account)) || !sameAccountProxy(account.Proxy, b.account.Proxy) {
 		b.stopped = wrapError(CodeAccountChanged, ErrAccountChanged, nil)
 		return b.stopped
 	}

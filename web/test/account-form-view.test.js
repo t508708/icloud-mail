@@ -168,6 +168,34 @@ test("account normalizer preserves custom mailbox metadata", () => {
   assert.equal(account.emailSuffix, "example.test");
 });
 
+test("account proxy DTO exposes configuration flags without returning secrets", () => {
+  const normalized = normalizeAccount({
+    proxy: { enabled: true, configured: true, upstream_configured: true, endpoint: "secret" },
+  });
+  assert.deepEqual(normalized.proxy, {
+    enabled: true,
+    configured: true,
+    upstreamConfigured: true,
+  });
+  assert.equal("endpoint" in normalized.proxy, false);
+});
+
+test("account form keeps proxy secrets blank and supports test and explicit upstream clearing", async () => {
+  const source = await readFile(viewPath, "utf8");
+  assert.match(source, /proxyEnabled: account\.proxy\.enabled/);
+  assert.match(source, /proxyEndpoint: ""/);
+  assert.match(source, /proxyUpstream: ""/);
+  assert.match(source, /已保存代理地址；留空保留当前配置/);
+  assert.match(source, /clear_upstream: true/);
+  assert.match(source, /testAccountProxy\(/);
+  assert.match(source, /代理连接成功/);
+  assert.match(source, /目标 HTTP/);
+  assert.match(source, /耗时/);
+  assert.match(source, /代理连接失败：/);
+  assert.match(source, /代理已关闭，主号连接将直接访问邮件服务器/);
+  assert.match(source, /https\?|socks5/);
+});
+
 test("mailbox receive rules distinguish direct iCloud, forwarded iCloud, and custom", () => {
   const direct = {
     mailboxType: "icloud",

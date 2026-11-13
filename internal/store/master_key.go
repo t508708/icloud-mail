@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"icloud-api/internal/domain"
+	modernsqlite "modernc.org/sqlite"
 )
 
 const (
@@ -92,7 +93,7 @@ func (s *Store) InitializeMasterKeyWithLegacySQLite(
 		return wrapLegacySQLiteImportError(err)
 	}
 	if !bound || imported {
-		if err := validateStoredCiphertexts(ctx, tx, validator); err != nil {
+		if err := s.validateStoredCiphertexts(ctx, tx, validator); err != nil {
 			return err
 		}
 	}
@@ -143,7 +144,7 @@ func (s *Store) VerifyMasterKeyWithValidator(
 		return nil
 	}
 
-	if err := validateStoredCiphertexts(ctx, tx, validator); err != nil {
+	if err := s.validateStoredCiphertexts(ctx, tx, validator); err != nil {
 		return err
 	}
 	if err := bindMasterKeyFingerprintTx(ctx, tx, fingerprint, timestamp(s.now())); err != nil {
@@ -225,8 +226,18 @@ func (s *Store) validatedMasterKeyFingerprint(masterKey []byte) ([sha256.Size]by
 	return fingerprintMasterKey(masterKey), nil
 }
 
-func validateStoredCiphertexts(ctx context.Context, tx *sql.Tx, validator MasterKeyCipherValidator) error {
-	rows, err := tx.QueryContext(ctx, `
+func (s *Store) validateStoredCiphertexts(ctx context.Context, tx *sql.Tx, validator MasterKeyCipherValidator) error {
+	proxyTableExists := false
+	var err error
+	if _, isSQLite := s.db.Driver().(*modernsqlite.Driver); isSQLite {
+		err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'account_proxy_configs')`).Scan(&proxyTableExists)
+	} else {
+		err = tx.QueryRowContext(ctx, `SELECT to_regclass('account_proxy_configs') IS NOT NULL`).Scan(&proxyTableExists)
+	}
+	if err != nil {
+		return fmt.Errorf("inspect encrypted proxy storage: %w", err)
+	}
+	query := `
 		SELECT 'imap', id, password_ciphertext FROM accounts
 		UNION ALL
 		SELECT 'apple', account_id, session_ciphertext FROM apple_web_sessions
@@ -234,9 +245,16 @@ func validateStoredCiphertexts(ctx context.Context, tx *sql.Tx, validator Master
 		SELECT 'alias_credentials', id, credential_ciphertext FROM aliases
 		WHERE credential_ciphertext <> ''
 		UNION ALL
-		SELECT 'pending_alias_api_key', alias_id, api_key_ciphertext FROM pending_alias_api_keys
-		ORDER BY 1, 2
-	`)
+		SELECT 'pending_alias_api_key', alias_id, api_key_ciphertext FROM pending_alias_api_keys`
+	if proxyTableExists {
+		query += ` UNION ALL
+		SELECT 'proxy_endpoint', account_id, endpoint_ciphertext FROM account_proxy_configs
+		WHERE endpoint_ciphertext <> ''
+		UNION ALL
+		SELECT 'proxy_upstream', account_id, upstream_ciphertext FROM account_proxy_configs
+		WHERE upstream_ciphertext <> ''`
+	}
+	rows, err := tx.QueryContext(ctx, query+` ORDER BY 1, 2`)
 	if err != nil {
 		return fmt.Errorf("read encrypted data before binding master key: %w", err)
 	}
@@ -255,7 +273,7 @@ func validateStoredCiphertexts(ctx context.Context, tx *sql.Tx, validator Master
 
 		var decryptErr error
 		switch kind {
-		case "imap":
+		case "imap", "proxy_endpoint", "proxy_upstream":
 			_, decryptErr = validator.Decrypt(ciphertext)
 		case "apple":
 			_, decryptErr = validator.DecryptAppleSession(ciphertext)

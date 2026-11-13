@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"icloud-api/internal/netproxy"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -1551,5 +1553,44 @@ func TestConfigBounds(t *testing.T) {
 		if _, err := NewClient(config); !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("config %#v error = %v, want ErrInvalidConfig", config, err)
 		}
+	}
+}
+
+func TestProxyContextSelectsIsolatedTransportsAndRejectsInvalidConfig(t *testing.T) {
+	client, err := NewClient(Config{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("proxy request fell back to the default transport")
+		return nil, nil
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := client.requestTransport(WithProxy(context.Background(), netproxy.Config{Endpoint: "127.0.0.1:10001"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := client.requestTransport(WithProxy(context.Background(), netproxy.Config{Endpoint: "127.0.0.1:10002"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("distinct proxies shared a transport")
+	}
+	sharedProxy := netproxy.Config{Endpoint: "127.0.0.1:10001"}
+	accountOne, err := client.requestTransport(WithAccountProxy(context.Background(), 1, sharedProxy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountTwo, err := client.requestTransport(WithAccountProxy(context.Background(), 2, sharedProxy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accountOne == accountTwo || accountOne == first {
+		t.Fatal("different accounts shared a proxy connection pool")
+	}
+	if first == client.transport || second == client.transport {
+		t.Fatal("proxy transport matched direct transport")
+	}
+	if _, err := client.requestTransport(WithProxy(context.Background(), netproxy.Config{Endpoint: "invalid"})); err == nil {
+		t.Fatal("invalid proxy configuration was accepted")
 	}
 }

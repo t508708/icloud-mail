@@ -23,6 +23,11 @@ type syncDirectory struct {
 // Read directories before acquiring the publication lock. Explicit Web auth
 // failures and an unresolved 421 permit the independent Account read channel.
 func (s *Service) readSyncDirectory(ctx context.Context, account domain.Account) (syncDirectory, error) {
+	appleCtx, err := s.accountProxyForAccount(ctx, account)
+	if err != nil {
+		return syncDirectory{}, err
+	}
+	ctx = appleCtx
 	record, session, err := s.loadSession(ctx, account.ID)
 	if err != nil {
 		if errors.Is(err, ErrSessionExpired) {
@@ -87,6 +92,10 @@ func explicitWebFailure(err, kind error) bool {
 }
 
 func (s *Service) readAccountDirectoryForSync(ctx context.Context, account domain.Account, webErr error) (syncDirectory, error) {
+	appleCtx, err := s.accountProxyForAccount(ctx, account)
+	if err != nil {
+		return syncDirectory{}, err
+	}
 	client, ok := s.client.(accountDirectoryLister)
 	if !ok {
 		return syncDirectory{}, webErr
@@ -113,7 +122,7 @@ func (s *Service) readAccountDirectoryForSync(ctx context.Context, account domai
 	if !sameIdentity(identityOf(current), identityOf(account)) {
 		return syncDirectory{}, wrapError(CodeAccountChanged, ErrAccountChanged, nil)
 	}
-	list, returned, readErr := client.ListAccountAliases(ctx, *managed)
+	list, returned, readErr := client.ListAccountAliases(appleCtx, *managed)
 	acceptedCheckpoint := returned.UpdatedAt.After(managed.UpdatedAt)
 	if readErr == nil || acceptedCheckpoint || returned.AppleID != "" || returned.Region != "" {
 		if err := validateAccountDirectorySession(*managed, returned); err != nil {

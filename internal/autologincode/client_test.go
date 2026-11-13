@@ -6,10 +6,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"strings"
 	"testing"
 	"time"
+
+	"icloud-api/internal/netproxy"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -26,6 +29,59 @@ func fixtureClient(status int, body string) *Client {
 		return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 	})
 	return c
+}
+
+func TestCodeProviderUsesAccountProxy(t *testing.T) {
+	seen := make(chan string, 1)
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			t.Errorf("proxy request method = %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("HTTP proxy does not support CONNECT tunneling")
+			return
+		}
+		conn, rw, err := hijacker.Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		if _, err := rw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := rw.Flush(); err != nil {
+			t.Error(err)
+			return
+		}
+		request, err := http.ReadRequest(rw.Reader)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		seen <- r.Host + " " + request.Host + request.URL.Path
+		body := `{"otp":"123456"}`
+		_, _ = rw.WriteString("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 16\r\n\r\n" + body)
+		_ = rw.Flush()
+	}))
+	defer proxy.Close()
+	ctx := WithProxy(context.Background(), netproxy.Config{Endpoint: proxy.URL})
+	result, err := NewClient().Fetch(ctx, "http://8.8.8.8/code")
+	if err != nil || result.Code != "123456" {
+		t.Fatalf("proxied provider result = %#v, %v", result, err)
+	}
+	select {
+	case target := <-seen:
+		if target != "8.8.8.8:80 8.8.8.8/code" {
+			t.Fatalf("proxy target = %s", target)
+		}
+	default:
+		t.Fatal("provider request did not cross the proxy")
+	}
 }
 
 func TestProviderResponseFixtures(t *testing.T) {

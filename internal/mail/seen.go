@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"net"
 	"sort"
 
 	imapv2 "github.com/emersion/go-imap/v2"
@@ -52,6 +51,10 @@ func (f *Fetcher) MarkSeen(
 	}
 
 	settings := f.settings()
+	settings, err = f.accountSettings(account, settings)
+	if err != nil {
+		return err
+	}
 	host, address, username, err := accountEndpoint(account)
 	if err != nil {
 		return err
@@ -130,8 +133,7 @@ func (f *Fetcher) MarkSeen(
 // dialSeenIMAP keeps the write-side compatibility path independent from the
 // archive fetcher's connection implementation.
 func dialSeenIMAP(ctx context.Context, address, serverName string, settings fetchSettings) (*imapclientv2.Client, error) {
-	dialer := &net.Dialer{Timeout: settings.timeout}
-	connection, err := dialer.DialContext(ctx, "tcp", address)
+	connection, err := settings.dialContext(ctx, address)
 	if err != nil {
 		return nil, err
 	}

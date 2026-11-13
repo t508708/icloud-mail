@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"icloud-api/internal/netproxy"
 )
 
 var (
@@ -33,6 +35,13 @@ type Result struct {
 
 type Client struct {
 	httpClient *http.Client
+}
+
+type proxyContextKey struct{}
+
+// WithProxy routes a code-provider fetch through the account's proxy chain.
+func WithProxy(ctx context.Context, config netproxy.Config) context.Context {
+	return context.WithValue(ctx, proxyContextKey{}, config)
 }
 
 func NewClient() *Client {
@@ -170,7 +179,31 @@ func (c *Client) Fetch(ctx context.Context, rawURL string) (Result, error) {
 		return Result{}, ErrInvalidURL
 	}
 	req.Header.Set("Accept", "application/json, text/plain")
-	resp, err := c.httpClient.Do(req)
+	client := c.httpClient
+	if proxy, ok := ctx.Value(proxyContextKey{}).(netproxy.Config); ok {
+		if err := proxy.Validate(); err != nil {
+			return Result{}, ErrUnavailable
+		}
+		transport := &http.Transport{
+			Proxy: nil,
+			DialContext: func(dialCtx context.Context, network, address string) (net.Conn, error) {
+				return dialPublic(dialCtx, network, address, net.DefaultResolver.LookupNetIP, proxy.DialContext)
+			},
+			TLSHandshakeTimeout:    5 * time.Second,
+			ResponseHeaderTimeout:  8 * time.Second,
+			MaxResponseHeaderBytes: 16 << 10,
+			DisableKeepAlives:      true,
+		}
+		defer transport.CloseIdleConnections()
+		client = &http.Client{
+			Transport: transport,
+			Timeout:   10 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		if errors.Is(err, ErrInvalidURL) {
 			return Result{}, ErrInvalidURL

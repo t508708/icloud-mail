@@ -8,7 +8,7 @@
 
 Self-hosted · Multiple primary accounts · Mailbox pools · On-demand mail retrieval · Light and dark themes
 
-**Current version: v0.2.10**
+**Current version: v0.2.11**
 
 [Downloads and release notes](https://github.com/t508708/icloud-mail/releases) · [Docker deployment](#docker-deployment) · [API documentation](docs/POOL.md) · [Changelog](CHANGELOG.md)
 
@@ -26,9 +26,18 @@ For users who want to manage iCloud Hide My Email addresses centrally, automatic
 | **Project mailbox pools** | Issue Pool Keys for different projects to acquire addresses, confirm use in batches, renew, release, and retire leases. View claimable counts for enabled primary accounts. |
 | **Verification codes via links and API** | Each mailbox has its own retrieval link, with multilingual code extraction and support for `+tag` variants of registered root addresses. |
 | **On-demand mail retrieval** | Visiting a retrieval link or calling the API triggers incremental reads. Connections are reused within the same primary account to reduce duplicate requests and downloads of historical message bodies. |
+| **Per-account proxies** | Configure a dedicated HTTP, HTTPS, or SOCKS5 proxy for each primary account, with an optional upstream hop for Apple sign-in, session maintenance, and IMAP connections. |
 | **Separate credentials and connection recovery** | Each mailbox has its own rotatable API Key, IMAP password, and OAuth credentials. Apple Account and iCloud Web sign-in support trusted-device or SMS verification, plus optional automatic re-login with saved settings. |
 
 **About credentials:** Separate IMAP/OAuth credentials are issued by this gateway for connecting to this service. Access to Apple's upstream mailbox still requires the corresponding primary account's mail retrieval credentials.
+
+### Per-account proxies
+
+Enable **Primary Account Proxy** when adding or editing a primary account. Enter the exit proxy and optionally a preceding proxy for the route `server → upstream proxy → exit proxy → Apple / IMAP`. Use **Test Proxy** to check connectivity to iCloud through the configured chain. Disabling the switch restores direct connections for that account.
+
+Both entries support `hostname:port`, `hostname:port:username:password`, `username:password@hostname:port`, `hostname:port@username:password`, and URL forms such as `http://user:pass@host:port`, `https://user:pass@host:port`, or `socks5://user:pass@host:port`. Entries without a scheme use HTTP. Proxy credentials are encrypted; existing values can be kept by leaving inputs blank when editing, and the upstream proxy can be cleared independently. Connection checks identify the failing upstream or exit hop and distinguish authentication, TLS, connection and timeout errors. Each account has a separate Apple connection pool even when two accounts use the same proxy. Changing the proxy causes subsequent account connections to use the new route.
+
+Pool code waits now query the newest valid OTP directly instead of repeatedly loading a large history window.
 
 ## QQ Community
 
@@ -36,12 +45,12 @@ Discuss your experience, report issues, suggest features, share deployment tips,
 
 ## Recent Updates
 
-**v0.2.10: More flexible Apple verification and clearer creation errors.**
+**v0.2.11: Per-account proxies and faster concurrent code retrieval.**
 
-- Apple Account and iCloud Web sign-in can select a trusted phone for SMS or use trusted-device verification, including sending and submitting codes. SMS retries retain the selected phone.
-- Hide My Email creation failures show more specific upstream causes and retry guidance.
-- Multilingual OTP extraction is expanded. An administrator session plus Pool Key can read claimable counts for enabled iCloud accounts; previously used addresses are excluded.
-- Includes v0.2.9's protections against reissuing consumed addresses, accurate inventory, and atomic confirmation of up to 50 leases per call.
+- Enable a dedicated HTTP, HTTPS, or SOCKS5 proxy per account, with authentication, an optional upstream hop, encrypted settings, and a connectivity check.
+- Apple sign-in, session renewal, alias management, IMAP retrieval, IDLE, and automatic code-provider requests use the account's configured route.
+- Account connection pools are isolated; changing proxies refreshes subsequent connections and invalidates pending login verification flows.
+- Mailbox pool reads fetch the newest valid OTP directly from the database, reducing history scans during concurrent requests.
 
 See [CHANGELOG.md](CHANGELOG.md) for full feature changes, fixes, and upgrade notes.
 

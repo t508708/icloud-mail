@@ -23,7 +23,11 @@ const accountColumns = `
 	COALESCE((SELECT ams.updated_at FROM account_mailbox_settings ams
 		WHERE ams.account_id = a.id), 0),
 	COALESCE((SELECT amt.updated_at FROM account_mail_transports amt
-		WHERE amt.account_id = a.id), 0)`
+		WHERE amt.account_id = a.id), 0),
+	COALESCE((SELECT ap.enabled FROM account_proxy_configs ap WHERE ap.account_id = a.id), FALSE),
+	COALESCE((SELECT ap.endpoint_ciphertext FROM account_proxy_configs ap WHERE ap.account_id = a.id), ''),
+	COALESCE((SELECT ap.upstream_ciphertext FROM account_proxy_configs ap WHERE ap.account_id = a.id), ''),
+	COALESCE((SELECT ap.revision FROM account_proxy_configs ap WHERE ap.account_id = a.id), 0)`
 
 type AccountListFilter struct {
 	Query  string
@@ -91,6 +95,11 @@ func (s *Store) CreateAccount(ctx context.Context, account domain.Account) (doma
 	}
 	if account.AutoLogin != nil {
 		if err := s.saveAccountAutoLoginConfigTx(ctx, tx, id, *account.AutoLogin, mailboxType); err != nil {
+			return domain.Account{}, err
+		}
+	}
+	if account.Proxy != nil {
+		if err := s.saveAccountProxyConfigTx(ctx, tx, id, *account.Proxy); err != nil {
 			return domain.Account{}, err
 		}
 	}
@@ -224,6 +233,11 @@ func (s *Store) UpdateAccount(ctx context.Context, account domain.Account) (doma
 		}
 	} else if emailChanged || requestedMailboxType != domain.NormalizeMailboxType(currentMailboxType) {
 		if err := s.invalidateAccountAutoLoginIdentityTx(ctx, tx, account.ID); err != nil {
+			return domain.Account{}, err
+		}
+	}
+	if account.Proxy != nil {
+		if err := s.saveAccountProxyConfigTx(ctx, tx, account.ID, *account.Proxy); err != nil {
 			return domain.Account{}, err
 		}
 	}
@@ -651,6 +665,7 @@ func (s *Store) UpdateAccountSyncStatus(
 
 func scanAccount(scanner rowScanner) (domain.Account, error) {
 	var account domain.Account
+	var proxy domain.AccountProxyConfig
 	var enabled bool
 	var lastSyncedAt sql.NullInt64
 	var createdAt, updatedAt int64
@@ -661,6 +676,7 @@ func scanAccount(scanner rowScanner) (domain.Account, error) {
 		&createdAt, &updatedAt, &account.AliasCount,
 		&account.MailboxType, &account.EmailSuffix,
 		&account.MailboxConfigVersion, &account.MailTransportVersion,
+		&proxy.Enabled, &proxy.EndpointCiphertext, &proxy.UpstreamCiphertext, &proxy.Revision,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -673,6 +689,7 @@ func scanAccount(scanner rowScanner) (domain.Account, error) {
 	account.CreatedAt = timeFromTimestamp(createdAt)
 	account.UpdatedAt = timeFromTimestamp(updatedAt)
 	account.MailboxType = domain.NormalizeMailboxType(account.MailboxType)
+	account.Proxy = &proxy
 	if account.MailboxType == domain.MailboxTypeCustom {
 		if suffix, suffixErr := domain.NormalizeEmailSuffix(account.EmailSuffix); suffixErr == nil {
 			account.EmailSuffix = suffix

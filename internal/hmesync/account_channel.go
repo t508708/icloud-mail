@@ -51,6 +51,7 @@ type accountAuthChallenge struct {
 	id       string
 	owner    int64
 	identity accountIdentity
+	proxy    *domain.AccountProxyConfig
 	session  apple.AccountSession
 	expires  time.Time
 	attempts int
@@ -161,6 +162,10 @@ func (s *Service) keepAliveAccountSession(ctx context.Context, id int64, onlyDue
 	if err != nil || !account.Enabled {
 		return err
 	}
+	appleCtx, err := s.accountProxyForAccount(ctx, account)
+	if err != nil {
+		return err
+	}
 	managedSession, err := s.readAccountManagementSession(ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
@@ -174,7 +179,7 @@ func (s *Service) keepAliveAccountSession(ctx context.Context, id int64, onlyDue
 	if onlyDue && !managedSession.NeedsRefresh(s.now()) {
 		return nil
 	}
-	managed, err := client.RefreshAccountSession(ctx, *managedSession)
+	managed, err := client.RefreshAccountSession(appleCtx, *managedSession)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return err
@@ -239,6 +244,10 @@ func (s *Service) StartAccountAuth(ctx context.Context, owner, id int64, appleID
 	if err != nil {
 		return AuthResult{}, err
 	}
+	appleCtx, err := s.accountProxyForAccount(ctx, account)
+	if err != nil {
+		return AuthResult{}, err
+	}
 	webRecord, webErr := s.repo.GetAppleWebSession(ctx, id)
 	if webErr != nil && !errors.Is(webErr, store.ErrNotFound) {
 		return AuthResult{}, webErr
@@ -254,7 +263,7 @@ func (s *Service) StartAccountAuth(ctx context.Context, owner, id int64, appleID
 	if err != nil {
 		return AuthResult{}, err
 	}
-	managed, verify, err := client.SignInAccount(ctx, appleID, password, region, previous)
+	managed, verify, err := client.SignInAccount(appleCtx, appleID, password, region, previous)
 	password = ""
 	if err != nil {
 		return AuthResult{}, mapAppleError(err, false)
@@ -275,7 +284,7 @@ func (s *Service) StartAccountAuth(ctx context.Context, owner, id int64, appleID
 		if err != nil {
 			return AuthResult{}, err
 		}
-		flow := accountAuthChallenge{id: flowID, owner: owner, identity: identityOf(account), session: managed, expires: s.now().Add(s.challengeTTL)}
+		flow := accountAuthChallenge{id: flowID, owner: owner, identity: identityOf(account), proxy: cloneAccountProxy(account.Proxy), session: managed, expires: s.now().Add(s.challengeTTL)}
 		s.challengeMu.Lock()
 		s.accountAuthChallenges[id] = flow
 		s.challengeMu.Unlock()
@@ -320,8 +329,12 @@ func (s *Service) verifyAccountAuth(ctx context.Context, owner, id int64, challe
 	if err != nil {
 		return AuthResult{}, err
 	}
-	if !sameIdentity(flow.identity, identityOf(account)) {
+	if !sameIdentity(flow.identity, identityOf(account)) || !sameAccountProxy(account.Proxy, flow.proxy) {
 		return AuthResult{}, wrapError(CodeAccountChanged, ErrAccountChanged, nil)
+	}
+	appleCtx, err := s.accountProxyForAccount(ctx, account)
+	if err != nil {
+		return AuthResult{}, err
 	}
 	webRecord, webErr := s.repo.GetAppleWebSession(ctx, id)
 	if webErr != nil && !errors.Is(webErr, store.ErrNotFound) {
@@ -341,7 +354,7 @@ func (s *Service) verifyAccountAuth(ctx context.Context, owner, id int64, challe
 	s.challengeMu.Lock()
 	s.accountAuthChallenges[id] = flow
 	s.challengeMu.Unlock()
-	managed, err := client.VerifyAccountCode(ctx, flow.session, code)
+	managed, err := client.VerifyAccountCode(appleCtx, flow.session, code)
 	if err != nil {
 		flow.session = managed
 		s.challengeMu.Lock()
@@ -400,6 +413,10 @@ func (s *Service) createRemoteAliasWithChannel(ctx context.Context, id int64, we
 }
 
 func (s *Service) createRemoteAliasWithMode(ctx context.Context, id int64, web apple.Session, legacy AutoAliasClient, channel string, probe bool) (apple.Alias, apple.Session, error) {
+	return s.createRemoteAliasWithModeContext(ctx, ctx, id, web, legacy, channel, probe)
+}
+
+func (s *Service) createRemoteAliasWithModeContext(ctx, appleCtx context.Context, id int64, web apple.Session, legacy AutoAliasClient, channel string, probe bool) (apple.Alias, apple.Session, error) {
 	label, note, err := newAliasCreationMetadata()
 	if err != nil {
 		return apple.Alias{}, web, wrapCryptoError(fmt.Errorf("generate alias creation metadata: %w", err))
@@ -423,6 +440,7 @@ func (s *Service) createRemoteAliasWithMode(ctx context.Context, id int64, web a
 			}
 		} else if !probe {
 			ctx = domain.WithWebOnlyCreation(ctx)
+			appleCtx = domain.WithWebOnlyCreation(appleCtx)
 		}
 	}
 	var earliest time.Time
@@ -469,7 +487,7 @@ func (s *Service) createRemoteAliasWithMode(ctx context.Context, id int64, web a
 			}
 			previous := *web.Account
 			var managed apple.AccountSession
-			alias, managed, err = client.CreateAccountAlias(ctx, *web.Account, label, note)
+			alias, managed, err = client.CreateAccountAlias(appleCtx, *web.Account, label, note)
 			web.Account = &managed
 			if explicitWebFailure(err, apple.ErrInvalidSession) {
 				// Keep Web authentication available for synchronization and OTP.
@@ -491,7 +509,7 @@ func (s *Service) createRemoteAliasWithMode(ctx context.Context, id int64, web a
 				err = wrapError(CodeAccountSessionExpired, ErrUpstream, err)
 			}
 		} else {
-			alias, web, err = legacy.CreateAlias(ctx, web, label, note)
+			alias, web, err = legacy.CreateAlias(appleCtx, web, label, note)
 		}
 		if strings.TrimSpace(alias.HME) != "" && strings.TrimSpace(alias.Label) == "" {
 			alias.Label = label

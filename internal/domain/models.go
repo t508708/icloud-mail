@@ -67,6 +67,16 @@ type Account struct {
 	MailboxConfigVersion int64                   `json:"-"`
 	MailTransportVersion int64                   `json:"-"`
 	AutoLogin            *AccountAutoLoginConfig `json:"-"`
+	Proxy                *AccountProxyConfig     `json:"-"`
+}
+
+// AccountProxyConfig contains encrypted proxy endpoints for one primary account.
+// An empty endpoint may be retained while the feature is disabled.
+type AccountProxyConfig struct {
+	Enabled            bool
+	EndpointCiphertext string
+	UpstreamCiphertext string
+	Revision           int64
 }
 
 // AppleWebSession stores the encrypted Apple web session associated with an

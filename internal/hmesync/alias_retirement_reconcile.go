@@ -102,6 +102,11 @@ func (s *Service) retirementDirectory(ctx context.Context, accountID int64) (*al
 	if err != nil {
 		return nil, err
 	}
+	appleCtx, err := s.accountProxyForAccount(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	ctx = appleCtx
 	if !account.Enabled {
 		return nil, wrapError(CodeAccountDisabled, ErrAccountDisabled, nil)
 	}
@@ -113,7 +118,7 @@ func (s *Service) retirementDirectory(ctx context.Context, accountID int64) (*al
 	}
 	// Leave recovery nil even if the caller enabled deletion recovery. Its
 	// beforeRequest requires a surviving local alias, unlike retirement reads.
-	batch := &aliasDeletionBatch{s: s, accountID: accountID, account: account}
+	batch := &aliasDeletionBatch{s: s, accountID: accountID, account: account, appleCtx: appleCtx}
 	batch.record, batch.session, err = s.loadSession(ctx, accountID)
 	if err != nil {
 		if errors.Is(err, ErrSessionExpired) {
@@ -135,7 +140,7 @@ func (s *Service) retirementDirectory(ctx context.Context, accountID int64) (*al
 		if !current.Enabled {
 			return wrapError(CodeAccountDisabled, ErrAccountDisabled, nil)
 		}
-		if current.ID != accountID || !sameIdentity(identityOf(current), identityOf(account)) {
+		if current.ID != accountID || !sameIdentity(identityOf(current), identityOf(account)) || !sameAccountProxy(current.Proxy, account.Proxy) {
 			return wrapError(CodeAccountChanged, ErrAccountChanged, nil)
 		}
 		return nil
@@ -157,14 +162,14 @@ func (s *Service) retirementDirectory(ctx context.Context, accountID int64) (*al
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	validated, remoteErr := s.client.Validate(ctx, batch.session)
+	validated, remoteErr := s.client.Validate(appleCtx, batch.session)
 	if err := accept(validated, remoteErr); err != nil {
 		return nil, err
 	}
 	if err := checkAccount(); err != nil {
 		return nil, err
 	}
-	directory, returned, remoteErr := s.client.ListAliases(ctx, batch.session)
+	directory, returned, remoteErr := s.client.ListAliases(appleCtx, batch.session)
 	if err := accept(returned, remoteErr); err != nil {
 		return nil, err
 	}

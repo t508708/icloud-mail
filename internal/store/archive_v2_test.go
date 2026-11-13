@@ -190,6 +190,47 @@ func TestArchiveRejectsNewInvalidOTPAndFiltersLegacyInvalidHistory(t *testing.T)
 	}
 }
 
+func TestGetLatestAliasOTPAfterUsesStrictTimeStableOrderAndValidCodes(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db, _ := openArchiveV2Store(t, 1<<20)
+	account := createAccount(t, ctx, db, "Latest OTP", "latest-otp@icloud.com")
+	alias := createAlias(t, ctx, db, account.ID, "latest-otp-alias@icloud.com", bytes.Repeat([]byte{0x33}, 32))
+	base := time.Date(2026, 8, 11, 3, 0, 0, 0, time.UTC)
+	messages := make([]domain.ArchivedMessage, 0, 152)
+	for index := 1; index <= 150; index++ {
+		messages = append(messages, domain.ArchivedMessage{
+			AccountID: account.ID, UIDValidity: 43, UID: uint32(index),
+			InternalDate: base.Add(time.Duration(index) * time.Minute),
+			ContentState: domain.ArchiveContentMetadata, OTP: fmt.Sprintf("%06d", index),
+			AliasIDs: []int64{alias.ID},
+		})
+	}
+	// Equal timestamps use archived message ID descending as the stable tie-breaker.
+	equalTime := base.Add(151 * time.Minute)
+	messages = append(messages,
+		domain.ArchivedMessage{AccountID: account.ID, UIDValidity: 43, UID: 151, InternalDate: equalTime, ContentState: domain.ArchiveContentMetadata, OTP: "777777", AliasIDs: []int64{alias.ID}},
+		domain.ArchivedMessage{AccountID: account.ID, UIDValidity: 43, UID: 152, InternalDate: equalTime, ContentState: domain.ArchiveContentMetadata, OTP: "888888", AliasIDs: []int64{alias.ID}},
+	)
+	applyArchiveV2Batch(t, ctx, db, account.ID, []domain.Alias{alias}, messages, 43, 152, true)
+	if _, err := db.DB().ExecContext(ctx, `UPDATE alias_messages SET otp = ? WHERE alias_id = ? AND mailbox_uid = ?`, "20x626", alias.ID, 152); err != nil {
+		t.Fatalf("seed invalid latest OTP: %v", err)
+	}
+
+	got, err := db.GetLatestAliasOTPAfter(ctx, alias.ID, base.Add(150*time.Minute))
+	if err != nil || got.OTP != "777777" {
+		t.Fatalf("latest valid OTP after cutoff = %#v, %v", got, err)
+	}
+	got, err = db.GetLatestAliasOTPAfter(ctx, alias.ID, equalTime.Add(-time.Nanosecond))
+	if err != nil || got.OTP != "777777" {
+		t.Fatalf("stable timestamp tie result = %#v, %v", got, err)
+	}
+	if _, err := db.GetLatestAliasOTPAfter(ctx, alias.ID, equalTime); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("strict after cutoff error = %v", err)
+	}
+}
+
 func TestLegacySnapshotExpungeProjectionDoesNotDeleteV2Archive(t *testing.T) {
 	t.Parallel()
 

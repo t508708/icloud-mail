@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"icloud-api/internal/netproxy"
 )
 
 const (
@@ -48,6 +51,9 @@ type Client struct {
 	randomMu              sync.Mutex
 	clientBuildNumber     string
 	clientMasteringNumber string
+	proxyMu               sync.Mutex
+	proxyTransports       map[string]*http.Transport
+	proxyTransportOrder   []string
 }
 
 // NewClient validates all security-sensitive configuration up front.
@@ -91,7 +97,9 @@ func NewClient(config Config) (*Client, error) {
 	}
 	transport := config.Transport
 	if transport == nil {
-		transport = http.DefaultTransport
+		direct := http.DefaultTransport.(*http.Transport).Clone()
+		direct.Proxy = nil
+		transport = direct
 	}
 	randomSource := config.Random
 	if randomSource == nil {
@@ -116,7 +124,56 @@ func NewClient(config Config) (*Client, error) {
 		random:                randomSource,
 		clientBuildNumber:     build,
 		clientMasteringNumber: mastering,
+		proxyTransports:       make(map[string]*http.Transport),
 	}, nil
+}
+
+type proxyContextKey struct{}
+type proxyAccountContextKey struct{}
+
+// WithProxy binds Apple requests in ctx to an isolated proxy transport.
+func WithProxy(ctx context.Context, config netproxy.Config) context.Context {
+	return context.WithValue(ctx, proxyContextKey{}, config)
+}
+
+// WithAccountProxy keeps HTTP connection pools independent between accounts.
+func WithAccountProxy(ctx context.Context, accountID int64, config netproxy.Config) context.Context {
+	return context.WithValue(WithProxy(ctx, config), proxyAccountContextKey{}, accountID)
+}
+
+// ProxyConfigFromContext returns the proxy configuration bound to ctx.
+func ProxyConfigFromContext(ctx context.Context) (netproxy.Config, bool) {
+	config, ok := ctx.Value(proxyContextKey{}).(netproxy.Config)
+	return config, ok
+}
+
+func (c *Client) requestTransport(ctx context.Context) (http.RoundTripper, error) {
+	config, ok := ProxyConfigFromContext(ctx)
+	if !ok {
+		return c.transport, nil
+	}
+	accountID, _ := ctx.Value(proxyAccountContextKey{}).(int64)
+	key := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00%s", accountID, config.Endpoint, config.Upstream))))
+	c.proxyMu.Lock()
+	defer c.proxyMu.Unlock()
+	if transport := c.proxyTransports[key]; transport != nil {
+		return transport, nil
+	}
+	transport, err := config.HTTPTransport()
+	if err != nil {
+		return nil, fmt.Errorf("configure Apple proxy: %w", err)
+	}
+	c.proxyTransports[key] = transport
+	c.proxyTransportOrder = append(c.proxyTransportOrder, key)
+	if len(c.proxyTransportOrder) > 256 {
+		oldest := c.proxyTransportOrder[0]
+		c.proxyTransportOrder = c.proxyTransportOrder[1:]
+		if old := c.proxyTransports[oldest]; old != nil {
+			old.CloseIdleConnections()
+			delete(c.proxyTransports, oldest)
+		}
+	}
+	return transport, nil
 }
 
 // SignIn performs Apple's current SRP login flow. The returned bool reports
@@ -157,7 +214,7 @@ func (c *Client) SignIn(ctx context.Context, appleID, password string, region Re
 		}
 	}
 
-	op, err := c.newOperation(&result)
+	op, err := c.newOperationForContext(ctx, &result)
 	if err != nil {
 		return result, false, err
 	}
@@ -216,7 +273,7 @@ func (c *Client) SignIn(ctx context.Context, appleID, password string, region Re
 func (c *Client) RequestCode(ctx context.Context, session Session) (result Session, err error) {
 	result = session
 	result.WebVerification = cloneWebVerification(session.WebVerification)
-	op, err := c.newOperation(&result)
+	op, err := c.newOperationForContext(ctx, &result)
 	if err != nil {
 		return result, err
 	}
@@ -236,7 +293,7 @@ func (c *Client) VerifyCode(ctx context.Context, session Session, code string) (
 	if !validSecurityCode(code) {
 		return result, operationError("verify two-factor code", ErrTwoFactorCode, 0, nil)
 	}
-	op, err := c.newOperation(&result)
+	op, err := c.newOperationForContext(ctx, &result)
 	if err != nil {
 		return result, err
 	}
@@ -300,7 +357,7 @@ func (c *Client) VerifyCode(ctx context.Context, session Session, code string) (
 // on HTTP 421 without triggering a fresh sign-in.
 func (c *Client) Validate(ctx context.Context, session Session) (result Session, err error) {
 	result = session
-	op, err := c.newOperation(&result)
+	op, err := c.newOperationForContext(ctx, &result)
 	if err != nil {
 		return result, err
 	}
@@ -315,7 +372,7 @@ func (c *Client) Validate(ctx context.Context, session Session) (result Session,
 		if checkpoint.Region == RegionChina {
 			checkpoint.CountryCode = "CN"
 		}
-		recovery, recoveryErr := c.newOperation(&checkpoint)
+		recovery, recoveryErr := c.newOperationForContext(ctx, &checkpoint)
 		if recoveryErr != nil {
 			return session, recoveryErr
 		}
@@ -346,7 +403,7 @@ func (c *Client) Validate(ctx context.Context, session Session) (result Session,
 // updated session (including any rotated cookies).
 func (c *Client) ListAliases(ctx context.Context, session Session) (list ListResult, result Session, err error) {
 	result = session
-	op, err := c.newOperation(&result)
+	op, err := c.newOperationForContext(ctx, &result)
 	if err != nil {
 		return list, result, err
 	}
@@ -484,7 +541,7 @@ func (c *Client) UpdateForwardTo(ctx context.Context, session Session, forwardTo
 		return result, operationError("update Hide My Email forwarding target", ErrInvalidConfig, 0,
 			errors.New("invalid forwarding email address"))
 	}
-	op, err := c.newOperation(&result)
+	op, err := c.newOperationForContext(ctx, &result)
 	if err != nil {
 		return result, err
 	}
@@ -537,7 +594,7 @@ func (c *Client) mutateAlias(
 		return result, operationError(operation, ErrInvalidConfig, 0,
 			errors.New("invalid Hide My Email anonymous ID"))
 	}
-	op, err := c.newOperation(&result)
+	op, err := c.newOperationForContext(ctx, &result)
 	if err != nil {
 		return result, err
 	}
@@ -574,7 +631,7 @@ func (c *Client) mutateAlias(
 // reconciliation by the caller.
 func (c *Client) CreateAlias(ctx context.Context, session Session, label, note string) (created Alias, result Session, err error) {
 	result = session
-	op, err := c.newOperation(&result)
+	op, err := c.newOperationForContext(ctx, &result)
 	if err != nil {
 		return created, result, err
 	}
@@ -936,6 +993,19 @@ func (c *Client) newOperation(session *Session) (*operation, error) {
 			return nil
 		},
 	}
+	return op, nil
+}
+
+func (c *Client) newOperationForContext(ctx context.Context, session *Session) (*operation, error) {
+	op, err := c.newOperation(session)
+	if err != nil {
+		return nil, err
+	}
+	transport, err := c.requestTransport(ctx)
+	if err != nil {
+		return nil, err
+	}
+	op.http.Transport = transport
 	return op, nil
 }
 

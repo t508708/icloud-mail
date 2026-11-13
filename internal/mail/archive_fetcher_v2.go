@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	stdmail "net/mail"
 	"os"
 	"sort"
@@ -48,6 +47,10 @@ func (f *Fetcher) fetchArchiveIncremental(
 		return failure, err
 	}
 	if err := validateIMAPAccount(account, password); err != nil {
+		return failure, err
+	}
+	settings, err := f.accountSettings(account, settings)
+	if err != nil {
 		return failure, err
 	}
 	aliasAddresses, err := prepareAliases(account, aliases, settings.maxAliases)
@@ -355,8 +358,7 @@ func emptyLegacySnapshot(aliasID int64, uidValidity uint32) domain.LatestMessage
 }
 
 func dialArchiveIMAP(ctx context.Context, address, serverName string, settings fetchSettings) (*imapclientv2.Client, error) {
-	dialer := &net.Dialer{Timeout: settings.timeout}
-	connection, err := dialer.DialContext(ctx, "tcp", address)
+	connection, err := settings.dialContext(ctx, address)
 	if err != nil {
 		return nil, err
 	}

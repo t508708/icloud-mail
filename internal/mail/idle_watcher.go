@@ -21,6 +21,11 @@ var ErrIdleUnsupported = errors.New("imap IDLE is unsupported")
 // the caller; this function owns exactly one IMAP connection.
 func (f *Fetcher) WatchMailbox(ctx context.Context, account domain.Account, password string, notify func()) error {
 	settings := f.settings()
+	var err error
+	settings, err = f.accountSettings(account, settings)
+	if err != nil {
+		return err
+	}
 	if err := validateIMAPAccount(account, password); err != nil {
 		return err
 	}
@@ -28,8 +33,7 @@ func (f *Fetcher) WatchMailbox(ctx context.Context, account domain.Account, pass
 	if err != nil {
 		return err
 	}
-	dialer := &net.Dialer{Timeout: settings.timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", address)
+	conn, err := settings.dialContext(ctx, address)
 	if err != nil {
 		return fmt.Errorf("connect IMAP: %w", err)
 	}

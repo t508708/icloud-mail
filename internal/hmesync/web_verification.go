@@ -53,7 +53,11 @@ func (s *Service) RequestAuthCode(ctx context.Context, owner, accountID int64, c
 	if err != nil {
 		return AuthResult{}, err
 	}
-	if !sameIdentity(identityOf(account), flow.identity) {
+	appleCtx, err := s.accountProxyForAccount(ctx, account)
+	if err != nil {
+		return AuthResult{}, err
+	}
+	if !sameIdentity(identityOf(account), flow.identity) || !sameAccountProxy(account.Proxy, flow.proxy) {
 		s.deleteChallenge(challengeID)
 		return AuthResult{}, wrapError(CodeAccountChanged, ErrAccountChanged, nil)
 	}
@@ -80,7 +84,7 @@ func (s *Service) RequestAuthCode(ctx context.Context, owner, accountID int64, c
 	if !ok {
 		return AuthResult{}, wrapError(CodeUpstreamError, ErrUpstream, nil)
 	}
-	updated, sendErr := client.RequestWebVerification(ctx, flow.session, method, phoneID)
+	updated, sendErr := client.RequestWebVerification(appleCtx, flow.session, method, phoneID)
 	flow.session = updated
 	s.challengeMu.Lock()
 	if current, exists := s.challenges[challengeID]; exists && current.ownerAdminID == owner && current.accountID == accountID {

@@ -71,6 +71,7 @@ type challenge struct {
 	ownerAdminID int64
 	accountID    int64
 	identity     accountIdentity
+	proxy        *domain.AccountProxyConfig
 	appleID      string
 	region       apple.Region
 	session      apple.Session
@@ -182,9 +183,13 @@ func (s *Service) StartAuth(
 	if err != nil {
 		return AuthResult{}, err
 	}
+	appleCtx, err := s.accountProxyForAccount(ctx, account)
+	if err != nil {
+		return AuthResult{}, err
+	}
 	s.deleteAccountChallenge(accountID)
 	previous := s.previousSession(ctx, accountID, appleID, region)
-	session, needsVerification, err := s.client.SignIn(ctx, appleID, password, region, previous)
+	session, needsVerification, err := s.client.SignIn(appleCtx, appleID, password, region, previous)
 	password = ""
 	if err != nil {
 		mapped := mapAppleError(err, false)
@@ -256,9 +261,13 @@ func (s *Service) verifyAuth(ctx context.Context, ownerAdminID, accountID int64,
 		s.deleteChallenge(challengeID)
 		return AuthResult{}, err
 	}
-	if !sameIdentity(identityOf(account), flow.identity) {
+	if !sameIdentity(identityOf(account), flow.identity) || !sameAccountProxy(account.Proxy, flow.proxy) {
 		s.deleteChallenge(challengeID)
 		return AuthResult{}, wrapError(CodeAccountChanged, ErrAccountChanged, nil)
+	}
+	appleCtx, err := s.accountProxyForAccount(ctx, account)
+	if err != nil {
+		return AuthResult{}, err
 	}
 
 	verificationSession := flow.session
@@ -283,7 +292,7 @@ func (s *Service) verifyAuth(ctx context.Context, ownerAdminID, accountID int64,
 		copy.Method, copy.PhoneID = method, phoneID
 		verificationSession.WebVerification = &copy
 	}
-	session, err := s.client.VerifyCode(ctx, verificationSession, code)
+	session, err := s.client.VerifyCode(appleCtx, verificationSession, code)
 	code = ""
 	if err != nil {
 		mapped := mapAppleError(err, true)
@@ -754,6 +763,10 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 	if err != nil {
 		return domain.Alias{}, err
 	}
+	appleCtx, err := s.accountProxyForAccount(ctx, account)
+	if err != nil {
+		return domain.Alias{}, err
+	}
 	if !account.Enabled {
 		return domain.Alias{}, wrapError(CodeAccountDisabled, ErrAccountDisabled, nil)
 	}
@@ -856,7 +869,7 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 		}
 	}
 	reportProgress(domain.AliasCreationPhaseValidatingSession, autoCreateValidatingSessionPercent, 0)
-	validated, err := s.client.Validate(ctx, session)
+	validated, err := s.client.Validate(appleCtx, session)
 	if err != nil {
 		mapped := mapAppleError(err, false)
 		if errors.Is(mapped, ErrSessionExpired) {
@@ -893,7 +906,7 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 	} else {
 		reportProgress(domain.AliasCreationPhaseCheckingForwarding, autoCreateCheckingForwardingPercent, 0)
 	}
-	settings, listedSession, err := s.client.ListAliases(ctx, validated)
+	settings, listedSession, err := s.client.ListAliases(appleCtx, validated)
 	if err != nil {
 		mapped := mapAppleError(err, false)
 		if errors.Is(err, apple.ErrHMEAuthentication) {
@@ -1055,7 +1068,7 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 		if !ok || session.Account == nil || candidate.AnonymousID == "" {
 			return candidate, session, nil
 		}
-		confirmed, managed, readErr := reader.GetAccountAlias(ctx, *session.Account, candidate)
+		confirmed, managed, readErr := reader.GetAccountAlias(appleCtx, *session.Account, candidate)
 		session.Account = &managed
 		if !probe {
 			readErr = s.scopeCreationThrottle(ctx, accountID, "apple_account", readErr)
@@ -1081,7 +1094,7 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 			}
 			return s.persistAccountManagementSession(opCtx, accountID, identityOf(account), managed)
 		}
-		reviewed, positive, returned, reviewErr := s.reviewOldAccountCandidate(ctx, account, pendingConfirmation, settings, listedSession, persistManaged)
+		reviewed, positive, returned, reviewErr := s.reviewOldAccountCandidate(appleCtx, account, pendingConfirmation, settings, listedSession, persistManaged)
 		if reviewErr != nil {
 			return domain.Alias{}, reviewErr
 		}
@@ -1146,7 +1159,7 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 					}
 				}
 				resumed, managed, resumeErr := completer.CompleteAccountAlias(
-					ctx, *listedSession.Account, pendingConfirmation.Alias.Address, pendingConfirmation.Alias.Label, "",
+					appleCtx, *listedSession.Account, pendingConfirmation.Alias.Address, pendingConfirmation.Alias.Label, "",
 				)
 				listedSession.Account = &managed
 				if !probe {
@@ -1177,7 +1190,7 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 				}
 				resumeCause = resumeErr
 				if strings.TrimSpace(resumed.HME) != "" {
-					resumedSettings, resumedSession, listErr := s.client.ListAliases(ctx, listedSession)
+					resumedSettings, resumedSession, listErr := s.client.ListAliases(appleCtx, listedSession)
 					if hasAppleSessionState(resumedSession) {
 						listedSession = resumedSession
 					}
@@ -1245,7 +1258,7 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 			return domain.Alias{}, err
 		}
 		reportProgress(domain.AliasCreationPhaseInitializingForwarding, autoCreateInitializingForwardingPercent, 0)
-		updatedForwardingSession, updateErr := updater.UpdateForwardTo(ctx, listedSession, account.Email)
+		updatedForwardingSession, updateErr := updater.UpdateForwardTo(appleCtx, listedSession, account.Email)
 		if !hasAppleSessionState(updatedForwardingSession) {
 			updatedForwardingSession = listedSession
 		}
@@ -1272,7 +1285,7 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 			return domain.Alias{}, mappedUpdateErr
 		}
 
-		verifyContext, cancelVerify := context.WithTimeout(context.WithoutCancel(ctx), autoCreateRecoveryTimeout)
+		verifyContext, cancelVerify := context.WithTimeout(context.WithoutCancel(appleCtx), autoCreateRecoveryTimeout)
 		verifiedSettings, verifiedSession, verifyErr := s.client.ListAliases(verifyContext, updatedForwardingSession)
 		cancelVerify()
 		if !hasAppleSessionState(verifiedSession) {
@@ -1349,7 +1362,7 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 	}
 
 	reportProgress(domain.AliasCreationPhaseReserving, autoCreateReservingPercent, 0)
-	created, updated, createErr := s.createRemoteAliasWithMode(ctx, accountID, listedSession, autoClient, channel, probe)
+	created, updated, createErr := s.createRemoteAliasWithModeContext(ctx, appleCtx, accountID, listedSession, autoClient, channel, probe)
 	var mappedCreateErr error
 	if createErr != nil {
 		mappedCreateErr = createErr
@@ -1496,7 +1509,7 @@ func (s *Service) createAliasWithChannel(ctx context.Context, accountID int64, c
 	for attemptIndex := 0; ; attemptIndex++ {
 		attempt := attemptIndex + 1
 		reportProgress(domain.AliasCreationPhaseReconciling, autoCreateReconcilingPercent, attempt)
-		confirmed, returnedSession, listErr := s.client.ListAliases(ctx, confirmationSession)
+		confirmed, returnedSession, listErr := s.client.ListAliases(appleCtx, confirmationSession)
 		var confirmationErr error
 		requiresAccountAction := false
 		if listErr != nil {
@@ -2053,6 +2066,7 @@ func (s *Service) newChallenge(ownerAdminID int64, account domain.Account, apple
 		ownerAdminID: ownerAdminID,
 		accountID:    account.ID,
 		identity:     identityOf(account),
+		proxy:        cloneAccountProxy(account.Proxy),
 		appleID:      appleID,
 		region:       region,
 		session:      session,

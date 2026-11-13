@@ -881,6 +881,37 @@ func (s *Store) ListAliasOTPs(ctx context.Context, aliasID int64, limit int) ([]
 	return result, rows.Err()
 }
 
+// GetLatestAliasOTPAfter returns the newest valid OTP strictly after after.
+func (s *Store) GetLatestAliasOTPAfter(ctx context.Context, aliasID int64, after time.Time) (domain.OTPRecord, error) {
+	validOTP := `length(am.otp) = 6 AND am.otp NOT GLOB '*[^0-9]*'`
+	if s.dialect == dialectPostgres {
+		validOTP = `am.otp ~ '^[0-9]{6}$'`
+	}
+	rows, err := s.queryContext(ctx, `
+		SELECT am.otp, m.internal_date
+		FROM alias_messages am
+		JOIN archived_messages m ON m.id = am.message_id
+		WHERE am.alias_id = ? AND am.otp <> '' AND `+validOTP+` AND m.internal_date > ?
+		ORDER BY m.internal_date DESC, m.id DESC LIMIT 1`, aliasID, timestamp(after))
+	if err != nil {
+		return domain.OTPRecord{}, fmt.Errorf("get latest alias OTP: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var record domain.OTPRecord
+		var timestampValue int64
+		if err := rows.Scan(&record.OTP, &timestampValue); err != nil {
+			return domain.OTPRecord{}, fmt.Errorf("scan latest alias OTP: %w", err)
+		}
+		record.Time = timeFromTimestamp(timestampValue)
+		return record, nil
+	}
+	if err := rows.Err(); err != nil {
+		return domain.OTPRecord{}, fmt.Errorf("read latest alias OTP: %w", err)
+	}
+	return domain.OTPRecord{}, ErrNotFound
+}
+
 func (s *Store) MailArchiveStats(ctx context.Context) (ArchiveStats, error) {
 	stats := ArchiveStats{ContentLimit: s.mailArchiveLimit}
 	if err := s.queryRowContext(ctx, `

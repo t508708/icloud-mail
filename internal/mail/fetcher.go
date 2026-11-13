@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"icloud-api/internal/domain"
+	"icloud-api/internal/netproxy"
 )
 
 const (
@@ -40,7 +41,9 @@ var (
 // a cursor is first created or UIDVALIDITY changes.
 type Fetcher struct {
 	IMAPTimeout time.Duration
-	MaxAliases  int
+	// ProxyDecrypt is assigned at startup to decrypt saved account proxy endpoints.
+	ProxyDecrypt func(string) (string, error)
+	MaxAliases   int
 	// MaxCandidates bounds the recent UID window established on a reset.
 	MaxCandidates            int
 	MaxIncrementalCandidates int
@@ -127,6 +130,7 @@ func (f *Fetcher) FetchAliasIncremental(ctx context.Context, account domain.Acco
 }
 
 type fetchSettings struct {
+	proxy                     *netproxy.Config
 	targetAliasAddress        string
 	targetAliasID             int64
 	timeout                   time.Duration
@@ -142,6 +146,41 @@ type fetchSettings struct {
 	archiveTempDir            string
 	activeRecent              bool
 	activeRecentWindow        time.Duration
+}
+
+func (f *Fetcher) accountSettings(account domain.Account, settings fetchSettings) (fetchSettings, error) {
+	if account.Proxy == nil || !account.Proxy.Enabled {
+		return settings, nil
+	}
+	if f == nil || f.ProxyDecrypt == nil {
+		return settings, errors.New("IMAP account proxy decryptor is unavailable")
+	}
+	endpoint, err := f.ProxyDecrypt(account.Proxy.EndpointCiphertext)
+	if err != nil {
+		return settings, fmt.Errorf("decrypt IMAP account proxy: %w", err)
+	}
+	upstream := ""
+	if account.Proxy.UpstreamCiphertext != "" {
+		upstream, err = f.ProxyDecrypt(account.Proxy.UpstreamCiphertext)
+		if err != nil {
+			return settings, fmt.Errorf("decrypt IMAP upstream proxy: %w", err)
+		}
+	}
+	proxy := netproxy.Config{Endpoint: endpoint, Upstream: upstream}
+	if err := proxy.Validate(); err != nil {
+		return settings, fmt.Errorf("invalid account proxy settings: %w", err)
+	}
+	settings.proxy = &proxy
+	return settings, nil
+}
+
+func (settings fetchSettings) dialContext(ctx context.Context, address string) (net.Conn, error) {
+	dialCtx, cancel := context.WithTimeout(ctx, settings.timeout)
+	defer cancel()
+	if settings.proxy != nil {
+		return settings.proxy.DialContext(dialCtx, "tcp", address)
+	}
+	return (&net.Dialer{}).DialContext(dialCtx, "tcp", address)
 }
 
 func (f *Fetcher) settings() fetchSettings {

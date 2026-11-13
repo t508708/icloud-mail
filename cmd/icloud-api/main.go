@@ -106,6 +106,7 @@ func run() error {
 	cfg.AdminPassword = ""
 
 	fetcher := mailfetch.NewFetcher()
+	fetcher.ProxyDecrypt = cipher.Decrypt
 	fetcher.IMAPTimeout = cfg.IMAPTimeout
 	fetcher.MaxMessageBytes = int(cfg.MaxMessageBytes)
 	fetcher.MaxBodyBytes = int(cfg.MaxBodyBytes)

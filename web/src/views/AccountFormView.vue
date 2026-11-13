@@ -142,6 +142,36 @@
           <p v-if="appPasswordShapeUnusual" class="field-help" role="status">当前输入与常见 App 专用密码格式不同。请确认使用此 Apple 账户生成的 16 位字母专用密码，可保留分组连字符；Apple 登录密码用于下方连接登录。</p>
         </el-form-item>
 
+        <section class="form-span proxy-card" aria-labelledby="proxy-heading">
+          <div class="switch-field">
+            <div>
+              <h2 id="proxy-heading">主号代理</h2>
+              <p>支持 http、https、socks5；前置代理可选。</p>
+            </div>
+            <el-switch v-model="form.proxyEnabled" inline-prompt active-text="开启" inactive-text="关闭" aria-label="启用主号代理" />
+          </div>
+          <p v-if="!form.proxyEnabled" class="field-help" role="status">代理已关闭，主号连接将直接访问邮件服务器。</p>
+          <template v-else>
+            <div class="proxy-fields">
+              <el-form-item label="代理地址" prop="proxyEndpoint" :required="!isEdit || !proxy.configured">
+                <el-input v-model="form.proxyEndpoint" placeholder="http://user:password@proxy.example.com:8080" autocomplete="off" />
+                <p v-if="proxy.configured" class="field-help">已保存代理地址；留空保留当前配置，输入新地址可覆盖。</p>
+                <p v-else class="field-help">新建启用代理时必填，例如 socks5://127.0.0.1:1080。</p>
+              </el-form-item>
+              <el-form-item label="前置代理" prop="proxyUpstream">
+                <el-input v-model="form.proxyUpstream" :disabled="form.clearProxyUpstream" placeholder="https://proxy.example.com:8443" autocomplete="off" />
+                <p v-if="proxy.upstreamConfigured" class="field-help">已保存前置代理；留空保留当前配置。</p>
+                <p v-else class="field-help">可选。留空表示不设置前置代理。</p>
+              </el-form-item>
+            </div>
+            <el-checkbox v-if="isEdit && proxy.upstreamConfigured" v-model="form.clearProxyUpstream" @change="(checked) => { if (checked) form.proxyUpstream = ''; }">清除已保存的前置代理</el-checkbox>
+            <div class="proxy-test-row">
+              <el-button :loading="proxyTesting" @click="testProxy">测试代理</el-button>
+              <span v-if="proxyTestResult" :class="proxyTestResult.ok ? 'proxy-test-success' : 'proxy-test-error'" role="status">{{ proxyTestResult.message }}</span>
+            </div>
+          </template>
+        </section>
+
         <section v-if="!isCustomMailbox" class="form-span auto-login-card" aria-labelledby="auto-login-heading" :aria-busy="autoLoginLoading">
           <div class="switch-field">
             <div>
@@ -249,6 +279,7 @@ import {
   createAccount,
   getAccount,
   getAccountAutoLogin,
+  testAccountProxy,
   updateAccount,
 } from "../api/admin.js";
 import RequestAlert from "../components/RequestAlert.vue";
@@ -284,6 +315,9 @@ const loadError = ref(null);
 const submitError = ref(null);
 const aliasCount = ref(0);
 const storedEnabled = ref(true);
+const proxy = reactive({ configured: false, upstreamConfigured: false });
+const proxyTesting = ref(false);
+const proxyTestResult = ref(null);
 const autoLoginReady = ref(false);
 const autoLoginLoading = ref(false);
 const autoLoginLoadError = ref(false);
@@ -302,6 +336,10 @@ const form = reactive({
   imapPort: DEFAULT_IMAP_PORT,
   imapUsername: "",
   imapPassword: "",
+  proxyEnabled: false,
+  proxyEndpoint: "",
+  proxyUpstream: "",
+  clearProxyUpstream: false,
   enabled: true,
   autoLoginEnabled: false,
   autoLoginRegion: "global",
@@ -461,10 +499,45 @@ const rules = {
     { required: true, message: "请填写 IMAP 用户名", trigger: "blur" },
   ],
   imapPassword: [{ validator: validatePassword, trigger: "blur" }],
+  proxyEndpoint: [{ validator: validateProxyEndpoint, trigger: ["blur", "change"] }],
   autoLoginRegion: [{ validator: validateAutoLoginField("autoLoginRegion"), trigger: "change" }],
   autoLoginPassword: [{ validator: validateAutoLoginField("autoLoginPassword"), trigger: "blur" }],
   autoLoginCodeURL: [{ validator: validateAutoLoginField("autoLoginCodeURL"), trigger: "blur" }],
 };
+
+function validateProxyEndpoint(_, value, callback) {
+  const endpoint = String(value || "").trim();
+  if (!form.proxyEnabled) return callback();
+  if (!endpoint && (!isEdit.value || !proxy.configured)) return callback(new Error("请填写代理地址"));
+  if (form.clearProxyUpstream && form.proxyUpstream.trim()) return callback(new Error("清除前置代理时请留空前置代理地址"));
+  callback();
+}
+
+async function testProxy() {
+  proxyTestResult.value = null;
+  if (!form.proxyEnabled) {
+    proxyTestResult.value = { ok: true, message: "代理已关闭，当前不会通过代理连接。" };
+    return;
+  }
+  proxyTesting.value = true;
+  const started = performance.now();
+  try {
+    const result = await testAccountProxy(isEdit.value ? route.params.id : undefined, {
+      enabled: form.proxyEnabled,
+      endpoint: form.proxyEndpoint,
+      upstream: form.proxyUpstream,
+      clear_upstream: form.clearProxyUpstream,
+    }, auth.state.csrfToken);
+    const elapsed = Number(result?.duration_ms ?? result?.elapsed_ms);
+    const duration = Number.isFinite(elapsed) ? elapsed : Math.round(performance.now() - started);
+    const status = Number(result?.status_code);
+    proxyTestResult.value = { ok: true, message: `代理连接成功${Number.isInteger(status) ? `，目标 HTTP ${status}` : ""}，耗时 ${duration} ms` };
+  } catch (error) {
+    proxyTestResult.value = { ok: false, message: `代理连接失败：${error?.message || "请检查代理配置"}` };
+  } finally {
+    proxyTesting.value = false;
+  }
+}
 
 function resetForm() {
   Object.assign(form, {
@@ -476,6 +549,10 @@ function resetForm() {
     imapPort: DEFAULT_IMAP_PORT,
     imapUsername: "",
     imapPassword: "",
+    proxyEnabled: false,
+    proxyEndpoint: "",
+    proxyUpstream: "",
+    clearProxyUpstream: false,
     enabled: true,
     autoLoginEnabled: false,
     autoLoginRegion: "global",
@@ -489,6 +566,8 @@ function resetForm() {
   Object.assign(savedAutoLogin, { passwordConfigured: false, codeURLConfigured: false, channels: [] });
   aliasCount.value = 0;
   storedEnabled.value = true;
+  Object.assign(proxy, { configured: false, upstreamConfigured: false });
+  proxyTestResult.value = null;
   loadError.value = null;
   submitError.value = null;
   formRef.value?.clearValidate();
@@ -539,7 +618,12 @@ async function loadAccount() {
       imapUsername: account.imapUsername,
       imapPassword: "",
       enabled: account.enabled,
+      proxyEnabled: account.proxy.enabled,
+      proxyEndpoint: "",
+      proxyUpstream: "",
+      clearProxyUpstream: false,
     });
+    Object.assign(proxy, { configured: account.proxy.configured, upstreamConfigured: account.proxy.upstreamConfigured });
     storedEnabled.value = Boolean(account.enabled);
     aliasCount.value = account.aliasCount;
     if (!isCustomMailbox.value) loadAutoLogin();
@@ -584,6 +668,12 @@ async function submit() {
         ? form.imapPassword
         : form.imapPassword.trim(),
       auto_login: autoLoginPayload(form),
+      proxy: {
+        enabled: Boolean(form.proxyEnabled),
+        ...(form.proxyEndpoint.trim() ? { endpoint: form.proxyEndpoint.trim() } : {}),
+        ...(form.proxyUpstream.trim() ? { upstream: form.proxyUpstream.trim() } : {}),
+        ...(form.clearProxyUpstream ? { clear_upstream: true } : {}),
+      },
     };
     if (isCustomMailbox.value) {
       payload.email_suffix = normalizeSuffix(form.emailSuffix);
@@ -726,6 +816,22 @@ onBeforeUnmount(() => {
   border-radius: 16px;
 }
 
+.proxy-card {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.proxy-card h2 { margin: 0; font-size: 16px; }
+.proxy-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.proxy-fields :deep(.el-form-item) { min-width: 0; margin-bottom: 0; }
+.proxy-test-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.proxy-test-success { color: var(--success); }
+.proxy-test-error { color: var(--danger); }
+
 .auto-login-card h2 {
   margin: 0;
   font-size: 16px;
@@ -770,5 +876,7 @@ onBeforeUnmount(() => {
   .auto-login-fields {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .proxy-fields { grid-template-columns: minmax(0, 1fr); }
 }
 </style>

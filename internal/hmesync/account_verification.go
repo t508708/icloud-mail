@@ -41,7 +41,11 @@ func (s *Service) RequestAccountAuthCode(ctx context.Context, owner, id int64, c
 	if err != nil {
 		return AuthResult{}, err
 	}
-	if !sameIdentity(flow.identity, identityOf(account)) {
+	appleCtx, err := s.accountProxyForAccount(ctx, account)
+	if err != nil {
+		return AuthResult{}, err
+	}
+	if !sameIdentity(flow.identity, identityOf(account)) || !sameAccountProxy(account.Proxy, flow.proxy) {
 		return AuthResult{}, wrapError(CodeAccountChanged, ErrAccountChanged, nil)
 	}
 	if !account.Enabled {
@@ -63,7 +67,7 @@ func (s *Service) RequestAccountAuthCode(ctx context.Context, owner, id int64, c
 	if !ok {
 		return AuthResult{}, wrapError(CodeUpstreamError, ErrUpstream, nil)
 	}
-	updated, sendErr := client.RequestAccountVerification(ctx, flow.session, method, phoneID)
+	updated, sendErr := client.RequestAccountVerification(appleCtx, flow.session, method, phoneID)
 	flow.session = updated
 	s.challengeMu.Lock()
 	s.accountAuthChallenges[id] = flow

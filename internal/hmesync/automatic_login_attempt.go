@@ -38,6 +38,7 @@ type automaticLoginAttempt struct {
 	verify      bool
 	state       domain.AccountAutoLoginState
 	generation  uint64
+	appleCtx    context.Context
 }
 
 func (s *Service) runAutomaticLoginChannel(ctx context.Context, config domain.AccountAutoLoginConfig, channel string, logger *slog.Logger) {
@@ -58,9 +59,15 @@ func (s *Service) runAutomaticLoginChannel(ctx context.Context, config domain.Ac
 	if fetcher == nil {
 		fetcher = autologincode.NewClient()
 	}
+	codeCtx := ctx
+	if attempt.appleCtx != nil {
+		if proxy, ok := apple.ProxyConfigFromContext(attempt.appleCtx); ok {
+			codeCtx = autologincode.WithProxy(ctx, proxy)
+		}
+	}
 	// Snapshot before triggering a challenge. Providers with no timestamp must
 	// produce a different code; a previous cached SMS is never submitted.
-	baseline, baselineErr := fetcher.Fetch(ctx, attempt.credentials.CodeURL)
+	baseline, baselineErr := fetcher.Fetch(codeCtx, attempt.credentials.CodeURL)
 	if errors.Is(baselineErr, autologincode.ErrInvalidURL) {
 		s.finishAutomaticLogin(ctx, attempt, wrapError(codeAutoLoginCodeURL, ErrAccountActionRequired, nil), logger)
 		return
@@ -79,7 +86,7 @@ func (s *Service) runAutomaticLoginChannel(ctx context.Context, config domain.Ac
 			attempt.state.Status = "waiting_code"
 			if err = s.repo.(automaticLoginRepository).SaveAccountAutoLoginState(ctx, attempt.state); err == nil {
 				var code string
-				code, err = s.waitForAutomaticLoginCode(ctx, fetcher, attempt, baseline)
+				code, err = s.waitForAutomaticLoginCode(codeCtx, fetcher, attempt, baseline)
 				if err == nil {
 					err = s.WithAutoLoginSettingsLock(ctx, config.AccountID, func() error {
 						if err := s.automaticAttemptCurrent(ctx, attempt); err != nil {
@@ -120,7 +127,12 @@ func (s *Service) prepareAutomaticLogin(ctx context.Context, config domain.Accou
 	if err := repo.SaveAccountAutoLoginState(ctx, state); err != nil {
 		return nil, err
 	}
-	attempt := &automaticLoginAttempt{config: current, account: account, channel: channel, started: now, state: state, generation: s.automaticAuthGeneration(account.ID)}
+	appleCtx, err := s.accountProxyForAccount(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	account.Proxy = cloneAccountProxy(account.Proxy)
+	attempt := &automaticLoginAttempt{config: current, account: account, channel: channel, started: now, state: state, generation: s.automaticAuthGeneration(account.ID), appleCtx: appleCtx}
 	attempt.credentials, err = s.cipher.(automaticLoginCipher).DecryptAccountAutoLogin(account.Email, current.CredentialsCiphertext)
 	if err != nil {
 		s.finishAutomaticLogin(ctx, attempt, wrapError(codeAutoLoginCredentials, ErrCredentialsInvalid, nil), nil)
@@ -234,6 +246,9 @@ func (s *Service) automaticAttemptCurrent(ctx context.Context, attempt *automati
 		!sameIdentity(identityOf(account), identityOf(attempt.account)) {
 		return wrapError(codeAutoLoginChanged, ErrAccountChanged, nil)
 	}
+	if !sameAccountProxy(account.Proxy, attempt.account.Proxy) {
+		return wrapError(codeAutoLoginChanged, ErrAccountChanged, nil)
+	}
 	stamp, err := s.automaticSessionStamp(ctx, account.ID, attempt.channel)
 	if err != nil {
 		return err
@@ -253,7 +268,7 @@ func (s *Service) startAutomaticLogin(ctx context.Context, attempt *automaticLog
 			return wrapError(CodeUpstreamError, ErrUpstream, nil)
 		}
 		previous, _ := s.readAccountManagementSession(ctx, attempt.account.ID)
-		attempt.managed, attempt.verify, err = client.SignInAccount(ctx, attempt.appleID, attempt.credentials.Password, region, previous)
+		attempt.managed, attempt.verify, err = client.SignInAccount(attempt.appleCtx, attempt.appleID, attempt.credentials.Password, region, previous)
 		if err == nil && !sameEmail(attempt.managed.AppleID, attempt.appleID) {
 			return wrapError(CodeAccountMismatch, ErrAccountMismatch, nil)
 		}
@@ -267,7 +282,7 @@ func (s *Service) startAutomaticLogin(ctx context.Context, attempt *automaticLog
 		}
 	} else {
 		previous := s.previousSession(ctx, attempt.account.ID, attempt.appleID, region)
-		attempt.web, attempt.verify, err = s.client.SignIn(ctx, attempt.appleID, attempt.credentials.Password, region, previous)
+		attempt.web, attempt.verify, err = s.client.SignIn(attempt.appleCtx, attempt.appleID, attempt.credentials.Password, region, previous)
 		if err != nil {
 			_ = s.preserveFailedWebTrust(ctx, attempt.account.ID, identityOf(attempt.account), attempt.appleID, region, attempt.web)
 		}
@@ -294,9 +309,9 @@ func (s *Service) startAutomaticLogin(ctx context.Context, attempt *automaticLog
 func (s *Service) verifyAutomaticLogin(ctx context.Context, attempt *automaticLoginAttempt, code string) error {
 	var err error
 	if attempt.channel == "apple_account" {
-		attempt.managed, err = s.client.(accountClient).VerifyAccountCode(ctx, attempt.managed, code)
+		attempt.managed, err = s.client.(accountClient).VerifyAccountCode(attempt.appleCtx, attempt.managed, code)
 	} else {
-		attempt.web, err = s.client.VerifyCode(ctx, attempt.web, code)
+		attempt.web, err = s.client.VerifyCode(attempt.appleCtx, attempt.web, code)
 		if err != nil {
 			_ = s.preserveFailedWebTrust(ctx, attempt.account.ID, identityOf(attempt.account), attempt.appleID, apple.Region(attempt.config.Region), attempt.web)
 		}
@@ -335,13 +350,8 @@ func (s *Service) waitForAutomaticLoginCode(ctx context.Context, fetcher Automat
 		if err := s.waitAutomaticLogin(ctx, 5*time.Second); err != nil {
 			return "", err
 		}
-		config, err := s.repo.(automaticLoginRepository).GetAccountAutoLoginConfig(ctx, attempt.account.ID)
-		if err != nil || !config.Enabled || config.Revision != attempt.config.Revision {
-			return "", wrapError(codeAutoLoginChanged, ErrAccountChanged, nil)
-		}
-		account, err := s.repo.GetAccount(ctx, attempt.account.ID)
-		if err != nil || !account.Enabled {
-			return "", wrapError(codeAutoLoginChanged, ErrAccountChanged, nil)
+		if err := s.automaticAttemptCurrent(ctx, attempt); err != nil {
+			return "", err
 		}
 		result, err := fetcher.Fetch(ctx, attempt.credentials.CodeURL)
 		if err != nil && !errors.Is(err, autologincode.ErrNoCode) {

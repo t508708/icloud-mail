@@ -66,6 +66,7 @@ func (s *Server) registerAdminAPIRoutes(api *gin.RouterGroup) {
 
 	protected.GET("/accounts", s.adminAPIListAccounts)
 	protected.POST("/accounts", s.adminAPICreateAccount(basePath))
+	protected.POST("/accounts/proxy-test", s.adminAPITestAccountProxy)
 	protected.GET("/accounts/:id", s.adminAPIGetAccount)
 	protected.GET("/accounts/:id/auto-login", s.adminAPIGetAccountAutoLogin)
 	protected.PUT("/accounts/:id", s.adminAPIUpdateAccount)
@@ -146,6 +147,7 @@ type adminAPIAccountDTO struct {
 	Provider         string                   `json:"provider"`
 	EmailSuffix      string                   `json:"email_suffix"`
 	SyncProgress     *adminAPISyncProgressDTO `json:"sync_progress,omitempty"`
+	Proxy            adminAPIProxyDTO         `json:"proxy"`
 }
 
 type adminAPISyncProgressDTO struct {
@@ -341,6 +343,7 @@ func adminAPIIMAPEndpointInput(host adminAPIOptionalString, port adminAPIOptiona
 
 type adminAPICreateAccountRequest struct {
 	AutoLogin    *adminAPIAutoLoginInput `json:"auto_login"`
+	Proxy        *adminAPIProxyInput     `json:"proxy"`
 	Name         string                  `json:"name"`
 	Email        string                  `json:"email"`
 	IMAPUsername string                  `json:"imap_username"`
@@ -356,6 +359,7 @@ type adminAPICreateAccountRequest struct {
 
 type adminAPIUpdateAccountRequest struct {
 	AutoLogin    *adminAPIAutoLoginInput `json:"auto_login"`
+	Proxy        *adminAPIProxyInput     `json:"proxy"`
 	Name         string                  `json:"name"`
 	Email        string                  `json:"email"`
 	IMAPUsername string                  `json:"imap_username"`
@@ -413,6 +417,7 @@ func adminAPIAccountFromDomain(account domain.Account) adminAPIAccountDTO {
 		MailboxType:      domain.NormalizeMailboxType(account.MailboxType),
 		Provider:         domain.NormalizeMailboxType(account.MailboxType),
 		EmailSuffix:      account.EmailSuffix,
+		Proxy:            adminAPIAccountProxyFromDomain(account),
 	}
 }
 
@@ -941,6 +946,15 @@ func (s *Server) adminAPICreateAccount(basePath string) gin.HandlerFunc {
 			writeAdminAPIError(c, http.StatusBadRequest, "VALIDATION_FAILED", message)
 			return
 		}
+		account.Proxy, message, err = s.prepareAccountProxy(input.Proxy, domain.Account{})
+		if err != nil {
+			s.writeAdminAPIInternalError(c, err)
+			return
+		}
+		if message != "" {
+			writeAdminAPIError(c, http.StatusBadRequest, "VALIDATION_FAILED", message)
+			return
+		}
 		created, err := s.store.CreateAccount(c.Request.Context(), account)
 		if err != nil {
 			if errors.Is(err, store.ErrAliasIdentityConflict) || adminAPIUniqueConstraint(err) {
@@ -1042,6 +1056,10 @@ func (s *Server) adminAPIUpdateAccount(c *gin.Context) {
 			account.PasswordCiphertext = ""
 		}
 		account.AutoLogin, validationMessage, readErr = s.prepareAccountAutoLogin(c.Request.Context(), input.AutoLogin, account, existing)
+		if readErr != nil || validationMessage != "" {
+			return readErr
+		}
+		account.Proxy, validationMessage, readErr = s.prepareAccountProxy(input.Proxy, existing)
 		if readErr != nil || validationMessage != "" {
 			return readErr
 		}

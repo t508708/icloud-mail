@@ -99,7 +99,7 @@ var httpOperations = map[string]string{
 	"GET /pool/leases/:leaseID/code": "查询领取邮箱验证码", "POST /pool/leases/:leaseID/commit": "确认使用领取邮箱", "POST /pool/leases/:leaseID/release": "释放领取邮箱并轮换凭据", "POST /pool/leases/:leaseID/renew": "续期领取邮箱",
 	"GET /pool/capabilities": "查询邮箱池接口能力", "POST /pool/leases/commit": "批量确认使用领取邮箱",
 	"POST /oauth2/v2.0/token": "换取 IMAP OAuth 访问凭据", "GET /docs": "查看 API 文档",
-	"GET /accounts": "读取主号列表", "POST /accounts": "创建主号", "GET /accounts/:id": "读取主号详情", "PUT /accounts/:id": "更新主号", "DELETE /accounts/:id": "删除主号",
+	"GET /accounts": "读取主号列表", "POST /accounts": "创建主号", "POST /accounts/proxy-test": "检查主号代理", "GET /accounts/:id": "读取主号详情", "PUT /accounts/:id": "更新主号", "DELETE /accounts/:id": "删除主号",
 	"GET /aliases": "读取隐私邮箱列表", "POST /aliases": "创建隐私邮箱", "GET /aliases/:id": "读取隐私邮箱", "PATCH /aliases/:id": "更新隐私邮箱", "DELETE /aliases/:id": "删除隐私邮箱",
 	"GET /accounts/:id/aliases/creation-job": "读取批量创建进度", "POST /accounts/:id/aliases/creation-job": "提交批量创建",
 	"GET /otp": "查询验证码", "GET /mail/latest": "获取最新邮件", "GET /mail/recent": "获取最近邮件", "POST /pool/claim": "领取邮箱",

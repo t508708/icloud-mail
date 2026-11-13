@@ -307,6 +307,7 @@ type aliasDeletionBatch struct {
 	repo         AliasDeletionRepository
 	client       AliasDeletionClient
 	accountID    int64
+	appleCtx     context.Context
 	account      domain.Account
 	record       domain.AppleWebSession
 	session      apple.Session
@@ -347,12 +348,20 @@ func (b *aliasDeletionBatch) delete(ctx context.Context, aliasID int64) error {
 	if err != nil {
 		return err
 	}
-	if b.ready && !sameIdentity(identityOf(account), identityOf(b.account)) {
+	if b.appleCtx == nil {
+		b.appleCtx, err = b.s.accountProxyForAccount(ctx, account)
+		if err != nil {
+			return err
+		}
+	}
+	ctx = b.appleCtx
+	if b.ready && (!sameIdentity(identityOf(account), identityOf(b.account)) || !sameAccountProxy(account.Proxy, b.account.Proxy)) {
 		b.stopped = wrapError(CodeAccountChanged, ErrAccountChanged, nil)
 		return b.stopped
 	}
 	if !b.ready {
 		b.account = account
+		b.account.Proxy = cloneAccountProxy(account.Proxy)
 		if err := b.initialize(ctx); err != nil {
 			if b.stopped == nil {
 				b.stopped = err
@@ -393,7 +402,7 @@ func (b *aliasDeletionBatch) delete(ctx context.Context, aliasID int64) error {
 		if err := b.beforeRequest(ctx, "deactivate"); err != nil {
 			return err
 		}
-		returned, remoteErr := b.client.DeactivateAlias(ctx, b.session, remoteID)
+		returned, remoteErr := b.client.DeactivateAlias(b.appleCtx, b.session, remoteID)
 		mapped, fatal := b.acceptResponse(ctx, returned, remoteErr)
 		if mapped != nil {
 			b.valid = false
@@ -435,7 +444,7 @@ func (b *aliasDeletionBatch) delete(ctx context.Context, aliasID int64) error {
 	if err := b.beforeRequest(ctx, "delete"); err != nil {
 		return err
 	}
-	returned, remoteErr := b.client.DeleteAlias(ctx, b.session, remoteID)
+	returned, remoteErr := b.client.DeleteAlias(b.appleCtx, b.session, remoteID)
 	mapped, fatal := b.acceptResponse(ctx, returned, remoteErr)
 	if mapped != nil {
 		b.valid = false
@@ -474,7 +483,7 @@ func (b *aliasDeletionBatch) initialize(ctx context.Context) error {
 		if err := b.beforeRequest(ctx, "validate"); err != nil {
 			return err
 		}
-		returned, remoteErr := b.s.client.Validate(ctx, b.session)
+		returned, remoteErr := b.s.client.Validate(b.appleCtx, b.session)
 		if err, _ := b.acceptResponse(ctx, returned, remoteErr); err != nil {
 			if !b.canRecover(err) {
 				return err
@@ -569,7 +578,7 @@ func (b *aliasDeletionBatch) refreshDirectory(ctx context.Context, reconcile boo
 				// Preserve bounded, cancellation-independent confirmation of an
 				// ambiguous mutation. Only the request is detached, never a cooldown.
 				var cancel context.CancelFunc
-				requestContext, cancel = context.WithTimeout(context.WithoutCancel(ctx), aliasDeletePersistTimeout)
+				requestContext, cancel = context.WithTimeout(context.WithoutCancel(b.appleCtx), aliasDeletePersistTimeout)
 				defer cancel()
 			}
 			if err := b.beforeRequest(requestContext, "list"); err != nil {

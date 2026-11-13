@@ -23,6 +23,10 @@ func (s *Service) ReadAliasWebMailLocked(ctx context.Context, account domain.Acc
 	if !account.Enabled || !alias.Enabled || alias.AccountID != account.ID {
 		return apple.WebMailResult{}, store.ErrAccountDisabled
 	}
+	appleCtx, err := s.accountProxyForAccount(ctx, account)
+	if err != nil {
+		return apple.WebMailResult{}, err
+	}
 	if domain.NormalizeMailboxType(account.MailboxType) != domain.MailboxTypeICloud || domain.UsesForwardedICloudIMAP(account) {
 		return apple.WebMailResult{}, store.ErrICloudMailboxRequired
 	}
@@ -43,7 +47,7 @@ func (s *Service) ReadAliasWebMailLocked(ctx context.Context, account domain.Acc
 		(record.LastValidatedAt == nil || !record.LastValidatedAt.After(*account.LastSyncedAt)) {
 		return apple.WebMailResult{}, ErrWebMailLoginRequired
 	}
-	result, updated, err := reader.ReadAliasMail(ctx, session, alias.Address)
+	result, updated, err := reader.ReadAliasMail(appleCtx, session, alias.Address)
 	if err != nil {
 		if errors.Is(err, apple.ErrWebMailAuthentication) {
 			return apple.WebMailResult{}, ErrWebMailLoginRequired

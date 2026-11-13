@@ -51,7 +51,11 @@ func NewMailboxEvents(repo MailboxEventRepository, cipher CredentialCipher, watc
 }
 
 func mailboxWatchIdentity(account domain.Account) [32]byte {
-	return sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%s\x00%s\x00%s", account.IMAPHost, account.IMAPPort, account.IMAPUsername, account.Email, account.PasswordCiphertext)))
+	proxyIdentity := ""
+	if account.Proxy != nil {
+		proxyIdentity = fmt.Sprintf("%t\x00%d\x00%s\x00%s", account.Proxy.Enabled, account.Proxy.Revision, account.Proxy.EndpointCiphertext, account.Proxy.UpstreamCiphertext)
+	}
+	return sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%s\x00%s\x00%s\x00%s", account.IMAPHost, account.IMAPPort, account.IMAPUsername, account.Email, account.PasswordCiphertext, proxyIdentity)))
 }
 
 // Healthy means notifications are connected and the initial catch-up succeeded.
