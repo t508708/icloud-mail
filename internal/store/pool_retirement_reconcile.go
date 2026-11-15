@@ -172,6 +172,13 @@ func (s *Store) PreparePoolAliasRetirementResume(ctx context.Context, clientID, 
 	if !exists {
 		return ErrPoolRetirementConflict
 	}
+	shared, err := s.poolAliasHasOtherProjectUsersTx(ctx, tx, item.AliasID, clientID)
+	if err != nil {
+		return err
+	}
+	if shared {
+		return ErrPoolRetirementShared
+	}
 	var accountEnabled bool
 	if err := s.txQueryRowContext(ctx, tx, `SELECT enabled FROM accounts WHERE id=?`, item.AccountID).Scan(&accountEnabled); err != nil {
 		return err
@@ -240,6 +247,13 @@ func (s *Store) FinalizeReconciledPoolAliasRetirement(ctx context.Context, clien
 		_, alias, exists, err = s.poolAliasRetirementReconcileBindingTx(ctx, tx, job, item)
 		if err != nil || !exists {
 			return ErrPoolRetirementConflict
+		}
+		shared, err := s.poolAliasHasOtherProjectUsersTx(ctx, tx, item.AliasID, clientID)
+		if err != nil {
+			return err
+		}
+		if shared {
+			return ErrPoolRetirementShared
 		}
 		result, err := s.txExecContext(ctx, tx, `DELETE FROM aliases WHERE id=? AND account_id=?`, item.AliasID, item.AccountID)
 		if err != nil {

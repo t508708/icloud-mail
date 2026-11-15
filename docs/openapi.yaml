@@ -1045,6 +1045,126 @@ paths:
         "500":
           $ref: "#/components/responses/AdminInternalError"
 
+  /api/v1/pool/projects/{clientID}/mailboxes:
+    servers:
+      - url: https://HOST/{admin_path}
+        variables:
+          admin_path:
+            default: 00000000000000000000000000000000/admin
+      - url: https://HOST/admin
+    parameters:
+      - name: clientID
+        in: path
+        required: true
+        schema: {type: string}
+    get:
+      tags: [Mailbox Pool, Administration]
+      operationId: listSharedProjectMailboxes
+      summary: 查询项目关联的邮箱和取件链接
+      description: 管理员登录后读取当前项目的共享关联及原有已使用领取记录。已停用或正在退休的邮箱不返回取件链接。查询只读，不修改邮箱凭据。
+      security:
+        - adminSession: []
+      parameters:
+        - name: account_id
+          in: query
+          schema: {type: integer, minimum: 0, default: 0}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 1000, default: 50}
+        - name: offset
+          in: query
+          schema: {type: integer, minimum: 0, maximum: 1000000, default: 0}
+      responses:
+        "200":
+          description: 邮箱关联列表；响应包含受保护的 OTP 直达路径，不缓存。
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [items, total]
+                    properties:
+                      total: {type: integer, minimum: 0}
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          required: [alias_id, account_id, address, source, otp_url_path]
+                          properties:
+                            alias_id: {type: integer}
+                            account_id: {type: integer}
+                            address: {type: string, format: email}
+                            source: {type: string, enum: [shared, claimed]}
+                            otp_url_path: {type: string, description: /api/v1/otp?token= 后跟当前邮箱的派生取件令牌}
+        "401": {description: 管理员会话失效}
+        "404": {description: 项目不存在}
+    post:
+      tags: [Mailbox Pool, Administration]
+      operationId: shareAccountMailboxesWithProject
+      summary: 将主号全部可用 HME 关联到项目
+      description: 新增共享登记并保留其他项目的领取记录。重复关联保持原记录；不轮换取件凭据。共享邮箱排除在后续独占领取之外；尚未确认的 leased 租约和正在退役的邮箱会被跳过。由管理员提交，需 CSRF。
+      security:
+        - adminSession: []
+      parameters:
+        - $ref: "#/components/parameters/AdminCSRFToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account_id]
+              properties:
+                account_id: {type: integer, minimum: 1}
+      responses:
+        "200":
+          description: 关联数量。
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      linked: {type: integer, minimum: 0}
+                      added: {type: integer, minimum: 0}
+        "400": {description: 无效的主号 ID}
+        "401": {description: 管理员会话失效}
+        "403": {description: CSRF 验证失败}
+        "409": {description: 主号未启用或不是 iCloud 类型}
+  /api/v1/pool/projects/{clientID}/mailboxes/{aliasID}:
+    servers:
+      - url: https://HOST/{admin_path}
+        variables:
+          admin_path:
+            default: 00000000000000000000000000000000/admin
+      - url: https://HOST/admin
+    delete:
+      tags: [Mailbox Pool, Administration]
+      operationId: unlinkSharedProjectMailbox
+      summary: 移除某项目的显式邮箱共享关联
+      description: 删除共享登记，不删除邮箱、不轮换凭据，也不改变通过邮箱池领取建立的原始租约。
+      security:
+        - adminSession: []
+      parameters:
+        - name: clientID
+          in: path
+          required: true
+          schema: {type: string}
+        - name: aliasID
+          in: path
+          required: true
+          schema: {type: integer, minimum: 1}
+        - $ref: "#/components/parameters/AdminCSRFToken"
+      responses:
+        "200": {description: 共享关联已移除}
+        "401": {description: 管理员会话失效}
+        "403": {description: CSRF 验证失败}
+        "404": {description: 该项目的显式关联不存在}
   /api/v1/pool/accounts/available:
     servers:
       - url: https://HOST/{admin_path}

@@ -260,6 +260,85 @@
           </p>
         </el-tab-pane>
 
+        <el-tab-pane label="项目共用邮箱" name="shared">
+          <div class="pool-toolbar">
+            <el-select
+              v-model="sharedClientId"
+              placeholder="选择项目"
+              filterable
+              :disabled="loading || busy || sharedExporting"
+              @change="changeSharedSelection"
+            >
+              <el-option
+                v-for="client in clients"
+                :key="client.id"
+                :label="client.project + (client.enabled ? '' : '（已停用）')"
+                :value="client.id"
+              />
+            </el-select>
+            <el-select
+              v-model="sharedAccountId"
+              placeholder="选择启用的 iCloud 主号"
+              filterable
+              :disabled="loading || busy || sharedExporting"
+              @change="changeSharedSelection"
+            >
+              <el-option
+                v-for="account in sharedAccounts"
+                :key="account.id"
+                :label="account.email"
+                :value="account.id"
+              />
+            </el-select>
+            <el-button
+              type="primary"
+              :icon="Link"
+              :loading="busy"
+              :disabled="!sharedCanAssociate || loading || sharedLoading || sharedExporting"
+              @click="bindSharedMailboxes"
+            >关联全部 HME</el-button>
+            <el-button
+              :icon="Download"
+              :loading="sharedExporting"
+              :disabled="!sharedHasSelection || loading || sharedLoading || busy || sharedMailboxes.total === 0"
+              @click="downloadSharedMailboxes"
+            >下载 TXT</el-button>
+          </div>
+          <div class="pool-table-scroll" role="region" aria-label="项目共用邮箱列表" tabindex="0">
+            <el-table
+              :data="sharedMailboxes.items"
+              v-loading="loading || sharedLoading"
+              class="pool-table"
+              empty-text="所选项目和主号暂无共用邮箱。"
+            >
+              <el-table-column prop="address" label="邮箱" min-width="260" />
+              <el-table-column label="来源" min-width="135">
+                <template #default="{ row }">{{ sharedSourceName(row.source) }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="130">
+                <template #default="{ row }">
+                  <el-button
+                    v-if="row.source === 'shared'"
+                    link
+                    type="danger"
+                    :icon="Delete"
+                    :disabled="loading || sharedLoading || sharedExporting || busy"
+                    @click="removeSharedMailbox(row)"
+                  >移除关联</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+          <el-pagination
+            v-model:current-page="sharedPage"
+            :page-size="sharedPageSize"
+            :total="sharedMailboxes.total"
+            :disabled="loading || sharedLoading || sharedExporting || busy || !sharedHasSelection"
+            layout="total, prev, pager, next"
+            @current-change="loadSharedMailboxes()"
+          />
+        </el-tab-pane>
+
         <el-tab-pane label="库存与定时创建" name="accounts">
           <p class="pool-hint">
             开启自动入池后，新创建或新同步的邮箱会进入库存；已有邮箱在「邮箱库存」中手动选择加入。空闲目标为
@@ -481,6 +560,7 @@ grant_type=refresh_token&amp;client_id=CLIENT_ID&amp;refresh_token=REFRESH_TOKEN
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { Delete, Download, Link } from "@element-plus/icons-vue";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
 import { apiRequest } from "../api/client.js";
 import { getAliasPage, getAllAliases, getAllAccounts } from "../api/admin.js";
@@ -490,6 +570,7 @@ import SectionHeader from "../components/SectionHeader.vue";
 import RequestAlert from "../components/RequestAlert.vue";
 import { copyText } from "../utils/clipboard.js";
 import { createCheckboxDragSelection } from "../utils/checkboxDragSelection.js";
+import { buildProjectMailboxExportText, buildProjectMailboxFilename, collectProjectMailboxes } from "../utils/projectMailboxExport.js";
 
 const auth = useAuth();
 const tab = ref("members"),
@@ -510,6 +591,22 @@ const memberState = ref(""),
   projectName = ref("");
 const memberPage = ref(1),
   leasePage = ref(1);
+const sharedClientId = ref(""),
+  sharedAccountId = ref(""),
+  sharedAccounts = ref([]),
+  sharedMailboxes = ref({ items: [], total: 0 }),
+  sharedPage = ref(1),
+  sharedPageSize = 50,
+  sharedLoading = ref(false),
+  sharedExporting = ref(false);
+const sharedHasSelection = computed(() =>
+  clients.value.some((client) => client.id === sharedClientId.value) &&
+  sharedAccounts.value.some((account) => account.id === sharedAccountId.value),
+);
+const sharedCanAssociate = computed(() => sharedHasSelection.value &&
+  clients.value.some((client) => client.id === sharedClientId.value && client.enabled),
+);
+const sharedSourceName = (source) => ({ shared: "共用关联", claimed: "原有独占领取" })[source] || "其他来源";
 const enrollOpen = ref(false),
   enrollDraft = ref(""),
   enrollSearch = ref(""),
@@ -594,6 +691,8 @@ let poolRefreshTicket = 0;
 let poolRefreshController;
 let memberReadTicket = 0;
 let leaseReadTicket = 0;
+let sharedReadTicket = 0;
+let sharedReadController;
 async function attempt(fn) {
   try {
     return await fn();
@@ -632,26 +731,143 @@ async function loadLeases(signal) {
     if (ticket === leaseReadTicket) leases.value = result;
   });
 }
+async function loadSharedContext(signal) {
+  const accountsList = await getAllAccounts({ signal });
+  if (signal?.aborted || tab.value !== "shared") return;
+  sharedAccounts.value = accountsList.filter((account) => account.enabled && account.mailboxType === "icloud");
+  if (!sharedAccounts.value.some((account) => account.id === sharedAccountId.value)) {
+    sharedAccountId.value = "";
+    sharedPage.value = 1;
+  }
+  if (!clients.value.some((client) => client.id === sharedClientId.value)) {
+    sharedClientId.value = "";
+    sharedPage.value = 1;
+  }
+  await loadSharedMailboxes(signal);
+}
+async function loadSharedMailboxes(signal) {
+  sharedReadController?.abort();
+  const controller = new AbortController();
+  sharedReadController = controller;
+  const ticket = ++sharedReadTicket;
+  const abort = () => controller.abort();
+  if (signal?.aborted) abort();
+  else signal?.addEventListener("abort", abort, { once: true });
+  sharedMailboxes.value = { items: [], total: 0 };
+  sharedLoading.value = false;
+  if (!sharedHasSelection.value) {
+    signal?.removeEventListener("abort", abort);
+    return;
+  }
+  const clientID = sharedClientId.value;
+  const accountID = Number(sharedAccountId.value);
+  sharedLoading.value = true;
+  try {
+    let result;
+    do {
+      result = await request(
+        `/pool/projects/${encodeURIComponent(clientID)}/mailboxes?` + query({
+          account_id: accountID,
+          limit: sharedPageSize,
+          offset: (sharedPage.value - 1) * sharedPageSize,
+        }), "GET", undefined, controller.signal,
+      );
+      if (controller.signal.aborted || ticket !== sharedReadTicket) return;
+      if (sharedPage.value > 1 && result.total <= (sharedPage.value - 1) * sharedPageSize) {
+        sharedPage.value = Math.max(1, Math.ceil(result.total / sharedPageSize));
+      } else break;
+    } while (true);
+    sharedMailboxes.value = result;
+  } catch (e) {
+    if (ticket === sharedReadTicket && e.name !== "AbortError") error.value = e;
+  } finally {
+    signal?.removeEventListener("abort", abort);
+    if (ticket === sharedReadTicket) sharedLoading.value = false;
+  }
+}
+function changeSharedSelection() {
+  sharedPage.value = 1;
+  void loadSharedMailboxes();
+}
+async function bindSharedMailboxes() {
+  if (!sharedCanAssociate.value || sharedExporting.value || sharedLoading.value) return;
+  await mutate(async () => {
+    await ElMessageBox.confirm("关联所选主号下的全部隐藏邮箱到当前项目？已有共享关联保持原状。", "关联全部 HME");
+    const result = await request(`/pool/projects/${encodeURIComponent(sharedClientId.value)}/mailboxes`, "POST", {
+      account_id: Number(sharedAccountId.value),
+    });
+    ElMessage.success(`新增 ${result.added} 个关联，当前共 ${result.linked} 个`);
+  });
+}
+async function removeSharedMailbox(row) {
+  if (row?.source !== "shared" || !sharedHasSelection.value || sharedExporting.value || sharedLoading.value) return;
+  await mutate(async () => {
+    await ElMessageBox.confirm(`移除 ${row.address} 与当前项目的共享关联？`, "移除关联", { type: "warning" });
+    await request(`/pool/projects/${encodeURIComponent(sharedClientId.value)}/mailboxes/${encodeURIComponent(row.alias_id)}`, "DELETE");
+    ElMessage.success("关联已移除");
+  });
+}
+async function downloadSharedMailboxes() {
+  if (!sharedHasSelection.value || busy.value || sharedExporting.value || sharedLoading.value) return;
+  const clientID = sharedClientId.value;
+  const accountID = Number(sharedAccountId.value);
+  const clientName = clients.value.find((client) => client.id === clientID)?.project;
+  const accountEmail = sharedAccounts.value.find((account) => account.id === sharedAccountId.value)?.email;
+  sharedExporting.value = true;
+  error.value = null;
+  try {
+    const items = await collectProjectMailboxes(({ limit, offset }) => request(
+      `/pool/projects/${encodeURIComponent(clientID)}/mailboxes?` + query({ account_id: accountID, limit, offset }),
+    ), sharedPageSize);
+    if (!items.length) {
+      ElMessage.info("当前选择下没有关联邮箱");
+      return;
+    }
+    const content = buildProjectMailboxExportText(items, location.origin);
+    const url = URL.createObjectURL(new Blob([content], { type: "text/plain;charset=utf-8" }));
+    try {
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = buildProjectMailboxFilename(clientName, accountEmail);
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+  } catch (e) {
+    error.value = e;
+  } finally {
+    sharedExporting.value = false;
+  }
+}
 async function refresh(forceClients = false) {
   const ticket = ++poolRefreshTicket;
   poolRefreshController?.abort();
   const controller = new AbortController();
   poolRefreshController = controller;
   const activeTab = tab.value;
+  if (activeTab !== "shared") {
+    sharedReadController?.abort();
+    ++sharedReadTicket;
+    sharedLoading.value = false;
+  }
   loading.value = true;
   error.value = null;
   try {
+    const clientsPromise = forceClients || !clientsLoaded.value
+      ? loadClients(forceClients).then((result) => {
+        if (ticket === poolRefreshTicket) {
+          clients.value = result;
+          clientsLoaded.value = true;
+        }
+      })
+      : Promise.resolve();
     await Promise.all([
-      (forceClients || !clientsLoaded.value
-        ? loadClients(forceClients).then((result) => {
-            if (ticket === poolRefreshTicket) {
-              clients.value = result;
-              clientsLoaded.value = true;
-            }
-          })
-        : Promise.resolve()),
+      clientsPromise,
       activeTab === "members" ? loadMembers(controller.signal) :
         activeTab === "leases" ? loadLeases(controller.signal) :
+          activeTab === "shared" ? clientsPromise.then(() => loadSharedContext(controller.signal)) :
           activeTab === "accounts" ? request("/pool/accounts", "GET", undefined, controller.signal).then((result) => {
             if (ticket === poolRefreshTicket) accounts.value = result;
           }) : Promise.resolve(),
@@ -681,7 +897,9 @@ onBeforeUnmount(() => {
   ++poolRefreshTicket;
   ++memberReadTicket;
   ++leaseReadTicket;
+  ++sharedReadTicket;
   poolRefreshController?.abort();
+  sharedReadController?.abort();
 });
 async function mutate(fn) {
   if (busy.value) return;

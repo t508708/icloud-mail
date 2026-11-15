@@ -209,6 +209,13 @@ func (s *Store) PoolAliasRetirementAccounts(ctx context.Context, clientID string
 		if live != 1 {
 			return nil, ErrPoolRetirementNotLive
 		}
+		shared, err := s.poolAliasHasOtherProjectUsers(ctx, item.AliasID, clientID)
+		if err != nil {
+			return nil, err
+		}
+		if shared {
+			return nil, ErrPoolRetirementShared
+		}
 		alias, err := s.GetAlias(ctx, item.AliasID)
 		if errors.Is(err, ErrNotFound) {
 			return nil, ErrPoolRetirementAlias
@@ -316,6 +323,13 @@ func (s *Store) StartPoolAliasRetirement(ctx context.Context, clientID, operatio
 		if live != 1 {
 			return PoolAliasRetirementJob{}, false, ErrPoolRetirementNotLive
 		}
+		shared, err := s.poolAliasHasOtherProjectUsersTx(ctx, tx, input.AliasID, clientID)
+		if err != nil {
+			return PoolAliasRetirementJob{}, false, err
+		}
+		if shared {
+			return PoolAliasRetirementJob{}, false, ErrPoolRetirementShared
+		}
 		alias, err := s.getAliasByIDTx(ctx, tx, input.AliasID)
 		if errors.Is(err, ErrNotFound) {
 			return PoolAliasRetirementJob{}, false, ErrPoolRetirementAlias
@@ -403,7 +417,7 @@ func (s *Store) FinalizePoolAliasRetirement(ctx context.Context, operationID str
 		return err
 	}
 	defer tx.Rollback()
-	_, item, err := s.poolAliasRetirementItemTx(ctx, tx, operationID, ordinal)
+	job, item, err := s.poolAliasRetirementItemTx(ctx, tx, operationID, ordinal)
 	if err != nil {
 		return err
 	}
@@ -424,6 +438,13 @@ func (s *Store) FinalizePoolAliasRetirement(ctx context.Context, operationID str
 	accountVersion, err := s.lockAccountVersionForUpdate(ctx, tx, alias.AccountID)
 	if err != nil {
 		return err
+	}
+	shared, err := s.poolAliasHasOtherProjectUsersTx(ctx, tx, alias.ID, job.ClientID)
+	if err != nil {
+		return err
+	}
+	if shared {
+		return ErrPoolRetirementShared
 	}
 	now := s.now().UTC()
 	result, err := s.txExecContext(ctx, tx, `DELETE FROM aliases WHERE id=? AND account_id=?`, alias.ID, alias.AccountID)

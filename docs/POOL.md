@@ -21,7 +21,7 @@
 
 本目录以 mangobubu/icloud-api 的 `32bd8ccc` 为基础开发，保留 Web 管理端、Apple 登录、自动创建、OTP API、只读 IMAPS、OAuth 和凭据轮换。
 
-新增功能位于 Web 导航的「邮箱池」，包括邮箱库存、领取记录、项目 Key、库存目标和 API 接入说明。
+相关功能位于 Web 导航的「邮箱池」，包括邮箱库存、领取记录、项目 Key、项目共用邮箱、库存目标和 API 接入说明。
 
 ## 首次配置
 
@@ -32,6 +32,32 @@
 5. 在「项目 API Key」创建项目，保存一次性展示的 Key。每个项目的领取记录独立，所有项目共享管理员加入的空闲库存。
 
 旧的 40 次/小时计划及其频率升级记录属于历史策略；新计划默认关闭，升级保留已有计划的开启/关闭状态。
+
+## 项目共用邮箱
+
+管理员在「邮箱池 → 项目共用邮箱」中选择项目和一个**已启用的 iCloud 主号**，点击「关联全部 HME」，即可将该主号下的隐藏邮箱关联到项目。操作结果显示当前关联总数 `linked` 和本次新增数 `added`；重复执行只补充尚未关联的邮箱。同一个邮箱可以同时关联多个项目。
+
+- 在列表中按项目和主号查看关联邮箱，来源「共用关联」表示主动建立的共享关系，可以点击「移除关联」撤销；来源「原有独占领取」来自该项目先前的 Pool lease，随原租约管理，不显示移除关联操作。移除共享关系只影响该项目的关联，不删除 Apple 隐藏邮箱、邮件或邮箱凭据。
+- 「下载 TXT」会读取选定项目与主号下的**全部关联邮箱**（包括原有独占领取），文件名使用项目名称和主号邮箱，每行一个地址和一个绝对取码链接，不带表头：
+
+  ```text
+  alias@icloud.com-----https://mail.example.com/api/v1/otp?token=DERIVED_TOKEN
+  ```
+
+- 链接中的令牌是访问凭据，TXT 应由项目负责人妥善保存。导出过程不在浏览器日志中输出令牌。
+- **共享关联**用于多个项目共同使用已存在的 HME 地址，关联、重复关联或移除关联均保持已有取码链接有效。已关联的邮箱会从待领取库存中排除，以免新的领取或到期回收轮换其取件凭据；已有 `used` 租约继续生效。**独占领取**使用原 `POST /api/v1/pool/claim`，从未关联的空闲库存分配 lease，并遵循确认、续租、释放和到期回收流程。
+- 有尚未确认的 `leased` 租约或正在退役的邮箱会跳过本次共享关联；先处理这些租约，再重新点击「关联全部 HME」。其他项目正在使用共享邮箱时，项目退休删除操作会被拦截。
+- **主动轮换邮箱凭据**会使该邮箱已发出的取码链接失效，需要下载新的链接。原有独占领取流程中的领取及回收轮换仍按原规则执行。
+
+管理 API 路径位于 `<admin-path>/api/v1`，使用管理员 Session；写入请求另外携带 `X-CSRF-Token`，沿用管理面板的请求方式：
+
+| 操作 | 管理 API | 请求体 / 查询参数 | `data` 响应 |
+| --- | --- | --- | --- |
+| 查看关联 | `GET /pool/projects/:clientID/mailboxes` | `account_id=NUMBER&limit=NUMBER&offset=NUMBER` | `{"items":[{"alias_id":1,"account_id":2,"address":"alias@icloud.com","otp_url_path":"/api/v1/otp?token=DERIVED_TOKEN","source":"..."}],"total":1}` |
+| 关联全部 HME | `POST /pool/projects/:clientID/mailboxes` | `{"account_id":2}` | `{"linked":100,"added":20}` |
+| 移除关联 | `DELETE /pool/projects/:clientID/mailboxes/:aliasID` | 无 | `{"saved":true}` |
+
+这里的 `:clientID` 为项目标识，`:aliasID` 为隐藏邮箱标识；`account_id` 为 iCloud 主号的数字 ID。导出链接使用浏览器当前站点的 origin 与 `otp_url_path` 拼接，不使用项目 Pool Key 生成链接。
 
 ## 手动创建 Apple 隐藏邮箱
 

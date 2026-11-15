@@ -8,7 +8,7 @@
 
 Self-hosted · Multiple primary accounts · Mailbox pools · On-demand mail retrieval · Light and dark themes
 
-**Current version: v0.2.11**
+**Current version: v0.2.12**
 
 [Downloads and release notes](https://github.com/t508708/icloud-mail/releases) · [Docker deployment](#docker-deployment) · [API documentation](docs/POOL.md) · [Changelog](CHANGELOG.md)
 
@@ -24,6 +24,7 @@ For users who want to manage iCloud Hide My Email addresses centrally, automatic
 | **Bulk management of Hide My Email addresses** | Sync addresses, search and filter, select across pages, use drag selection, and create or delete addresses in batches. |
 | **Automatic address replenishment** | Manual batch creation and scheduled **automatic creation plans** work together; the new and legacy channels operate according to their respective limits and status. |
 | **Project mailbox pools** | Issue Pool Keys for different projects to acquire addresses, confirm use in batches, renew, release, and retire leases. View claimable counts for enabled primary accounts. |
+| **Project-shared mailboxes** | Associate all Hide My Email addresses from an enabled iCloud account with multiple projects, browse or remove associations, and download a TXT of OTP links for a selected project and account without using exclusive pool claims. |
 | **Verification codes via links and API** | Each mailbox has its own retrieval link, with multilingual code extraction and support for `+tag` variants of registered root addresses. |
 | **On-demand mail retrieval** | Visiting a retrieval link or calling the API triggers incremental reads. Connections are reused within the same primary account to reduce duplicate requests and downloads of historical message bodies. |
 | **Per-account proxies** | Configure a dedicated HTTP, HTTPS, or SOCKS5 proxy for each primary account, with an optional upstream hop for Apple sign-in, session maintenance, and IMAP connections. |
@@ -45,12 +46,12 @@ Discuss your experience, report issues, suggest features, share deployment tips,
 
 ## Recent Updates
 
-**v0.2.11: Per-account proxies and faster concurrent code retrieval.**
+**v0.2.12: Share one Hide My Email address across multiple projects.**
 
-- Enable a dedicated HTTP, HTTPS, or SOCKS5 proxy per account, with authentication, an optional upstream hop, encrypted settings, and a connectivity check.
-- Apple sign-in, session renewal, alias management, IMAP retrieval, IDLE, and automatic code-provider requests use the account's configured route.
-- Account connection pools are isolated; changing proxies refreshes subsequent connections and invalidates pending login verification flows.
-- Mailbox pool reads fetch the newest valid OTP directly from the database, reducing history scans during concurrent requests.
+- Use **Mailbox Pool → Project-Shared Mailboxes** to associate an account's HME addresses with multiple projects, browse or remove associations, and export project-specific OTP links as TXT.
+- Existing exclusive claims and retrieval credentials remain intact; associating an address does not claim it again or rotate its credentials.
+- Shared addresses are excluded from future exclusive claims and protected from retirement while another project uses them. Repeated associations add only missing entries.
+- New administrator endpoints manage project associations. An additive table is created automatically during upgrades.
 
 See [CHANGELOG.md](CHANGELOG.md) for full feature changes, fixes, and upgrade notes.
 
@@ -117,6 +118,12 @@ docker compose -f compose.yaml -f compose.build.yaml up -d --build --wait
 See [installation and upgrades](DELIVERY.md) for backups, migration, offline installation, and deployment of pinned versions.
 
 ## API Integration
+
+### Project-Shared Mailboxes
+
+In **Mailbox Pool → Project-Shared Mailboxes (项目共用邮箱)**, select a project and an enabled iCloud account, then choose **Associate All HME (关联全部 HME)**. The same address can be associated with multiple projects. Browse associations with pagination, remove individual associations, or download every associated OTP link for the selected project and account. Each TXT line uses `address-----https://HOST/api/v1/otp?token=...`. Creating or removing shared associations preserves existing links; shared addresses are excluded from future exclusive claims. Deliberate mailbox credential rotation invalidates old links, so export them again afterward. Exclusive pool claims continue to use Pool Keys and leases. See the [shared mailbox documentation](docs/POOL.md#项目共用邮箱).
+
+### Individual Mailbox OTP
 
 Use the API Key for the relevant mailbox from the dashboard in your program to retrieve verification codes:
 

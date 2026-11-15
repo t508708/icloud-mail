@@ -88,6 +88,9 @@ func (s *Server) registerAdminPoolRoutes(api *gin.RouterGroup) {
 	api.GET("/clients", s.adminPoolClients)
 	api.POST("/clients", s.adminCreatePoolClient)
 	api.PATCH("/clients/:clientID", s.adminUpdatePoolClient)
+	api.GET("/projects/:clientID/mailboxes", s.adminPoolProjectMailboxes)
+	api.POST("/projects/:clientID/mailboxes", s.adminLinkPoolProjectMailboxes)
+	api.DELETE("/projects/:clientID/mailboxes/:aliasID", s.adminUnlinkPoolProjectMailbox)
 }
 
 func (s *Server) poolError(c *gin.Context, err error) {

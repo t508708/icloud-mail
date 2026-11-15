@@ -225,6 +225,8 @@ func (s *Server) poolAliasRetirementError(c *gin.Context, err error) {
 		code, message = "LEASE_NOT_USED", "仅已使用租约可提交删除"
 	case errors.Is(err, store.ErrPoolRetirementNotLive):
 		code, message = "LEASE_NOT_LIVE", "租约不是该邮箱唯一有效分配"
+	case errors.Is(err, store.ErrPoolRetirementShared):
+		code, message = "MAILBOX_SHARED", "该邮箱仍被其他项目使用，请先移除共享关系"
 	case errors.Is(err, store.ErrPoolRetirementNotICloud):
 		code, message = "ALIAS_NOT_ICLOUD", "隐藏邮箱不属于已认证 iCloud 主号"
 	case errors.Is(err, store.ErrPoolRetirementPending):
