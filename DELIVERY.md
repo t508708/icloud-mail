@@ -94,3 +94,12 @@ docker compose -f compose.yaml -f compose.offline.yaml up -d --no-build --pull n
 ## 维护者打包
 
 从发布标签的干净源码构建 `runtime` 和 `postgres-runtime` 两个 Docker target，分别标记为 `icloud-api:TAG`、`icloud-api-postgres:TAG`，设置 OCI `version` 为标签、`revision` 为完整源码提交。运行 `bash scripts/package-release.sh TAG` 生成源码 ZIP、含镜像 ZIP 和外部 `SHA256SUMS`。脚本核对版本/提交/架构，只归档标签中的文件；不使用运行容器制作镜像。
+
+## 发布记录
+
+### v0.2.12（2026-11-15）
+
+- [正式 Release](https://github.com/t508708/icloud-mail/releases/tag/v0.2.12) 已发布，提供源码 ZIP、Linux amd64 离线镜像包与 `SHA256SUMS`。
+- GHCR 应用镜像 `ghcr.io/t508708/icloud-mail:v0.2.12`、数据库镜像 `ghcr.io/t508708/icloud-mail-postgres:v0.2.12` 均包含 `linux/amd64` 和 `linux/arm64`；`latest` 同步包含本版功能。
+- 邮箱池新增多项目共享关联、管理与 TXT 导出；现有项目已领取的邮箱及取件凭据保持有效，共享邮箱从后续独占领取库存中排除，并受到退休删除保护。具体操作和接口见 [邮箱池说明](docs/POOL.md#项目共用邮箱)。
+- Go 全部包检查、`go vet ./...`、Web 274 项用例以及前端生产构建通过。使用标准 Compose 更新的应用容器运行正常，`/healthz` 返回 HTTP 200。
