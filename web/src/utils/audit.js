@@ -37,6 +37,10 @@ export const auditActionLabels = {
   pool_enroll: "加入邮箱池",
   pool_client_create: "创建邮箱池客户端",
   pool_client_update: "更新邮箱池客户端",
+  pool_project_share: "关联项目共用邮箱",
+  pool_project_unshare: "移除项目共用邮箱",
+  archive_gc: "整理邮件归档",
+  inbox_sync: "按需同步邮件",
 };
 
 export function auditActionLabel(action) {

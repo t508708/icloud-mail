@@ -8,7 +8,7 @@
 
 Self-hosted · Multiple primary accounts · Mailbox pools · On-demand mail retrieval · Light and dark themes
 
-**Current version: v0.2.12**
+**Current version: v0.2.13**
 
 [Downloads and release notes](https://github.com/t508708/icloud-mail/releases) · [Docker deployment](#docker-deployment) · [API documentation](docs/POOL.md) · [Changelog](CHANGELOG.md)
 
@@ -20,14 +20,15 @@ For users who want to manage iCloud Hide My Email addresses centrally, automatic
 
 | Capability | What it offers |
 | --- | --- |
-| **Manage multiple primary accounts in one dashboard** | An Apple-style interface with Liquid Glass effects and light/dark modes; JavaScript and CSS are served locally by the application. |
-| **Bulk management of Hide My Email addresses** | Sync addresses, search and filter, select across pages, use drag selection, and create or delete addresses in batches. |
-| **Automatic address replenishment** | Manual batch creation and scheduled **automatic creation plans** work together; the new and legacy channels operate according to their respective limits and status. |
+| **Manage multiple primary accounts in one dashboard** | An Apple-style interface with an operations overview dashboard, archive quota management, Liquid Glass effects, and light/dark modes; JavaScript and CSS are served locally. |
+| **View recent 5 emails & read-only share links** | Dedicated **Inbox Viewer** page and quick-view drawer across tables, supporting address search, `+tag` sub-address resolution, sandboxed HTML/plain-text preview, one-click OTP copy, and revocable read-only share links. |
+| **Bulk management of Hide My Email addresses** | Sync addresses, search and filter, select across pages, use drag selection, create or delete addresses in batches, and download TXT credential bundles. |
+| **Automatic address replenishment** | Manual batch creation and scheduled **automatic creation plans** work together with immediate pool enrollment for newly created addresses. |
 | **Project mailbox pools** | Issue Pool Keys for different projects to acquire addresses, confirm use in batches, renew, release, and retire leases. View claimable counts for enabled primary accounts. |
-| **Project-shared mailboxes** | Associate all Hide My Email addresses from an enabled iCloud account with multiple projects, browse or remove associations, and download a TXT of OTP links for a selected project and account without using exclusive pool claims. |
-| **Verification codes via links and API** | Each mailbox has its own retrieval link, with multilingual code extraction and support for `+tag` variants of registered root addresses. |
+| **Isolated project-shared mailboxes** | Share HME addresses across multiple projects with per-project sender/subject filter rules (including 12 built-in service presets), isolated `icp_` tokens, independent rate buckets, and per-project revocation. |
+| **Verification codes via links and API** | Each mailbox has its own retrieval link, supporting optional `sender`, `keyword`, `tag`, `after`, and `wait_seconds` filters alongside multilingual OTP extraction. |
 | **On-demand mail retrieval** | Visiting a retrieval link or calling the API triggers incremental reads. Connections are reused within the same primary account to reduce duplicate requests and downloads of historical message bodies. |
-| **Per-account proxies** | Configure a dedicated HTTP, HTTPS, or SOCKS5 proxy for each primary account, with an optional upstream hop for Apple sign-in, session maintenance, and IMAP connections. |
+| **Per-account proxies** | Configure a dedicated HTTP, HTTPS, SOCKS5, or SOCKS5H proxy for each primary account, with an optional upstream hop for Apple sign-in, session maintenance, auto-login code pickup, and IMAP connections. |
 | **Separate credentials and connection recovery** | Each mailbox has its own rotatable API Key, IMAP password, and OAuth credentials. Apple Account and iCloud Web sign-in support trusted-device or SMS verification, plus optional automatic re-login with saved settings. |
 
 **About credentials:** Separate IMAP/OAuth credentials are issued by this gateway for connecting to this service. Access to Apple's upstream mailbox still requires the corresponding primary account's mail retrieval credentials.
@@ -36,7 +37,7 @@ For users who want to manage iCloud Hide My Email addresses centrally, automatic
 
 Enable **Primary Account Proxy** when adding or editing a primary account. Enter the exit proxy and optionally a preceding proxy for the route `server → upstream proxy → exit proxy → Apple / IMAP`. Use **Test Proxy** to check connectivity to iCloud through the configured chain. Disabling the switch restores direct connections for that account.
 
-Both entries support `hostname:port`, `hostname:port:username:password`, `username:password@hostname:port`, `hostname:port@username:password`, and URL forms such as `http://user:pass@host:port`, `https://user:pass@host:port`, or `socks5://user:pass@host:port`. Entries without a scheme use HTTP. Proxy credentials are encrypted; existing values can be kept by leaving inputs blank when editing, and the upstream proxy can be cleared independently. Connection checks identify the failing upstream or exit hop and distinguish authentication, TLS, connection and timeout errors. Each account has a separate Apple connection pool even when two accounts use the same proxy. Changing the proxy causes subsequent account connections to use the new route.
+Both entries support `hostname:port`, `hostname:port:username:password`, `username:password@hostname:port`, `hostname:port@username:password`, and URL forms such as `http://user:pass@host:port`, `https://user:pass@host:port`, `socks5://user:pass@host:port`, or `socks5h://user:pass@host:port`. Entries without a scheme use HTTP. Proxy credentials are encrypted; existing values can be kept by leaving inputs blank when editing, and the upstream proxy can be cleared independently. Connection checks identify the failing upstream or exit hop and distinguish authentication, TLS, connection and timeout errors. Each account has a separate Apple connection pool even when two accounts use the same proxy. Changing the proxy causes subsequent account connections to use the new route.
 
 Pool code waits now query the newest valid OTP directly instead of repeatedly loading a large history window.
 
@@ -46,12 +47,13 @@ Discuss your experience, report issues, suggest features, share deployment tips,
 
 ## Recent Updates
 
-**v0.2.12: Share one Hide My Email address across multiple projects.**
+**v0.2.13: View recent 5 emails per mailbox, isolate multi-project OTP pickup, fix auto-enrollment, and boost concurrency.**
 
-- Use **Mailbox Pool → Project-Shared Mailboxes** to associate an account's HME addresses with multiple projects, browse or remove associations, and export project-specific OTP links as TXT.
-- Existing exclusive claims and retrieval credentials remain intact; associating an address does not claim it again or rotate its credentials.
-- Shared addresses are excluded from future exclusive claims and protected from retirement while another project uses them. Repeated associations add only missing entries.
-- New administrator endpoints manage project associations. An additive table is created automatically during upgrades.
+- Added **Inbox Viewer** (`/inbox`), a quick-view mailbox drawer across admin tables, and no-login read-only share links (`/inbox/view`), supporting `+tag` resolution, sandboxed HTML/plain-text preview, and one-click OTP copy.
+- Added an **Operations Overview** dashboard (`/dashboard`) with mail archive storage quota tracking and one-click garbage collection, plus batch `.txt` credential downloads.
+- Upgraded multi-project shared mailboxes with per-project sender/subject filter rules (12 presets), isolated `icp_` project OTP tokens, independent rate-limit buckets, and instant per-project revocation on unlink.
+- Fixed auto-pool enrollment so directory-imported historical aliases are excluded from automatic enrollment, newly created/confirmed aliases enroll immediately, and manual batch enrollment filters out conflicts idempotently.
+- Split pool read/write locks, removed N+1 queries, reduced idle IMAPS polling overhead, prevented local DNS leaks for proxied auto-login code providers, and added `socks5h://` support.
 
 See [CHANGELOG.md](CHANGELOG.md) for full feature changes, fixes, and upgrade notes.
 

@@ -33,6 +33,24 @@ const routes = [
         },
       },
       {
+        path: "dashboard",
+        name: "dashboard",
+        component: () => import("../views/DashboardView.vue"),
+        meta: {
+          title: "运行概览",
+          subtitle: "实时掌握主号收件健康、Apple 双通道连接与邮箱池水位",
+        },
+      },
+      {
+        path: "inbox",
+        name: "inbox",
+        component: () => import("../views/MailboxInboxView.vue"),
+        meta: {
+          title: "收件查看",
+          subtitle: "实时同步并查看任意隐藏邮箱最近 5 封邮件正文与验证码",
+        },
+      },
+      {
         path: "accounts/new",
         name: "account-new",
         component: () => import("../views/AccountFormView.vue"),

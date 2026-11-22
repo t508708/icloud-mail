@@ -248,13 +248,12 @@ func (s *Server) runAliasCreationJob(waitCtx context.Context, creator manualChan
 		if !checkpoint() {
 			return
 		}
-		s.credentialRotationMu.RLock()
 		// A user stop only wakes the waiting loop. Let the current reservation
-		// finish and persist its result before stopping subsequent work.
+		// finish and persist its result before stopping subsequent work. Do not
+		// hold credentialRotationMu across slow upstream HTTP calls.
 		createCtx, cancel := context.WithTimeout(context.WithoutCancel(waitCtx), 90*time.Second)
 		a, err := creator.ProbeAliasWithChannel(createCtx, j.AccountID, j.Channel)
 		cancel()
-		s.credentialRotationMu.RUnlock()
 		if err != nil {
 			apiErr := classifyManualAliasError(err)
 			// Keep stage/status diagnostics, never response bodies or cookies.

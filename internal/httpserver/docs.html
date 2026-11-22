@@ -15,20 +15,29 @@
     <p>文档更新：2026-10-22 · v0.2.8。涵盖独立邮箱取码、项目邮箱池、已使用邮箱退役、按需收件、自动创建与自动保活。HOST、ADMIN_PATH 和凭据均为示例占位符。</p>
   </header>
   <nav aria-label="文档目录">
-    <a href="#otp">直接取码</a><a href="#pool">邮箱池</a><a href="#retirement">已使用邮箱退役</a><a href="#receiving">收件与并行</a><a href="#limits">限流与重试</a><a href="#creation">自动创建</a><a href="#auto-login">自动保活</a><a href="#imaps">IMAPS / OAuth</a>
+    <a href="#otp">直接取码</a><a href="#inbox">收件预览分享</a><a href="#pool">邮箱池</a><a href="#retirement">已使用邮箱退役</a><a href="#receiving">收件与并行</a><a href="#limits">限流与重试</a><a href="#creation">自动创建</a><a href="#auto-login">自动保活</a><a href="#imaps">IMAPS / OAuth</a>
   </nav>
 
   <section id="otp">
     <h2>直接取码</h2>
-    <p>使用单邮箱 API Key，或访问后台签发的取件链接。两种方式任选一种，不同时携带两种凭据。浏览器访问或刷新同样触发按需取件。</p>
+    <p>使用单邮箱 API Key，或访问后台签发的取件链接（含单邮箱 <code>icm_</code> 链接与项目专属 <code>icp_</code> 链接）。两种方式任选一种，不同时携带两种凭据。浏览器访问或刷新同样触发按需取件。</p>
     <pre>curl -H "Authorization: Bearer MAILBOX_API_KEY" https://HOST/api/v1/otp
 
-https://HOST/api/v1/otp?token=DERIVED_TOKEN</pre>
-    <p>启用 <code>ICLOUD_API_OTP_RETURN_LATEST_ONLY=true</code> 的部署，有记录时返回归属该邮箱的最新有效验证码：</p>
+https://HOST/api/v1/otp?token=DERIVED_TOKEN
+https://HOST/api/v1/otp?token=PROJECT_OTP_TOKEN&amp;after=2026-10-14T07%3A00%3A00Z&amp;tag=chatgpt&amp;latest=true&amp;wait_seconds=10</pre>
+    <p>启用 <code>ICLOUD_API_OTP_RETURN_LATEST_ONLY=true</code>（或请求携带 <code>latest=true</code>）时，有记录时返回归属该邮箱的最新有效验证码：</p>
     <pre>{"otp":"876543","time":"2026-10-14T15:00:00+08:00"}</pre>
-    <p>没有验证码时返回 <code>200 []</code>。未启用最新模式时返回最新优先的数组，最多 100 条；旧变量 <code>ICLOUD_API_OTP_RETURN_LAST_ONLY</code> 是兼容别名，同时配置以正式变量为准。时间使用部署时区，包含 UTC 偏移。</p>
-    <p>识别主题、纯文本与 HTML 可读文本中独立的六位 ASCII 数字。读取可重复，不消费验证码、不改变邮件已读状态。此接口可包含旧归档；需要区分本次任务的新码时，使用 Pool <code>code</code> 接口的 <code>after</code> 参数。</p>
+    <p>没有验证码时返回 <code>200 []</code>。未启用最新模式时返回最新优先的数组，最多 100 条；旧变量 <code>ICLOUD_API_OTP_RETURN_LAST_ONLY</code> 是兼容别名，同时配置以正式变量为准。时间使用部署时区，包含 UTC 偏移。可选过滤参数：<code>after</code>（RFC3339 时间）、<code>sender</code>（发件人域名/关键词）、<code>subject</code>/<code>keyword</code>（主题关键词）、<code>tag</code>/<code>to</code>（子地址标签）、<code>wait_seconds</code>（0–15 秒短等待）。项目专属 <code>icp_</code> 令牌自动叠加项目级发件人/主题过滤规则，并在项目解除共享或停用时独立失效，不影响同邮箱其他项目。</p>
+    <p>识别主题、纯文本与 HTML 可读文本中独立的六位 ASCII 数字。读取可重复，不消费验证码、不改变邮件已读状态。此接口可包含旧归档；需要区分本次任务的新码时，使用 Pool <code>code</code> 接口的 <code>after</code> 参数或本接口的 <code>after</code> 参数。</p>
     <p class="note">收件地址先完整精确匹配已登记 alias；未命中时，才剥离本地段第一个 <code>+</code> 及其后 tag，保持域名不变，再精确匹配 root。合法 root+tag 邮件可通过 root 取件；未知 root、其他域名及点号近似地址不匹配。完整登记的 + 地址优先归属自身。</p>
+  </section>
+
+  <section id="inbox">
+    <h2>只读收件预览与最近 5 封邮件</h2>
+    <p>使用后台为单邮箱签发的专用只读查件分享令牌（用途隔离，不可用于取码或 OAuth），可安全预览该隐藏邮箱最近 5 封邮件的发件人、主题、识别出的验证码及清洗后的正文：</p>
+    <pre>https://HOST/inbox/view?token=INBOX_SHARE_TOKEN
+curl 'https://HOST/api/v1/inbox?token=INBOX_SHARE_TOKEN&amp;tag=chatgpt'</pre>
+    <p>网页视图默认在沙箱中隔离渲染邮件正文并拦截远程追踪图片；轮换单邮箱凭据或停用邮箱会立即使旧分享链接失效。</p>
   </section>
 
   <section id="pool">

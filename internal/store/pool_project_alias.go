@@ -11,10 +11,11 @@ import (
 // PoolProjectAlias records usage by a project without transferring ownership
 // of the mailbox, rotating credentials, or altering existing pool leases.
 type PoolProjectAlias struct {
-	AliasID   int64  `json:"alias_id"`
-	AccountID int64  `json:"account_id"`
-	Address   string `json:"address"`
-	Source    string `json:"source"`
+	AliasID    int64  `json:"alias_id"`
+	AccountID  int64  `json:"account_id"`
+	Address    string `json:"address"`
+	Source     string `json:"source"`
+	APIKeyHash []byte `json:"-"`
 }
 
 // LinkPoolProjectAccountAliases links all usable iCloud aliases in one account
@@ -102,7 +103,7 @@ func (s *Store) ListPoolProjectAliases(ctx context.Context, clientID string, acc
 	}
 	rows, err := s.queryContext(ctx, `SELECT al.id,al.account_id,al.address,
 		CASE WHEN EXISTS (SELECT 1 FROM pool_leases used WHERE used.client_id=? AND used.alias_id=al.id AND used.state='used')
-		THEN 'claimed' ELSE 'shared' END`+where+` ORDER BY al.account_id,al.id LIMIT ? OFFSET ?`,
+		THEN 'claimed' ELSE 'shared' END, al.api_key_hash`+where+` ORDER BY al.account_id,al.id LIMIT ? OFFSET ?`,
 		append(append([]any{clientID}, args...), limit, offset)...)
 	if err != nil {
 		return page, err
@@ -110,7 +111,7 @@ func (s *Store) ListPoolProjectAliases(ctx context.Context, clientID string, acc
 	defer rows.Close()
 	for rows.Next() {
 		var alias PoolProjectAlias
-		if err := rows.Scan(&alias.AliasID, &alias.AccountID, &alias.Address, &alias.Source); err != nil {
+		if err := rows.Scan(&alias.AliasID, &alias.AccountID, &alias.Address, &alias.Source, &alias.APIKeyHash); err != nil {
 			return page, err
 		}
 		page.Items = append(page.Items, alias)

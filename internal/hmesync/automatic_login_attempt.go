@@ -406,9 +406,16 @@ func (s *Service) finishAutomaticLogin(ctx context.Context, attempt *automaticLo
 		if state.LastErrorCode == "" {
 			state.LastErrorCode = CodeUpstreamError
 		}
-		next := s.now().Add(max(automaticLoginDelay(state.Failures), apple.RetryDelay(result)))
+		delay := max(automaticLoginDelay(state.Failures), apple.RetryDelay(result))
+		// Protect Apple accounts from unbounded 2FA/SMS loops if verification
+		// codes repeatedly fail or time out across consecutive attempts.
+		if state.Failures >= 5 && (errors.Is(result, ErrVerificationInvalid) || state.LastErrorCode == codeAutoLoginCodeTimeout) {
+			delay = max(delay, 6*time.Hour)
+		}
+		next := s.now().Add(delay)
 		state.NextAttemptAt = &next
-		if errors.Is(result, ErrCredentialsInvalid) || errors.Is(result, ErrAccountActionRequired) || errors.Is(result, ErrAccountMismatch) {
+		if errors.Is(result, ErrCredentialsInvalid) || errors.Is(result, ErrAccountActionRequired) || errors.Is(result, ErrAccountMismatch) ||
+			(state.Failures >= 8 && errors.Is(result, ErrVerificationInvalid)) {
 			state.Status, state.NextAttemptAt = "needs_action", nil
 		}
 	}

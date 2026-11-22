@@ -21,6 +21,17 @@
       </template>
     </SectionHeader>
 
+    <div class="audit-filter-bar" role="search" aria-label="筛选操作记录">
+      <el-select v-model="resourceFilter" clearable placeholder="全部对象" aria-label="按对象筛选" @change="applyAuditFilters">
+        <el-option v-for="(label, key) in resourceLabels" :key="key" :label="label" :value="key" />
+      </el-select>
+      <el-select v-model="resultFilter" clearable placeholder="全部结果" aria-label="按执行结果筛选" @change="applyAuditFilters">
+        <el-option label="成功" value="success" />
+        <el-option label="失败" value="failed" />
+      </el-select>
+      <el-button v-if="resourceFilter || resultFilter" @click="resetAuditFilters">重置筛选</el-button>
+    </div>
+
     <div v-if="loading && logs.length === 0" class="data-panel loading-panel">
       <el-skeleton :rows="7" animated role="status" aria-live="polite" aria-busy="true" aria-label="正在加载审计记录" />
     </div>
@@ -32,9 +43,11 @@
 
     <EmptyState
       v-else-if="logs.length === 0"
-      title="暂无操作记录"
-      description="新的登录与配置操作会显示在这里。"
-    />
+      :title="resourceFilter || resultFilter ? '没有匹配的操作记录' : '暂无操作记录'"
+      :description="resourceFilter || resultFilter ? '请调整对象或结果筛选条件后重试。' : '新的登录与配置操作会显示在这里。'"
+    >
+      <el-button v-if="resourceFilter || resultFilter" @click="resetAuditFilters">重置筛选</el-button>
+    </EmptyState>
 
     <template v-else>
       <RequestAlert
@@ -166,6 +179,7 @@ const resourceLabels = {
 
 const resultLabels = {
   success: { label: "成功", type: "success" },
+  degraded: { label: "降级完成", type: "warning" },
   failed: { label: "失败", type: "danger" },
 };
 
@@ -181,11 +195,26 @@ const auditColumns = [
 const logs = ref([]);
 const currentPage = ref(1);
 const total = ref(0);
+const resourceFilter = ref("");
+const resultFilter = ref("");
 const loading = ref(false);
 const loadError = ref(null);
 const loadGate = createLatestRequestGate();
 let listAbortController = null;
 let viewActive = true;
+
+function applyAuditFilters() {
+  currentPage.value = 1;
+  logs.value = [];
+  total.value = 0;
+  void loadAuditLogs();
+}
+
+function resetAuditFilters() {
+  resourceFilter.value = "";
+  resultFilter.value = "";
+  applyAuditFilters();
+}
 
 function actionLabel(action) {
   return auditActionLabel(action);
@@ -206,7 +235,8 @@ function resultMeta(result) {
 async function loadAuditLogs() {
   const page = currentPage.value;
   const selectedPageSize = pageSize.value;
-  const requestKey = `${page}\u0000${selectedPageSize}`;
+  const filterKey = `${resourceFilter.value}\u0000${resultFilter.value}`;
+  const requestKey = `${filterKey}\u0000${page}\u0000${selectedPageSize}`;
   const ticket = loadGate.begin(requestKey);
   listAbortController?.abort();
   const abortController = new AbortController();
@@ -214,16 +244,21 @@ async function loadAuditLogs() {
   loading.value = true;
   loadError.value = null;
   try {
+    const filterOpts = {
+      resourceType: resourceFilter.value,
+      result: resultFilter.value,
+      signal: abortController.signal,
+    };
     const result = selectedPageSize === ALL_PAGE_SIZE
-      ? { items: await getAllAuditLogs({ signal: abortController.signal }) }
+      ? { items: await getAllAuditLogs(filterOpts) }
       : await getAuditLogs({
           limit: selectedPageSize,
           offset: (page - 1) * selectedPageSize,
-          signal: abortController.signal,
+          ...filterOpts,
         });
     if (
       !viewActive ||
-      !loadGate.isCurrent(ticket, `${currentPage.value}\u0000${pageSize.value}`)
+      !loadGate.isCurrent(ticket, `${resourceFilter.value}\u0000${resultFilter.value}\u0000${currentPage.value}\u0000${pageSize.value}`)
     ) return;
     const nextTotal = Math.max(0, Number(result?.total) || 0);
     const nextItems = Array.isArray(result?.items) ? result.items : [];
@@ -245,14 +280,14 @@ async function loadAuditLogs() {
     if (
       error?.name !== "AbortError" &&
       viewActive &&
-      loadGate.isCurrent(ticket, `${currentPage.value}\u0000${pageSize.value}`)
+      loadGate.isCurrent(ticket, `${resourceFilter.value}\u0000${resultFilter.value}\u0000${currentPage.value}\u0000${pageSize.value}`)
     ) {
       loadError.value = error;
     }
   } finally {
     if (
       listAbortController === abortController &&
-      loadGate.isCurrent(ticket, `${currentPage.value}\u0000${pageSize.value}`)
+      loadGate.isCurrent(ticket, `${resourceFilter.value}\u0000${resultFilter.value}\u0000${currentPage.value}\u0000${pageSize.value}`)
     ) {
       loading.value = false;
     }
@@ -304,5 +339,20 @@ onBeforeUnmount(() => {
 
 .audit-request-id {
   overflow-wrap: anywhere;
+}
+
+.audit-filter-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+}
+
+.audit-filter-bar .el-select {
+  width: 180px;
 }
 </style>

@@ -39,6 +39,15 @@
           <h1>{{ page.title }}</h1>
         </div>
         <div class="admin-topbar__tools">
+          <el-button
+            v-if="route.name !== 'inbox'"
+            size="small"
+            plain
+            :icon="Postcard"
+            @click="router.push({ name: 'inbox' })"
+          >
+            收件查看
+          </el-button>
           <ThemeControl />
           <div class="admin-topbar__account"><span class="admin-avatar" aria-hidden="true">{{ auth.state.username.slice(0, 1).toUpperCase() }}</span><span class="admin-topbar__username">{{ auth.state.username }}</span></div>
         </div>
@@ -54,10 +63,12 @@
 import {
   ChatDotRound,
   Connection,
+  DataAnalysis,
   Document,
   Lock,
   Menu,
   Message,
+  Postcard,
   SwitchButton,
   Tickets,
 } from "@element-plus/icons-vue";
@@ -82,8 +93,10 @@ const logoutLoading = ref(false);
 const qqGroupURL = "https://qm.qq.com/q/6KWBNKKDEk";
 
 const menuItems = [
+  { to: { name: "dashboard" }, label: "运行概览", icon: DataAnalysis, section: "dashboard" },
   { to: { name: "accounts" }, label: "主号管理", icon: Connection, section: "accounts" },
   { to: { name: "aliases" }, label: "隐私邮箱", icon: Message, section: "aliases" },
+  { to: { name: "inbox" }, label: "收件查看", icon: Postcard, section: "inbox" },
   { to: { name: "pool" }, label: "邮箱池", icon: Tickets, section: "pool" },
   { to: { name: "audit" }, label: "操作记录", icon: Document, section: "audit" },
   { to: { name: "logs" }, label: "全部日志", icon: Tickets, section: "logs" },
@@ -100,7 +113,7 @@ const AdminNavigation = defineComponent({
         "nav",
         { class: "admin-nav", "aria-label": "主要导航" },
         menuItems.flatMap((item, index) => [
-          ...(index === 0 || index === 3 ? [h("span", { class: "admin-nav__group" }, index === 0 ? "邮箱工作区" : "管理")] : []),
+          ...(index === 0 || index === 5 ? [h("span", { class: "admin-nav__group" }, index === 0 ? "邮箱工作区" : "管理")] : []),
           h(
             RouterLink,
             {

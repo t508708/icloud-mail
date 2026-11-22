@@ -10,17 +10,21 @@ export function buildProjectMailboxFilename(projectName, accountEmail) {
   return `${safePart(projectName, "project")}-${safePart(accountEmail, "account")}-mailboxes.txt`;
 }
 
-export function buildProjectMailboxExportText(mailboxes, origin = globalThis.location?.origin) {
+export function buildProjectMailboxExportText(mailboxes, origin = globalThis.location?.origin, options = {}) {
   if (!Array.isArray(mailboxes)) {
     throw new TypeError("项目邮箱数据格式无效。");
   }
+  const preferProjectToken = Boolean(options?.preferProjectToken);
 
   return mailboxes.map((mailbox) => {
     const address = mailbox?.address;
     if (typeof address !== "string" || !address.trim() || address !== address.trim() || /[\r\n]/.test(address)) {
       throw new TypeError("邮箱地址格式无效。");
     }
-    const link = buildOTPDirectLink(mailbox?.otp_url_path, origin);
+    const rawPath = preferProjectToken && mailbox?.project_otp_url_path
+      ? mailbox.project_otp_url_path
+      : mailbox?.otp_url_path;
+    const link = buildOTPDirectLink(rawPath, origin);
     return `${address}-----${link}`;
   }).join("\r\n");
 }

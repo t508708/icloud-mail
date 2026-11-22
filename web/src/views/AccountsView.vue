@@ -24,6 +24,21 @@
       </template>
     </SectionHeader>
 
+    <div class="accounts-search-bar" role="search" aria-label="搜索主号">
+      <el-input
+        v-model="queryDraft"
+        clearable
+        maxlength="200"
+        :prefix-icon="Search"
+        placeholder="搜索主号邮箱或备注"
+        aria-label="搜索主号邮箱或备注"
+        @keyup.enter="applyAccountSearch"
+        @clear="applyAccountSearch"
+      />
+      <el-button type="primary" :icon="Search" @click="applyAccountSearch">搜索</el-button>
+      <el-button v-if="appliedQuery" @click="clearAccountSearch">重置</el-button>
+    </div>
+
     <div v-if="loading && accounts.length === 0" class="data-panel loading-panel">
       <el-skeleton :rows="5" animated role="status" aria-label="正在加载主号列表" />
     </div>
@@ -35,10 +50,11 @@
 
     <EmptyState
       v-else-if="accounts.length === 0"
-      title="还没有主号"
-      description="添加一个 iCloud 或自定义邮箱主号及其 IMAP 密码，然后登记或生成邮箱。"
+      :title="appliedQuery ? '没有匹配的主号' : '还没有主号'"
+      :description="appliedQuery ? '请尝试其他关键词或重置搜索条件。' : '添加一个 iCloud 或自定义邮箱主号及其 IMAP 密码，然后登记或生成邮箱。'"
     >
-      <el-button type="primary" :icon="Plus" @click="openNewAccount">
+      <el-button v-if="appliedQuery" @click="clearAccountSearch">重置搜索</el-button>
+      <el-button v-else type="primary" :icon="Plus" @click="openNewAccount">
         添加第一个主号
       </el-button>
     </EmptyState>
@@ -69,7 +85,11 @@
           <template #cell="{ column, row }">
             <template v-if="column.key === 'account'">
               <div class="primary-stack">
-                <strong>{{ row.mailboxType === "custom" ? `@${row.emailSuffix}` : row.email }}</strong>
+                <div class="accounts-identity-row">
+                  <strong>{{ row.mailboxType === "custom" ? `@${row.emailSuffix}` : row.email }}</strong>
+                  <el-tag v-if="row.proxy?.enabled" size="small" type="info" effect="plain">独立代理</el-tag>
+                  <el-tag v-if="!row.enabled" size="small" type="warning" effect="plain">已停用</el-tag>
+                </div>
                 <small>{{ row.name || "未填写备注" }}</small>
               </div>
             </template>
@@ -137,7 +157,7 @@
 </template>
 
 <script setup>
-import { Plus, Refresh, Setting } from "@element-plus/icons-vue";
+import { Plus, Refresh, Search, Setting } from "@element-plus/icons-vue";
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
@@ -169,16 +189,38 @@ const accountColumns = [
 const accounts = ref([]);
 const currentPage = ref(1);
 const total = ref(0);
+const queryDraft = ref("");
+const appliedQuery = ref("");
 const loading = ref(false);
 const loadError = ref(null);
 const loadGate = createLatestRequestGate();
 let listAbortController = null;
 let viewActive = true;
 
+function applyAccountSearch() {
+  const next = queryDraft.value.trim();
+  if (next === appliedQuery.value && accounts.value.length > 0) return;
+  appliedQuery.value = next;
+  currentPage.value = 1;
+  accounts.value = [];
+  total.value = 0;
+  void loadAccounts();
+}
+
+function clearAccountSearch() {
+  queryDraft.value = "";
+  appliedQuery.value = "";
+  currentPage.value = 1;
+  accounts.value = [];
+  total.value = 0;
+  void loadAccounts();
+}
+
 async function loadAccounts({ silent = false } = {}) {
   const page = currentPage.value;
   const selectedPageSize = pageSize.value;
-  const requestKey = `${page}\u0000${selectedPageSize}`;
+  const query = appliedQuery.value;
+  const requestKey = `${query}\u0000${page}\u0000${selectedPageSize}`;
   const ticket = loadGate.begin(requestKey);
   listAbortController?.abort();
   const abortController = new AbortController();
@@ -190,16 +232,17 @@ async function loadAccounts({ silent = false } = {}) {
   try {
     const result = selectedPageSize === ALL_PAGE_SIZE
       ? {
-          items: await getAllAccounts({ signal: abortController.signal }),
+          items: await getAllAccounts({ query, signal: abortController.signal }),
         }
       : await getAccountPage({
           limit: selectedPageSize,
           offset: (page - 1) * selectedPageSize,
+          query,
           signal: abortController.signal,
         });
     if (
       !viewActive ||
-      !loadGate.isCurrent(ticket, `${currentPage.value}\u0000${pageSize.value}`)
+      !loadGate.isCurrent(ticket, `${appliedQuery.value}\u0000${currentPage.value}\u0000${pageSize.value}`)
     ) return;
     const nextTotal = Math.max(0, Number(result?.total) || 0);
     const nextItems = Array.isArray(result?.items) ? result.items : [];
@@ -222,7 +265,7 @@ async function loadAccounts({ silent = false } = {}) {
     if (
       error?.name !== "AbortError" &&
       viewActive &&
-      loadGate.isCurrent(ticket, `${currentPage.value}\u0000${pageSize.value}`) &&
+      loadGate.isCurrent(ticket, `${appliedQuery.value}\u0000${currentPage.value}\u0000${pageSize.value}`) &&
       !silent
     ) {
       loadError.value = error;
@@ -231,7 +274,7 @@ async function loadAccounts({ silent = false } = {}) {
   } finally {
     if (
       listAbortController === abortController &&
-      loadGate.isCurrent(ticket, `${currentPage.value}\u0000${pageSize.value}`)
+      loadGate.isCurrent(ticket, `${appliedQuery.value}\u0000${currentPage.value}\u0000${pageSize.value}`)
     ) {
       loading.value = false;
     }
@@ -285,3 +328,28 @@ onBeforeUnmount(() => {
   liveRefresh.stop();
 });
 </script>
+
+<style scoped>
+.accounts-search-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+}
+
+.accounts-search-bar .el-input {
+  flex: 1 1 240px;
+  max-width: 420px;
+}
+
+.accounts-identity-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+</style>

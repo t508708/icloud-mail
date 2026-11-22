@@ -184,6 +184,9 @@ func (s *Store) ConfirmReviewedAliasFromDirectory(ctx context.Context, accountID
 	if _, err := s.bumpAccountVersionTx(ctx, tx, accountID, version); err != nil {
 		return domain.Alias{}, err
 	}
+	if err := s.autoEnrollAliasTx(ctx, tx, accountID, aliasID, true); err != nil {
+		return domain.Alias{}, err
+	}
 	alias, err := scanAlias(s.txQueryRowContext(ctx, tx, `SELECT `+aliasColumns+aliasJoins+` WHERE al.id = ?`, aliasID))
 	if err != nil {
 		return domain.Alias{}, err

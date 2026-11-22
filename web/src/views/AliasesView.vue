@@ -47,6 +47,22 @@
         >
           全部 IMAP
         </el-button>
+        <el-button
+          :icon="Download"
+          :loading="exportingAll"
+          :disabled="total === 0 || exportingAll || rotatingAllCredentials"
+          @click="downloadAllAliasesFile(ALIAS_EXPORT_OTP)"
+        >
+          下载全部取码 TXT
+        </el-button>
+        <el-button
+          :icon="Download"
+          :loading="exportingAll"
+          :disabled="total === 0 || exportingAll || rotatingAllCredentials"
+          @click="downloadAllAliasesFile(ALIAS_EXPORT_IMAP)"
+        >
+          下载全部 IMAP TXT
+        </el-button>
           </div>
         </el-popover>
         <el-tooltip content="刷新隐私邮箱列表" placement="bottom">
@@ -220,6 +236,7 @@
         <span class="alias-selection-toolbar__spacer" />
         <el-button :icon="CopyDocument" :disabled="selectionBusy || !selectedAliases.length" @click="copySelectedAliases(ALIAS_EXPORT_OTP)">勾选取码</el-button>
         <el-button :disabled="selectionBusy || !selectedAliases.length" @click="copySelectedAliases(ALIAS_EXPORT_IMAP)">勾选 IMAP</el-button>
+        <el-button :icon="Download" :disabled="selectionBusy || !selectedAliases.length" @click="downloadSelectedAliasesFile(ALIAS_EXPORT_OTP)">导出 TXT</el-button>
         <el-select v-model="moveTargetGroupId" class="alias-group-bulk-select" :loading="groupsLoading || movingAliases" :disabled="selectionBusy" placeholder="移动到分组" aria-label="将勾选的隐私邮箱移动到分组" @change="moveSelectedAliases">
           <el-option label="未分组" value="none" />
           <el-option v-for="group in groups" :key="group.id" :label="group.name" :value="String(group.id)" />
@@ -478,13 +495,18 @@
                   @click="copyAliasLine(row, ALIAS_EXPORT_IMAP)"
                 >IMAP</el-button>
                 <el-button
-                  v-if="isAliasReceiveAvailable(row)"
+                  v-if="!isAliasConfirmationPending(row)"
                   size="small"
                   type="primary"
                   plain
                   :icon="Message"
+                  @click="openInboxDrawer(row)"
+                >邮件</el-button>
+                <el-button
+                  v-if="isAliasReceiveAvailable(row)"
+                  size="small"
                   @click="openAliasInbox(row)"
-                >收件</el-button>
+                >取码页</el-button>
                 <el-button
                   v-if="isLegacyDirectLinkAvailable(row)"
                   size="small"
@@ -571,13 +593,19 @@
               复制 IMAP 格式
             </el-button>
             <el-button
-              v-if="isAliasReceiveAvailable(alias)"
+              v-if="!isAliasConfirmationPending(alias)"
               type="primary"
               plain
               :icon="Message"
+              @click="openInboxDrawer(alias)"
+            >
+              查看最近邮件
+            </el-button>
+            <el-button
+              v-if="isAliasReceiveAvailable(alias)"
               @click="openAliasInbox(alias)"
             >
-              收件
+              打开取码页
             </el-button>
             <el-button
               v-if="isLegacyDirectLinkAvailable(alias)"
@@ -624,6 +652,12 @@
         @size-change="handlePageSizeChange"
       />
     </template>
+
+    <MailboxInboxDrawer
+      v-model="inboxDrawer.open"
+      :alias-id="inboxDrawer.aliasId"
+      :address="inboxDrawer.address"
+    />
   </section>
 </template>
 
@@ -631,6 +665,7 @@
 import {
   CopyDocument,
   Delete,
+  Download,
   EditPen,
   FolderAdd,
   Message,
@@ -662,6 +697,7 @@ import {
 } from "../api/admin.js";
 import EmptyState from "../components/EmptyState.vue";
 import ListPagination from "../components/ListPagination.vue";
+import MailboxInboxDrawer from "../components/MailboxInboxDrawer.vue";
 import RequestAlert from "../components/RequestAlert.vue";
 import SectionHeader from "../components/SectionHeader.vue";
 import SyncStatus from "../components/SyncStatus.vue";
@@ -714,8 +750,13 @@ const aliasColumns = [
   { key: "lastAccessedAt", title: "最近调用", width: 150, flexGrow: 1 },
   { key: "latestReceivedAt", title: "最新邮件", width: 150, flexGrow: 1 },
   { key: "status", title: "状态", width: 134, flexGrow: 1 },
-  { key: "actions", title: "复制 / 收件 / 管理", width: 320, align: "right", fixed: "right" },
+  { key: "actions", title: "复制 / 收件 / 管理", width: 356, align: "right", fixed: "right" },
 ];
+const inboxDrawer = ref({ open: false, aliasId: null, address: "" });
+function openInboxDrawer(row) {
+  if (!row?.id) return;
+  inboxDrawer.value = { open: true, aliasId: row.id, address: row.address || "" };
+}
 const aliases = ref([]);
 const accounts = ref([]);
 const selectedAccountId = ref("");
@@ -1387,6 +1428,64 @@ async function copyAliases(items, format, scope) {
 
 function copySelectedAliases(format) {
   return copyAliases(selectedAliases.value, format, "勾选的");
+}
+
+function triggerTextFileDownload(content, filename) {
+  const url = URL.createObjectURL(new Blob([content], { type: "text/plain;charset=utf-8" }));
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+}
+
+function downloadSelectedAliasesFile(format) {
+  const exportable = selectedAliases.value.filter(isAliasExportable);
+  if (!exportable.length) return;
+  try {
+    const content = buildAliasExportText(exportable, format);
+    const suffix = format === ALIAS_EXPORT_OTP ? "otp" : "imap";
+    triggerTextFileDownload(content, `icloud-aliases-selected-${suffix}.txt`);
+    successMessage(`已导出 ${exportable.length} 个勾选邮箱。`);
+  } catch (error) {
+    showRequestError(error, "导出邮箱文件失败。");
+  }
+}
+
+function downloadAllAliasesFile(format) {
+  if (exportingAll.value || rotatingAllCredentials.value) return;
+  exportingAll.value = true;
+  getAllAliases(selectedAccountId.value, {
+    query: appliedAliasQuery.value,
+    groupId: appliedGroupId.value === "none" ? "none" : appliedGroupId.value,
+    withoutLatestMail: withoutLatestMail.value,
+    withLatestMail: withLatestMail.value,
+  })
+    .then((items) => {
+      if (!viewActive) return;
+      const exportable = items.filter(isAliasExportable);
+      if (!exportable.length) {
+        ElMessage.info("没有可导出完整凭据的邮箱。");
+        return;
+      }
+      const content = buildAliasExportText(exportable, format);
+      const suffix = format === ALIAS_EXPORT_OTP ? "otp" : "imap";
+      triggerTextFileDownload(content, `icloud-aliases-all-${suffix}.txt`);
+      successMessage(`已导出全部 ${exportable.length} 个邮箱。`);
+    })
+    .catch((error) => {
+      if (viewActive) {
+        showRequestError(error, "导出隐私邮箱凭证失败，请稍后重试。");
+      }
+    })
+    .finally(() => {
+      exportingAll.value = false;
+    });
 }
 
 function copyAllAliases(format) {

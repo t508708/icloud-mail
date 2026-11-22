@@ -43,7 +43,7 @@ func (s *Server) pickupAdmission() gin.HandlerFunc {
 	rate := newWindowLimiter(100, time.Second)
 	return func(c *gin.Context) {
 		switch c.FullPath() {
-		case "/api/v1/otp", "/api/v1/mail/latest", "/api/v1/mail/recent", "/api/v1/mail/recent/", "/api/v1/pool/leases/:leaseID/code":
+		case "/api/v1/otp", "/api/v1/inbox", "/api/v1/mail/latest", "/api/v1/mail/recent", "/api/v1/mail/recent/", "/api/v1/pool/leases/:leaseID/code":
 		default:
 			c.Next()
 			return
@@ -75,14 +75,14 @@ func (s *Server) sharedPickupAdmissionWithCapacity(concurrentLimit, waitingLimit
 	waitTickets := make(chan struct{}, waitingLimit+queueLimit/2)
 	return func(c *gin.Context) {
 		switch c.FullPath() {
-		case "/api/v1/otp", "/api/v1/mail/latest", "/api/v1/mail/recent", "/api/v1/mail/recent/", "/api/v1/pool/leases/:leaseID/code":
+		case "/api/v1/otp", "/api/v1/inbox", "/api/v1/mail/latest", "/api/v1/mail/recent", "/api/v1/mail/recent/", "/api/v1/pool/leases/:leaseID/code":
 		default:
 			c.Next()
 			return
 		}
 		c.Header("Cache-Control", "no-store")
 		wait, _ := strconv.Atoi(c.Query("wait_seconds"))
-		waiting := c.FullPath() == "/api/v1/pool/leases/:leaseID/code" && wait > 0
+		waiting := (c.FullPath() == "/api/v1/pool/leases/:leaseID/code" || c.FullPath() == "/api/v1/otp") && wait > 0
 		if waiting {
 			// Reserve ingress capacity as well as execution slots. A flood of
 			// queued long waits must not crowd out ordinary reads before admission.
@@ -264,6 +264,139 @@ func (s *Server) beginSharedMailboxPickupLocked(c *gin.Context, accountID, alias
 		}
 		// Waiting, failures and cancellation do not restart a completion timer.
 		s.aliasDemandRate[aliasID] = current
+		s.accountPickupActive[accountID]--
+		if s.accountPickupActive[accountID] == 0 {
+			delete(s.accountPickupActive, accountID)
+		}
+	}), true
+}
+
+// beginScopedMailboxPickupMode isolates HTTP refresh rate buckets per scope
+// (such as per shared project token or public inbox viewer) so independent
+// callers sharing one HME address do not starve each other with 429s, while
+// upstream IMAP work remains coalesced per primary account.
+func (s *Server) beginScopedMailboxPickupMode(c *gin.Context, accountID, aliasID int64, scope string, waiting bool) (func(), bool) {
+	if scope == "" {
+		return s.beginMailboxPickupMode(c, accountID, aliasID, waiting)
+	}
+	key := strconv.FormatInt(aliasID, 10) + "|" + scope
+	now := s.now()
+	s.aliasDemandRateMu.Lock()
+	if s.aliasDemandRate == nil {
+		s.aliasDemandRate = make(map[int64]aliasDemandRateState)
+		s.accountPickupActive = make(map[int64]int)
+	}
+	if s.aliasScopedDemandRate == nil {
+		s.aliasScopedDemandRate = make(map[string]aliasDemandRateState)
+	}
+	if !now.Before(s.pickupRateCleanupAt) {
+		for id, state := range s.aliasDemandRate {
+			if !state.inFlight && !state.waiting && !now.Before(state.nextAt) {
+				delete(s.aliasDemandRate, id)
+			}
+		}
+		for k, state := range s.aliasScopedDemandRate {
+			if !state.inFlight && !state.waiting && !now.Before(state.nextAt) {
+				delete(s.aliasScopedDemandRate, k)
+			}
+		}
+		s.pickupRateCleanupAt = now.Add(time.Second)
+	}
+	state, exists := s.aliasScopedDemandRate[key]
+	totalEntries := len(s.aliasDemandRate) + len(s.aliasScopedDemandRate)
+	if s.sharedMailboxReceiver {
+		return s.beginScopedSharedMailboxPickupLocked(c, accountID, key, waiting, now, state, exists, totalEntries)
+	}
+	message := ""
+	reason := ""
+	retry := aliasDemandMinimumInterval
+	switch {
+	case state.inFlight:
+		reason, message = "mailbox_inflight", "同一邮箱正在取件，请等待本次请求完成"
+	case now.Before(state.nextAt):
+		reason, message = "mailbox_cooldown", "此邮箱取件冷却中，请按剩余时间重试"
+		retry = state.nextAt.Sub(now)
+	case s.accountPickupActive[accountID] >= pickupAccountLimit:
+		reason, message = "account_concurrency", "此主号取件请求已满，请稍后重试"
+	case !exists && totalEntries >= pickupRateMaxEntries:
+		reason, message = "mailbox_capacity", "取件邮箱较多，请稍后重试"
+	}
+	if message != "" {
+		s.aliasDemandRateMu.Unlock()
+		s.rejectMailboxPickup(c, reason, message, retry)
+		return nil, false
+	}
+	s.aliasScopedDemandRate[key] = aliasDemandRateState{inFlight: true}
+	s.accountPickupActive[accountID]++
+	s.aliasDemandRateMu.Unlock()
+	return sync.OnceFunc(func() {
+		finished := s.now()
+		s.aliasDemandRateMu.Lock()
+		defer s.aliasDemandRateMu.Unlock()
+		s.aliasScopedDemandRate[key] = aliasDemandRateState{nextAt: finished.Add(aliasDemandMinimumInterval)}
+		s.accountPickupActive[accountID]--
+		if s.accountPickupActive[accountID] == 0 {
+			delete(s.accountPickupActive, accountID)
+		}
+	}), true
+}
+
+func (s *Server) beginScopedSharedMailboxPickupLocked(
+	c *gin.Context,
+	accountID int64,
+	key string,
+	waiting bool,
+	now time.Time,
+	state aliasDemandRateState,
+	exists bool,
+	totalEntries int,
+) (func(), bool) {
+	const capacity = sharedPickupBurst * aliasDemandMinimumInterval
+	if !exists {
+		state.credit, state.refilled = capacity, now
+	}
+	if now.After(state.refilled) {
+		state.credit = min(capacity, state.credit+now.Sub(state.refilled))
+		state.refilled = now
+	}
+	reason, message := "", ""
+	retry := time.Second
+	switch {
+	case !exists && totalEntries >= pickupRateMaxEntries:
+		reason, message = "mailbox_capacity", "取件邮箱较多，请稍后重试"
+	case state.credit < aliasDemandMinimumInterval:
+		reason, message = "mailbox_rate", "此邮箱短时刷新较多，请按剩余时间重试"
+		retry = aliasDemandMinimumInterval - state.credit
+	}
+	if reason != "" {
+		s.aliasDemandRateMu.Unlock()
+		s.rejectMailboxPickup(c, reason, message, retry)
+		return nil, false
+	}
+	state.credit -= aliasDemandMinimumInterval
+	state.nextAt = state.refilled.Add(capacity - state.credit)
+	if waiting {
+		state.waiters++
+		state.waiting = true
+	} else {
+		state.readers++
+		state.inFlight = true
+	}
+	s.aliasScopedDemandRate[key] = state
+	s.accountPickupActive[accountID]++
+	s.aliasDemandRateMu.Unlock()
+	return sync.OnceFunc(func() {
+		s.aliasDemandRateMu.Lock()
+		defer s.aliasDemandRateMu.Unlock()
+		current := s.aliasScopedDemandRate[key]
+		if waiting {
+			current.waiters--
+			current.waiting = current.waiters > 0
+		} else {
+			current.readers--
+			current.inFlight = current.readers > 0
+		}
+		s.aliasScopedDemandRate[key] = current
 		s.accountPickupActive[accountID]--
 		if s.accountPickupActive[accountID] == 0 {
 			delete(s.accountPickupActive, accountID)

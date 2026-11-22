@@ -23,6 +23,15 @@ func (s *Server) poolLock() gin.HandlerFunc {
 	}
 }
 
+func (s *Server) poolRLock() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		s.poolMu.RLock()
+		defer s.poolMu.RUnlock()
+		c.Header("Cache-Control", "no-store")
+		c.Next()
+	}
+}
+
 func (s *Server) poolAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Code reads already pass bounded pickup admission and per-alias cooldown.
@@ -62,35 +71,34 @@ func (s *Server) registerPoolRoutes(api *gin.RouterGroup) {
 	api.Use(func(c *gin.Context) { c.Header("Cache-Control", "no-store"); c.Next() })
 	// Upstream reads must not hold the pool-wide mutation lock while waiting.
 	api.GET("/leases/:leaseID/code", s.poolAuth(), s.poolLeaseCode)
-	api.Use(s.poolLock(), s.poolAuth())
-	api.POST("/claim", s.poolClaim)
-	api.GET("/capabilities", func(c *gin.Context) {
+	api.Use(s.poolAuth())
+	api.GET("/capabilities", s.poolRLock(), func(c *gin.Context) {
 		c.JSON(200, gin.H{"data": gin.H{"batch_commit_max": 50}})
 	})
-	api.POST("/leases/commit", s.poolCommitLeases)
-	api.GET("/leases", s.poolListLeases)
-	api.GET("/leases/:leaseID", s.poolGetLease)
-	api.POST("/leases/:leaseID/commit", s.poolLeaseAction("commit", false))
-	api.POST("/leases/:leaseID/release", s.poolLeaseAction("release", false))
-	api.POST("/leases/:leaseID/renew", s.poolLeaseAction("renew", false))
+	api.GET("/leases", s.poolRLock(), s.poolListLeases)
+	api.GET("/leases/:leaseID", s.poolRLock(), s.poolGetLease)
+	api.POST("/claim", s.poolLock(), s.poolClaim)
+	api.POST("/leases/commit", s.poolLock(), s.poolCommitLeases)
+	api.POST("/leases/:leaseID/commit", s.poolLock(), s.poolLeaseAction("commit", false))
+	api.POST("/leases/:leaseID/release", s.poolLock(), s.poolLeaseAction("release", false))
+	api.POST("/leases/:leaseID/renew", s.poolLock(), s.poolLeaseAction("renew", false))
 }
 
 func (s *Server) registerAdminPoolRoutes(api *gin.RouterGroup) {
-	api.Use(s.poolLock())
-	api.GET("/accounts", s.adminPoolAccounts)
-	api.PUT("/accounts/:id", s.adminSetPoolAccount)
-	api.GET("/members", s.adminPoolMembers)
-	api.POST("/members", s.adminEnrollPoolMembers)
-	api.PATCH("/members/:id", s.adminSetPoolMember)
-	api.GET("/leases", s.adminPoolLeases)
-	api.POST("/leases/:leaseID/release", s.poolLeaseAction("release", true))
-	api.POST("/leases/:leaseID/commit", s.poolLeaseAction("commit", true))
-	api.GET("/clients", s.adminPoolClients)
-	api.POST("/clients", s.adminCreatePoolClient)
-	api.PATCH("/clients/:clientID", s.adminUpdatePoolClient)
-	api.GET("/projects/:clientID/mailboxes", s.adminPoolProjectMailboxes)
-	api.POST("/projects/:clientID/mailboxes", s.adminLinkPoolProjectMailboxes)
-	api.DELETE("/projects/:clientID/mailboxes/:aliasID", s.adminUnlinkPoolProjectMailbox)
+	api.GET("/accounts", s.poolRLock(), s.adminPoolAccounts)
+	api.PUT("/accounts/:id", s.poolLock(), s.adminSetPoolAccount)
+	api.GET("/members", s.poolRLock(), s.adminPoolMembers)
+	api.POST("/members", s.poolLock(), s.adminEnrollPoolMembers)
+	api.PATCH("/members/:id", s.poolLock(), s.adminSetPoolMember)
+	api.GET("/leases", s.poolRLock(), s.adminPoolLeases)
+	api.POST("/leases/:leaseID/release", s.poolLock(), s.poolLeaseAction("release", true))
+	api.POST("/leases/:leaseID/commit", s.poolLock(), s.poolLeaseAction("commit", true))
+	api.GET("/clients", s.poolRLock(), s.adminPoolClients)
+	api.POST("/clients", s.poolLock(), s.adminCreatePoolClient)
+	api.PATCH("/clients/:clientID", s.poolLock(), s.adminUpdatePoolClient)
+	api.GET("/projects/:clientID/mailboxes", s.poolRLock(), s.adminPoolProjectMailboxes)
+	api.POST("/projects/:clientID/mailboxes", s.poolLock(), s.adminLinkPoolProjectMailboxes)
+	api.DELETE("/projects/:clientID/mailboxes/:aliasID", s.poolLock(), s.adminUnlinkPoolProjectMailbox)
 }
 
 func (s *Server) poolError(c *gin.Context, err error) {
@@ -395,7 +403,19 @@ func (s *Server) writePoolCodeIfReady(c *gin.Context, v store.PoolLease, alias d
 		s.poolError(c, store.ErrPoolClosed)
 		return true
 	}
-	record, err := s.store.GetLatestAliasOTPAfter(c.Request.Context(), alias.ID, after)
+	filter := store.OTPQueryFilter{
+		After:         &after,
+		SenderFilter:  mergeQueryFilter(currentClient.SenderFilter, c.Query("sender")),
+		SubjectFilter: mergeQueryFilter(mergeQueryFilter(currentClient.SubjectFilter, c.Query("subject")), c.Query("keyword")),
+		Tag:           strings.TrimPrefix(strings.TrimSpace(c.Query("tag")), "+"),
+		Limit:         1,
+	}
+	if filter.Tag == "" {
+		if rawTo := strings.TrimSpace(c.Query("to")); rawTo != "" {
+			filter.Tag = extractSubaddressTag(currentAlias.Address, rawTo)
+		}
+	}
+	record, err := s.store.GetLatestAliasOTPFiltered(c.Request.Context(), alias.ID, currentAlias.Address, filter)
 	if errors.Is(err, store.ErrNotFound) {
 		if final {
 			c.JSON(200, gin.H{"data": gin.H{"success": false, "code": "no_code", "retryable": true, "email": alias.Address}})
@@ -514,12 +534,14 @@ func (s *Server) adminPoolClients(c *gin.Context) {
 }
 func (s *Server) adminCreatePoolClient(c *gin.Context) {
 	var input struct {
-		Project string `json:"project"`
+		Project       string `json:"project"`
+		SenderFilter  string `json:"sender_filter"`
+		SubjectFilter string `json:"subject_filter"`
 	}
 	if !decodeAdminAPIJSON(c, &input) {
 		return
 	}
-	client, token, err := s.store.CreatePoolClient(c.Request.Context(), input.Project)
+	client, token, err := s.store.CreatePoolClientWithRules(c.Request.Context(), input.Project, input.SenderFilter, input.SubjectFilter)
 	if err != nil {
 		s.poolError(c, err)
 		return
@@ -529,24 +551,29 @@ func (s *Server) adminCreatePoolClient(c *gin.Context) {
 }
 func (s *Server) adminUpdatePoolClient(c *gin.Context) {
 	var input struct {
-		Enabled bool `json:"enabled"`
-		Rotate  bool `json:"rotate"`
+		Enabled       bool    `json:"enabled"`
+		Rotate        bool    `json:"rotate"`
+		SenderFilter  *string `json:"sender_filter"`
+		SubjectFilter *string `json:"subject_filter"`
 	}
 	if !decodeAdminAPIJSON(c, &input) {
 		return
 	}
-	token, err := s.store.UpdatePoolClient(c.Request.Context(), c.Param("clientID"), input.Enabled, input.Rotate)
+	clientID := c.Param("clientID")
+	token, err := s.store.UpdatePoolClientWithRules(c.Request.Context(), clientID, input.Enabled, input.Rotate, input.SenderFilter, input.SubjectFilter)
 	if err != nil {
 		s.poolError(c, err)
 		return
 	}
-	s.audit(c, nil, "admin", "pool_client_update", "pool_client", c.Param("clientID"), "success", "")
-	c.JSON(200, gin.H{"data": gin.H{"api_key": token}})
+	updatedClient, _ := s.store.GetPoolClient(c.Request.Context(), clientID)
+	s.audit(c, nil, "admin", "pool_client_update", "pool_client", clientID, "success", "")
+	c.JSON(200, gin.H{"data": gin.H{"api_key": token, "client": updatedClient}})
 }
 
 func (s *Server) RunPoolMaintenance(ctx context.Context) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
+	tickCount := 0
 	for {
 		if ctx.Err() != nil {
 			return
@@ -562,6 +589,16 @@ func (s *Server) RunPoolMaintenance(ctx context.Context) {
 				s.logger.Error("邮箱池回收失败", "error", err)
 			}
 		}()
+		// Every 40 ticks (~10 minutes), run bounded archive quota eviction,
+		// stale .tmp file cleanup, and expired admin session GC.
+		if tickCount%40 == 39 {
+			gcCtx, cancelGC := context.WithTimeout(ctx, 15*time.Second)
+			if _, _, _, err := s.store.RunArchiveMaintenance(gcCtx); err != nil && ctx.Err() == nil {
+				s.logger.Warn("定期整理邮件归档失败", "error", err)
+			}
+			cancelGC()
+		}
+		tickCount++
 		select {
 		case <-ctx.Done():
 			return

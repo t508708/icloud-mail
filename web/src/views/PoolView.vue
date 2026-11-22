@@ -77,8 +77,14 @@
                 date(row.updated_at)
               }}</template></el-table-column
             >
-            <el-table-column label="操作" min-width="185"
+            <el-table-column label="操作" min-width="220"
               ><template #default="{ row }">
+                <el-button
+                  link
+                  type="primary"
+                  @click="openInboxDrawer(row.alias_id, row.address)"
+                  >邮件</el-button
+                >
                 <el-button
                   link
                   type="primary"
@@ -96,7 +102,7 @@
                 >
               </template></el-table-column
             >
-          ></el-table></div>
+          </el-table></div>
           <el-pagination
             v-model:current-page="memberPage"
             :page-size="50"
@@ -168,8 +174,15 @@
               min-width="145"
               show-overflow-tooltip
             />
-            <el-table-column label="操作" min-width="175"
+            <el-table-column label="操作" min-width="215"
               ><template #default="{ row }">
+                <el-button
+                  v-if="row.alias_id"
+                  link
+                  type="primary"
+                  @click="openInboxDrawer(row.alias_id, row.address)"
+                  >邮件</el-button
+                >
                 <el-button
                   v-if="row.state === 'leased'"
                   link
@@ -194,7 +207,7 @@
                 >
               </template></el-table-column
             >
-          ></el-table></div>
+          </el-table></div>
           <el-pagination
             v-model:current-page="leasePage"
             :page-size="50"
@@ -208,15 +221,17 @@
           <div class="pool-toolbar">
             <el-input
               v-model="projectName"
-              placeholder="项目名称，如 my-app"
+              placeholder="项目名称，如 ChatGPT / DeepSeek"
               maxlength="80"
             /><el-button type="primary" :loading="busy" @click="createClient"
               >创建项目 Key</el-button
             >
+            <el-button @click="openCreateClientRuleDialog">
+              按预设新建项目…
+            </el-button>
           </div>
           <p class="pool-hint">
-            每个项目使用独立 Key 领取邮箱，只能读取自己的领取记录。项目 Key
-            仅在创建或轮换时展示。
+            每个项目使用独立 Key 领取邮箱，并可配置<strong>发件人域名 / 主题关键词过滤规则</strong>，彻底解决多个业务共用同一个隐藏邮箱时验证码互相串码的问题。项目 Key 仅在创建或轮换时展示。
           </p>
           <div class="pool-table-scroll" role="region" aria-label="项目 API Key 列表" tabindex="0"><el-table
             :data="clients"
@@ -224,21 +239,32 @@
             class="pool-table"
             empty-text="创建第一个项目，将 Key 配置到调用程序。"
           >
-            <el-table-column prop="project" label="项目" min-width="150" />
-            <el-table-column label="状态" width="100"
+            <el-table-column prop="project" label="项目" min-width="140" />
+            <el-table-column label="接码过滤规则" min-width="260">
+              <template #default="{ row }">
+                <span class="pool-rule-summary">{{ describeProjectRule(row) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="95"
               ><template #default="{ row }"
                 ><el-tag :type="row.enabled ? 'success' : 'info'">{{
                   row.enabled ? "启用" : "停用"
                 }}</el-tag></template
               ></el-table-column
             >
-            <el-table-column label="创建时间" min-width="185"
+            <el-table-column label="创建时间" min-width="175"
               ><template #default="{ row }">{{
                 date(row.created_at)
               }}</template></el-table-column
             >
-            <el-table-column label="操作" min-width="180"
+            <el-table-column label="操作" min-width="230"
               ><template #default="{ row }"
+                ><el-button
+                  link
+                  type="primary"
+                  :disabled="busy"
+                  @click="openEditClientRuleDialog(row)"
+                  >接码规则</el-button
                 ><el-button
                   link
                   type="primary"
@@ -253,10 +279,9 @@
                 ></template
               ></el-table-column
             >
-          ></el-table></div>
+          </el-table></div>
           <p class="pool-hint">
-            停用项目会停止其邮箱池 API
-            访问。已发放的单邮箱凭据可在「隐私邮箱」中单独轮换或停用。
+            停用项目会立即停止其邮箱池 API 与项目专属取码链接（<code>icp_</code>）访问，不影响共享同邮箱的其他项目。
           </p>
         </el-tab-pane>
 
@@ -303,7 +328,18 @@
               :disabled="!sharedHasSelection || loading || sharedLoading || busy || sharedMailboxes.total === 0"
               @click="downloadSharedMailboxes"
             >下载 TXT</el-button>
+            <el-button
+              type="primary"
+              plain
+              :icon="Download"
+              :loading="sharedExporting"
+              :disabled="!sharedHasSelection || loading || sharedLoading || busy || sharedMailboxes.total === 0"
+              @click="downloadSharedProjectScopedMailboxes"
+            >下载项目隔离 TXT</el-button>
           </div>
+          <p class="pool-hint">
+            “下载项目隔离 TXT”会导出绑定当前项目的专属取码链接（自动套用该项目的发件人/主题过滤规则、拥有独立限流桶，移除关联时仅失效本项目链接）。
+          </p>
           <div class="pool-table-scroll" role="region" aria-label="项目共用邮箱列表" tabindex="0">
             <el-table
               :data="sharedMailboxes.items"
@@ -315,8 +351,13 @@
               <el-table-column label="来源" min-width="135">
                 <template #default="{ row }">{{ sharedSourceName(row.source) }}</template>
               </el-table-column>
-              <el-table-column label="操作" width="130">
+              <el-table-column label="操作" width="190">
                 <template #default="{ row }">
+                  <el-button
+                    link
+                    type="primary"
+                    @click="openInboxDrawer(row.alias_id, row.address)"
+                  >邮件</el-button>
                   <el-button
                     v-if="row.source === 'shared'"
                     link
@@ -362,7 +403,10 @@
             >
             <el-table-column label="新邮箱入池" width="120"
               ><template #default="{ row }"
-                ><el-switch v-model="row.auto_enroll" /></template
+                ><el-switch
+                  v-model="row.auto_enroll"
+                  :disabled="busy"
+                  @change="toggleAutoEnroll(row, $event)" /></template
             ></el-table-column>
             <el-table-column label="空闲目标" width="165"
               ><template #default="{ row }"
@@ -553,6 +597,63 @@ grant_type=refresh_token&amp;client_id=CLIENT_ID&amp;refresh_token=REFRESH_TOKEN
           ><el-button @click="secretOpen = false">关闭</el-button></template
         >
       </el-dialog>
+
+      <el-dialog
+        v-model="ruleDialogOpen"
+        :title="ruleForm.mode === 'create' ? '按业务预设新建项目 Key' : `配置接码过滤规则 · ${ruleForm.project}`"
+        width="min(640px, 94vw)"
+        destroy-on-close
+      >
+        <div class="pool-preset-section">
+          <span class="pool-preset-section__label">一键套用常用业务预设：</span>
+          <div class="pool-preset-chips">
+            <button
+              v-for="preset in PROJECT_OTP_PRESETS"
+              :key="preset.key"
+              type="button"
+              class="pool-preset-chip"
+              @click="applyPresetToRuleForm(preset)"
+            >
+              {{ preset.label }}
+            </button>
+          </div>
+        </div>
+        <el-form label-position="top" class="dialog-form" @submit.prevent="submitClientRuleDialog">
+          <el-form-item v-if="ruleForm.mode === 'create'" label="项目名称" required>
+            <el-input v-model="ruleForm.project" maxlength="80" placeholder="例如：ChatGPT" />
+          </el-form-item>
+          <el-form-item label="发件人域名 / 邮箱包含（多个用逗号分隔，留空不限）">
+            <el-input
+              v-model="ruleForm.senderFilter"
+              maxlength="500"
+              placeholder="例如：openai.com, tm.openai.com"
+            />
+          </el-form-item>
+          <el-form-item label="邮件主题关键词包含（多个用逗号分隔，留空不限）">
+            <el-input
+              v-model="ruleForm.subjectFilter"
+              maxlength="500"
+              placeholder="例如：OpenAI, ChatGPT, 代码, code"
+            />
+          </el-form-item>
+          <p class="pool-hint" style="margin: 0">
+            预览生效规则：{{ describeProjectRule({ sender_filter: ruleForm.senderFilter, subject_filter: ruleForm.subjectFilter }) }}
+          </p>
+        </el-form>
+        <template #footer>
+          <el-button @click="ruleForm.senderFilter = ''; ruleForm.subjectFilter = ''">清空规则</el-button>
+          <el-button @click="ruleDialogOpen = false">取消</el-button>
+          <el-button type="primary" :loading="busy" @click="submitClientRuleDialog">
+            {{ ruleForm.mode === "create" ? "创建并生成 Key" : "保存规则" }}
+          </el-button>
+        </template>
+      </el-dialog>
+
+      <MailboxInboxDrawer
+        v-model="inboxDrawer.open"
+        :alias-id="inboxDrawer.aliasId"
+        :address="inboxDrawer.address"
+      />
     </section>
   </el-config-provider>
 </template>
@@ -568,9 +669,11 @@ import { mergePoolPageSelection, poolAliasSelectable, submitPoolEnrollment } fro
 import { useAuth } from "../stores/auth.js";
 import SectionHeader from "../components/SectionHeader.vue";
 import RequestAlert from "../components/RequestAlert.vue";
+import MailboxInboxDrawer from "../components/MailboxInboxDrawer.vue";
 import { copyText } from "../utils/clipboard.js";
 import { createCheckboxDragSelection } from "../utils/checkboxDragSelection.js";
 import { buildProjectMailboxExportText, buildProjectMailboxFilename, collectProjectMailboxes } from "../utils/projectMailboxExport.js";
+import { PROJECT_OTP_PRESETS, describeProjectRule, normalizeFilterTokens } from "../utils/projectPresets.js";
 
 const auth = useAuth();
 const tab = ref("members"),
@@ -661,6 +764,75 @@ async function invertEnrollPage() {
 const secretOpen = ref(false),
   secretTitle = ref(""),
   secret = ref("");
+const inboxDrawer = ref({ open: false, aliasId: null, address: "" });
+function openInboxDrawer(aliasId, address = "") {
+  inboxDrawer.value = { open: true, aliasId, address };
+}
+const ruleDialogOpen = ref(false);
+const ruleForm = ref({
+  mode: "create",
+  clientId: "",
+  enabled: true,
+  project: "",
+  senderFilter: "",
+  subjectFilter: "",
+});
+function openCreateClientRuleDialog() {
+  ruleForm.value = {
+    mode: "create",
+    clientId: "",
+    enabled: true,
+    project: projectName.value.trim(),
+    senderFilter: "",
+    subjectFilter: "",
+  };
+  ruleDialogOpen.value = true;
+}
+function openEditClientRuleDialog(row) {
+  ruleForm.value = {
+    mode: "edit",
+    clientId: row.id,
+    enabled: Boolean(row.enabled),
+    project: row.project,
+    senderFilter: row.sender_filter || "",
+    subjectFilter: row.subject_filter || "",
+  };
+  ruleDialogOpen.value = true;
+}
+function applyPresetToRuleForm(preset) {
+  if (ruleForm.value.mode === "create" && !ruleForm.value.project.trim()) {
+    ruleForm.value.project = preset.projectSuggested;
+  }
+  ruleForm.value.senderFilter = preset.senderFilter;
+  ruleForm.value.subjectFilter = preset.subjectFilter;
+}
+async function submitClientRuleDialog() {
+  const senderFilter = normalizeFilterTokens(ruleForm.value.senderFilter);
+  const subjectFilter = normalizeFilterTokens(ruleForm.value.subjectFilter);
+  if (ruleForm.value.mode === "create") {
+    await mutate(async () => {
+      const result = await request("/pool/clients", "POST", {
+        project: ruleForm.value.project.trim(),
+        sender_filter: senderFilter,
+        subject_filter: subjectFilter,
+      });
+      ruleDialogOpen.value = false;
+      projectName.value = "";
+      reveal("项目 Key（本次显示）", result.api_key);
+    });
+    return;
+  }
+  await mutate(async () => {
+    await request("/pool/clients/" + ruleForm.value.clientId, "PATCH", {
+      enabled: ruleForm.value.enabled,
+      rotate: false,
+      sender_filter: senderFilter,
+      subject_filter: subjectFilter,
+    });
+    ruleDialogOpen.value = false;
+    ElMessage.success("项目接码过滤规则已保存");
+  });
+}
 const stateName = (s) =>
   ({
     available: "空闲",
@@ -841,6 +1013,40 @@ async function downloadSharedMailboxes() {
     sharedExporting.value = false;
   }
 }
+async function downloadSharedProjectScopedMailboxes() {
+  if (!sharedHasSelection.value || busy.value || sharedExporting.value || sharedLoading.value) return;
+  const clientID = sharedClientId.value;
+  const accountID = Number(sharedAccountId.value);
+  const clientName = clients.value.find((client) => client.id === clientID)?.project;
+  const accountEmail = sharedAccounts.value.find((account) => account.id === sharedAccountId.value)?.email;
+  sharedExporting.value = true;
+  error.value = null;
+  try {
+    const items = await collectProjectMailboxes(({ limit, offset }) => request(
+      `/pool/projects/${encodeURIComponent(clientID)}/mailboxes?` + query({ account_id: accountID, limit, offset }),
+    ), sharedPageSize);
+    if (!items.length) {
+      ElMessage.info("当前选择下没有关联邮箱");
+      return;
+    }
+    const content = buildProjectMailboxExportText(items, location.origin, { preferProjectToken: true });
+    const url = URL.createObjectURL(new Blob([content], { type: "text/plain;charset=utf-8" }));
+    try {
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = buildProjectMailboxFilename(`${clientName || "project"}-scoped`, accountEmail);
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+  } catch (e) {
+    error.value = e;
+  } finally {
+    sharedExporting.value = false;
+  }
+}
 async function refresh(forceClients = false) {
   const ticket = ++poolRefreshTicket;
   poolRefreshController?.abort();
@@ -971,6 +1177,19 @@ async function saveAccount(row) {
     ElMessage.success("库存设置已保存");
   });
 }
+async function toggleAutoEnroll(row, enabled) {
+  const previous = !enabled;
+  await mutate(async () => {
+    await request("/pool/accounts/" + row.account_id, "PUT", {
+      auto_enroll: Boolean(enabled),
+      target: row.target,
+    });
+    ElMessage.success(enabled ? "已开启新邮箱自动入池" : "已关闭新邮箱自动入池");
+  });
+  if (error.value) {
+    row.auto_enroll = previous;
+  }
+}
 async function toggleAutoCreate(row, enabled) {
   await mutate(async () => {
     await request("/pool/accounts/" + row.account_id, "PUT", {
@@ -1011,7 +1230,7 @@ async function loadEnroll({ includeAccounts = false } = {}) {
   error.value = null;
   try {
     const [result, accountList] = await Promise.all([
-      getAliasPage("", { query: enrollSearch.value, enabled: true, limit: enrollPageSize, offset: (enrollPage.value - 1) * enrollPageSize, signal: scope.signal }),
+      getAliasPage("", { query: enrollSearch.value, enabled: true, limit: enrollPageSize, offset: (enrollPage.value - 1) * enrollPageSize, poolEnrollable: true, signal: scope.signal }),
       includeAccounts ? getAllAccounts({ signal: scope.signal }) : Promise.resolve(null),
     ]);
     if (!scope.current()) return;
@@ -1092,7 +1311,7 @@ async function selectAllResults() {
   enrollSelectingAll.value = true;
   error.value = null;
   try {
-    const items = await getAllAliases("", { query: enrollSearch.value, enabled: true, signal: scope.signal });
+    const items = await getAllAliases("", { query: enrollSearch.value, enabled: true, poolEnrollable: true, signal: scope.signal });
     if (!scope.current()) return;
     selected.value = [...new Set(items.filter(isSelectable).map((row) => row.id))];
     await restoreEnrollSelection();
@@ -1138,20 +1357,24 @@ async function showCredentials(id) {
   await attempt(async () => {
     const result = await request("/aliases/" + id);
     const a = result.alias || result;
+    const otpPath = a.otp_url_path || a.direct_link_path || "";
     reveal("邮箱完整凭据", {
       email: a.address,
       api_key: a.api_key,
       imap_password: a.imap_password,
       client_id: a.client_id,
       refresh_token: a.refresh_token,
-      otp_url: new URL(a.otp_url_path, location.origin).href,
+      otp_url: otpPath ? new URL(otpPath, location.origin).href : "",
     });
   });
 }
 async function copySecret() {
   await attempt(async () => {
-    await copyText(secret.value);
-    ElMessage.success("已复制");
+    if (await copyText(secret.value)) {
+      ElMessage.success("已复制");
+    } else {
+      ElMessage.error("复制失败，请手动全选复制");
+    }
   });
 }
 const claimExample = computed(
@@ -1240,5 +1463,40 @@ small {
   line-height: 1.8;
   padding: 20px 0;
   width: 80%;
+}
+.pool-rule-summary {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.pool-preset-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.pool-preset-section__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.pool-preset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pool-preset-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+.pool-preset-chip:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: var(--primary-soft);
 }
 </style>

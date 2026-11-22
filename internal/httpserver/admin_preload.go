@@ -71,6 +71,10 @@ func adminViewForPath(path string) string {
 	switch path {
 	case "":
 		return "AccountsView"
+	case "dashboard":
+		return "DashboardView"
+	case "inbox":
+		return "MailboxInboxView"
 	case "login":
 		return "LoginView"
 	case "aliases":

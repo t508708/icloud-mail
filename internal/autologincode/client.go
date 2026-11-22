@@ -165,6 +165,23 @@ func dialPublic(ctx context.Context, network, address string, lookup func(contex
 	return nil, ErrUnavailable
 }
 
+func dialThroughProxy(ctx context.Context, network, address string, proxy netproxy.Config) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || host == "" || port == "" {
+		return nil, ErrInvalidURL
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		ip = ip.Unmap()
+		if !isPublicIP(ip) {
+			return nil, ErrInvalidURL
+		}
+		return proxy.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+	}
+	// Forward validated public hostnames directly to the remote proxy (CONNECT /
+	// SOCKS5 ATYP=0x03) so the host never leaks code-provider DNS queries locally.
+	return proxy.DialContext(ctx, network, net.JoinHostPort(host, port))
+}
+
 func (c *Client) Fetch(ctx context.Context, rawURL string) (Result, error) {
 	if ValidateURL(rawURL) != nil {
 		return Result{}, ErrInvalidURL
@@ -187,7 +204,7 @@ func (c *Client) Fetch(ctx context.Context, rawURL string) (Result, error) {
 		transport := &http.Transport{
 			Proxy: nil,
 			DialContext: func(dialCtx context.Context, network, address string) (net.Conn, error) {
-				return dialPublic(dialCtx, network, address, net.DefaultResolver.LookupNetIP, proxy.DialContext)
+				return dialThroughProxy(dialCtx, network, address, proxy)
 			},
 			TLSHandshakeTimeout:    5 * time.Second,
 			ResponseHeaderTimeout:  8 * time.Second,

@@ -45,15 +45,17 @@
   ```
 
 - 链接中的令牌是访问凭据，TXT 应由项目负责人妥善保存。导出过程不在浏览器日志中输出令牌。
-- **共享关联**用于多个项目共同使用已存在的 HME 地址，关联、重复关联或移除关联均保持已有取码链接有效。已关联的邮箱会从待领取库存中排除，以免新的领取或到期回收轮换其取件凭据；已有 `used` 租约继续生效。**独占领取**使用原 `POST /api/v1/pool/claim`，从未关联的空闲库存分配 lease，并遵循确认、续租、释放和到期回收流程。
+- **共享关联**用于多个项目共同使用已存在的 HME 地址，关联、重复关联或移除关联均保持已有根取码链接有效。已关联的邮箱会从待领取库存中排除，以免新的领取或到期回收轮换其取件凭据；已有 `used` 租约继续生效。**独占领取**使用原 `POST /api/v1/pool/claim`，从未关联的空闲库存分配 lease，并遵循确认、续租、释放和到期回收流程。
+- **分项目接码过滤与独立令牌**：在创建或编辑项目时可配置发件域（`sender_filter`）和主题关键词（`subject_filter`），也可直接选择 ChatGPT、Claude、DeepSeek 等一键预设。「下载项目隔离 TXT」使用 `project_otp_url_path`（`icp_` 前缀令牌），自动套用该项目的过滤规则并使用独立限流桶；移除该项目的共享关联或停用项目后，对应的 `icp_` 链接立即失效，不影响其他项目。
 - 有尚未确认的 `leased` 租约或正在退役的邮箱会跳过本次共享关联；先处理这些租约，再重新点击「关联全部 HME」。其他项目正在使用共享邮箱时，项目退休删除操作会被拦截。
-- **主动轮换邮箱凭据**会使该邮箱已发出的取码链接失效，需要下载新的链接。原有独占领取流程中的领取及回收轮换仍按原规则执行。
+- **主动轮换邮箱凭据**会使该邮箱已发出的取码链接（含项目隔离链接与只读查件分享链接）失效，需要下载新的链接。原有独占领取流程中的领取及回收轮换仍按原规则执行。
+- **最近 5 封邮件查看与免登分享**：在管理后台「收件查看」（`/inbox`）或各列表操作列的「邮件」抽屉中，可查看任意隐藏邮箱最近 5 封归档邮件、识别 `+tag` 投递目标、一键复制验证码，或复制免登录只读分享页 `/inbox/view?token=...`（及 `GET /api/v1/inbox?token=...`）。`GET /api/v1/otp` 与 `GET /api/v1/pool/leases/:leaseID/code` 同时支持可选查询参数 `after`、`sender`、`keyword`/`subject`、`tag`/`to`、`latest`、`wait_seconds`（0–15）。
 
 管理 API 路径位于 `<admin-path>/api/v1`，使用管理员 Session；写入请求另外携带 `X-CSRF-Token`，沿用管理面板的请求方式：
 
 | 操作 | 管理 API | 请求体 / 查询参数 | `data` 响应 |
 | --- | --- | --- | --- |
-| 查看关联 | `GET /pool/projects/:clientID/mailboxes` | `account_id=NUMBER&limit=NUMBER&offset=NUMBER` | `{"items":[{"alias_id":1,"account_id":2,"address":"alias@icloud.com","otp_url_path":"/api/v1/otp?token=DERIVED_TOKEN","source":"..."}],"total":1}` |
+| 查看关联 | `GET /pool/projects/:clientID/mailboxes` | `account_id=NUMBER&limit=NUMBER&offset=NUMBER` | `{"items":[{"alias_id":1,"account_id":2,"address":"alias@icloud.com","otp_url_path":"/api/v1/otp?token=...","project_otp_url_path":"/api/v1/otp?token=icp_...","source":"..."}],"total":1}` |
 | 关联全部 HME | `POST /pool/projects/:clientID/mailboxes` | `{"account_id":2}` | `{"linked":100,"added":20}` |
 | 移除关联 | `DELETE /pool/projects/:clientID/mailboxes/:aliasID` | 无 | `{"saved":true}` |
 

@@ -275,6 +275,12 @@ func (s *Service) StartAccountAuth(ctx context.Context, owner, id int64, appleID
 	if s.accountAuthChallenges == nil {
 		s.accountAuthChallenges = make(map[int64]accountAuthChallenge)
 	}
+	now := s.now()
+	for acctID, existing := range s.accountAuthChallenges {
+		if !now.Before(existing.expires) || existing.attempts >= s.maxAttempts {
+			delete(s.accountAuthChallenges, acctID)
+		}
+	}
 	delete(s.accountAuthChallenges, id)
 	s.challengeMu.Unlock()
 	if verify {

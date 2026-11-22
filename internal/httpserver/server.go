@@ -54,6 +54,7 @@ type Server struct {
 	sharedMailboxReceiver   bool
 	aliasDemandRateMu       sync.Mutex
 	aliasDemandRate         map[int64]aliasDemandRateState
+	aliasScopedDemandRate   map[string]aliasDemandRateState
 	accountPickupActive     map[int64]int
 	pickupRateCleanupAt     time.Time
 	aliasCreationJobs       aliasCreationJobRuntime
@@ -300,6 +301,11 @@ func (s *Server) Router() (*gin.Engine, error) {
 
 	publicCredentialGuard := s.credentialRotationReadGuard()
 	router.GET("/api/v1/otp", publicCredentialGuard, s.otpHistory)
+	router.GET("/api/v1/inbox", publicCredentialGuard, s.publicInboxMessages)
+	router.GET("/inbox/view", publicCredentialGuard, s.publicInboxViewPage)
+	router.HEAD("/inbox/view", publicCredentialGuard, s.publicInboxViewPage)
+	router.GET("/inbox/view.js", s.publicInboxViewScript)
+	router.HEAD("/inbox/view.js", s.publicInboxViewScript)
 	s.registerPoolRoutes(router.Group("/api/v1/pool", publicCredentialGuard))
 	legacyAPI := router.Group("/api/v1")
 	legacyAPI.GET("/mail/latest", publicCredentialGuard, s.apiKeyAuth(), s.latestMail)

@@ -102,7 +102,8 @@ var httpOperations = map[string]string{
 	"GET /accounts": "读取主号列表", "POST /accounts": "创建主号", "POST /accounts/proxy-test": "检查主号代理", "GET /accounts/:id": "读取主号详情", "PUT /accounts/:id": "更新主号", "DELETE /accounts/:id": "删除主号",
 	"GET /aliases": "读取隐私邮箱列表", "POST /aliases": "创建隐私邮箱", "GET /aliases/:id": "读取隐私邮箱", "PATCH /aliases/:id": "更新隐私邮箱", "DELETE /aliases/:id": "删除隐私邮箱",
 	"GET /accounts/:id/aliases/creation-job": "读取批量创建进度", "POST /accounts/:id/aliases/creation-job": "提交批量创建",
-	"GET /otp": "查询验证码", "GET /mail/latest": "获取最新邮件", "GET /mail/recent": "获取最近邮件", "POST /pool/claim": "领取邮箱",
+	"GET /otp": "查询验证码", "GET /inbox": "查询收件预览", "GET /inbox/view": "查看收件分享页", "GET /mail/latest": "获取最新邮件", "GET /mail/recent": "获取最近邮件", "POST /pool/claim": "领取邮箱",
+	"GET /dashboard/summary": "读取运行概览", "POST /archive/gc": "整理邮件归档与缓存", "GET /inbox/lookup": "检索隐藏邮箱收件", "GET /inbox/suggest": "联想隐藏邮箱列表", "GET /aliases/:id/messages": "读取最近五封邮件", "POST /aliases/:id/messages/sync": "按需同步隐藏邮箱最近邮件",
 	"GET /logs": "读取日志", "GET /health": "健康检查", "GET /healthz": "健康检查",
 	"GET /pool/accounts": "读取邮箱池主号", "PUT /pool/accounts/:id": "更新邮箱池主号", "GET /pool/members": "读取邮箱池成员", "POST /pool/members": "添加邮箱池成员", "PATCH /pool/members/:id": "更新邮箱池成员", "GET /pool/leases": "读取邮箱池租约", "GET /pool/leases/:leaseID": "读取邮箱池租约详情", "GET /pool/clients": "读取邮箱池客户端", "POST /pool/clients": "创建邮箱池客户端", "PATCH /pool/clients/:clientID": "更新邮箱池客户端",
 }
@@ -241,7 +242,7 @@ func (s *Server) securityHeaders() gin.HandlerFunc {
 		c.Header("X-Frame-Options", "DENY")
 		c.Header("Referrer-Policy", "no-referrer")
 		c.Header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'")
+		c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'")
 		c.Next()
 	}
 }

@@ -626,6 +626,14 @@
                 >
                   <el-button
                     size="small"
+                    type="primary"
+                    plain
+                    :icon="Message"
+                    :disabled="isAliasActionBusy(row)"
+                    @click="openInboxDrawer(row)"
+                  >邮件</el-button>
+                  <el-button
+                    size="small"
                     :icon="CopyDocument"
                     :loading="Boolean(copyLoading[`${row.id}:otp`])"
                     :disabled="isAliasActionBusy(row)"
@@ -754,6 +762,15 @@
               v-if="!isAliasConfirmationPending(alias)"
               class="mobile-record__actions mobile-record__actions--three"
             >
+              <el-button
+                type="primary"
+                plain
+                :icon="Message"
+                :disabled="isAliasActionBusy(alias)"
+                @click="openInboxDrawer(alias)"
+              >
+                查看最近邮件
+              </el-button>
               <el-button
                 :icon="CopyDocument"
                 :loading="Boolean(copyLoading[`${alias.id}:otp`])"
@@ -897,6 +914,12 @@
         </el-button>
       </section>
     </template>
+
+    <MailboxInboxDrawer
+      v-model="inboxDrawer.open"
+      :alias-id="inboxDrawer.aliasId"
+      :address="inboxDrawer.address"
+    />
   </section>
 </template>
 
@@ -907,6 +930,7 @@ import {
   Delete,
   EditPen,
   Key,
+  Message,
   Plus,
   Refresh,
   RefreshLeft,
@@ -956,6 +980,7 @@ import AliasCreationPanel from "../components/AliasCreationPanel.vue";
 import AppleConnectionPanel from "../components/AppleConnectionPanel.vue";
 import AliasDeletionProgress from "../components/AliasDeletionProgress.vue";
 import ListPagination from "../components/ListPagination.vue";
+import MailboxInboxDrawer from "../components/MailboxInboxDrawer.vue";
 import RequestAlert from "../components/RequestAlert.vue";
 import SectionHeader from "../components/SectionHeader.vue";
 import SyncErrorLogDialog from "../components/SyncErrorLogDialog.vue";
@@ -1170,11 +1195,16 @@ const aliasColumns = Object.freeze([
   {
     key: "actions",
     title: "复制 / 操作",
-    width: 330,
-    minWidth: 330,
+    width: 375,
+    minWidth: 375,
     align: "right",
   },
 ]);
+const inboxDrawer = ref({ open: false, aliasId: null, address: "" });
+function openInboxDrawer(row) {
+  if (!row?.id) return;
+  inboxDrawer.value = { open: true, aliasId: row.id, address: row.address || "" };
+}
 const appleSessionAuthenticated = computed(
   () => appleSession.value?.status === "authenticated",
 );

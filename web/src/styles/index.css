@@ -217,8 +217,8 @@ code {
   color: var(--text-secondary);
 }
 .admin-nav__icon svg { width: 16px; height: 16px; }
-.admin-nav__icon--accounts, .admin-nav__icon--aliases { background: var(--primary-soft); color: var(--primary); }
-.admin-nav__icon--pool { background: var(--purple-soft); color: var(--purple); }
+.admin-nav__icon--dashboard, .admin-nav__icon--accounts, .admin-nav__icon--aliases { background: var(--primary-soft); color: var(--primary); }
+.admin-nav__icon--inbox, .admin-nav__icon--pool { background: var(--purple-soft); color: var(--purple); }
 .admin-nav__icon--security { background: var(--success-soft); color: var(--success); }
 
 .admin-topbar__account {

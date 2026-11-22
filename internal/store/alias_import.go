@@ -229,17 +229,19 @@ func (s *Store) importAliases(
 				return domain.AliasImportResult{}, nil, fmt.Errorf("create imported alias provisional credential: %w", err)
 			}
 		}
+		autoEnrollEligible := strict && requiredMailboxType != domain.MailboxTypeCustom
 		var id int64
 		err = s.txQueryRowContext(ctx, tx, `
 			INSERT INTO aliases(
 				account_id, address, label, api_key_hash, api_key_prefix, credential_mode, enabled,
+				auto_enroll_eligible,
 				last_sync_status, last_sync_error, last_synced_at,
 				last_accessed_at, created_at, updated_at
-			) VALUES(?, ?, ?, ?, ?, ?, ?, ?, '', NULL, NULL, ?, ?)
+			) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, '', NULL, NULL, ?, ?)
 			ON CONFLICT(address) DO NOTHING
 			RETURNING id`,
 			accountID, candidate.Address, candidate.Label, initialHash, apiKeyPrefix,
-			credentialMode, enabled, domain.SyncStatusPending,
+			credentialMode, enabled, autoEnrollEligible, domain.SyncStatusPending,
 			timestamp(now), timestamp(now),
 		).Scan(&id)
 		if err == sql.ErrNoRows {

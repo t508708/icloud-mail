@@ -646,10 +646,12 @@ func (c *Client) CompleteAccountAlias(ctx context.Context, s AccountSession, ema
 		return Alias{}, s, ErrInvalidSession
 	}
 	alias := Alias{HME: strings.ToLower(emailAddress), Label: label, Note: note, Origin: "APPLE_ACCOUNT"}
+	retriedAfter5xx := false
 	r, err := c.accountManagementCall(ctx, &s, http.MethodPut, "/account/manage/email/private/add/complete", map[string]string{"emailAddress": emailAddress, "label": label, "note": note})
 	if err != nil && r.status >= http.StatusInternalServerError && r.status < 600 && ctx.Err() == nil {
 		// Replaying completion for the same generated email is idempotent; do
 		// not replay the preceding address-generation request.
+		retriedAfter5xx = true
 		timer := time.NewTimer(600 * time.Millisecond)
 		select {
 		case <-ctx.Done():
@@ -660,9 +662,10 @@ func (c *Client) CompleteAccountAlias(ctx context.Context, s AccountSession, ema
 		r, err = c.accountManagementCall(ctx, &s, http.MethodPut, "/account/manage/email/private/add/complete", map[string]string{"emailAddress": emailAddress, "label": label, "note": note})
 	}
 	if err != nil {
-		// Only explicit rejection clears the candidate. Ambiguous completion
-		// retains it for durable staging and read-only directory confirmation.
-		if IsRateLimited(err) || errors.Is(err, ErrAliasCapacity) || errors.Is(err, ErrInvalidSession) {
+		// Only explicit rejection on the initial attempt clears the candidate.
+		// If a prior 5xx occurred, Apple may have committed the address before
+		// returning 429/401 on replay, so retain it for directory reconciliation.
+		if !retriedAfter5xx && (IsRateLimited(err) || errors.Is(err, ErrAliasCapacity) || errors.Is(err, ErrInvalidSession)) {
 			return Alias{}, s, err
 		}
 		return alias, s, err

@@ -136,9 +136,41 @@ func WithProxy(ctx context.Context, config netproxy.Config) context.Context {
 	return context.WithValue(ctx, proxyContextKey{}, config)
 }
 
+// WithAccount isolates HTTP connection pools per primary account even when no
+// upstream proxy is configured, preventing HTTP/2 socket reuse across Apple IDs.
+func WithAccount(ctx context.Context, accountID int64) context.Context {
+	if accountID < 1 {
+		return ctx
+	}
+	return context.WithValue(ctx, proxyAccountContextKey{}, accountID)
+}
+
 // WithAccountProxy keeps HTTP connection pools independent between accounts.
 func WithAccountProxy(ctx context.Context, accountID int64, config netproxy.Config) context.Context {
 	return context.WithValue(WithProxy(ctx, config), proxyAccountContextKey{}, accountID)
+}
+
+// EvictAccountTransports closes idle connections and removes cached transports
+// associated with accountID (for example when proxy settings change).
+func (c *Client) EvictAccountTransports(accountID int64) {
+	if c == nil || accountID < 1 {
+		return
+	}
+	prefix := fmt.Sprintf("acct:%d:", accountID)
+	c.proxyMu.Lock()
+	defer c.proxyMu.Unlock()
+	kept := c.proxyTransportOrder[:0]
+	for _, key := range c.proxyTransportOrder {
+		if strings.HasPrefix(key, prefix) {
+			if old := c.proxyTransports[key]; old != nil {
+				old.CloseIdleConnections()
+			}
+			delete(c.proxyTransports, key)
+			continue
+		}
+		kept = append(kept, key)
+	}
+	c.proxyTransportOrder = kept
 }
 
 // ProxyConfigFromContext returns the proxy configuration bound to ctx.
@@ -148,12 +180,26 @@ func ProxyConfigFromContext(ctx context.Context) (netproxy.Config, bool) {
 }
 
 func (c *Client) requestTransport(ctx context.Context) (http.RoundTripper, error) {
-	config, ok := ProxyConfigFromContext(ctx)
-	if !ok {
-		return c.transport, nil
-	}
+	config, hasProxy := ProxyConfigFromContext(ctx)
 	accountID, _ := ctx.Value(proxyAccountContextKey{}).(int64)
-	key := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00%s", accountID, config.Endpoint, config.Upstream))))
+	if !hasProxy {
+		// Preserve custom injected test RoundTrippers untouched.
+		if _, isStdTransport := c.transport.(*http.Transport); !isStdTransport || accountID < 1 {
+			return c.transport, nil
+		}
+		key := fmt.Sprintf("acct:%d:direct", accountID)
+		c.proxyMu.Lock()
+		defer c.proxyMu.Unlock()
+		if transport := c.proxyTransports[key]; transport != nil {
+			return transport, nil
+		}
+		cloned := c.transport.(*http.Transport).Clone()
+		cloned.Proxy = nil
+		c.storeTransportLocked(key, cloned)
+		return cloned, nil
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00%s", accountID, config.Endpoint, config.Upstream)))
+	key := fmt.Sprintf("acct:%d:%x", accountID, sum)
 	c.proxyMu.Lock()
 	defer c.proxyMu.Unlock()
 	if transport := c.proxyTransports[key]; transport != nil {
@@ -163,6 +209,11 @@ func (c *Client) requestTransport(ctx context.Context) (http.RoundTripper, error
 	if err != nil {
 		return nil, fmt.Errorf("configure Apple proxy: %w", err)
 	}
+	c.storeTransportLocked(key, transport)
+	return transport, nil
+}
+
+func (c *Client) storeTransportLocked(key string, transport *http.Transport) {
 	c.proxyTransports[key] = transport
 	c.proxyTransportOrder = append(c.proxyTransportOrder, key)
 	if len(c.proxyTransportOrder) > 256 {
@@ -173,7 +224,6 @@ func (c *Client) requestTransport(ctx context.Context) (http.RoundTripper, error
 			delete(c.proxyTransports, oldest)
 		}
 	}
-	return transport, nil
 }
 
 // SignIn performs Apple's current SRP login flow. The returned bool reports
@@ -1232,15 +1282,27 @@ func (op *operation) setRegion(region Region) {
 	op.endpoints = op.owner.endpoints[region]
 }
 
+func (op *operation) regionLocale() (acceptLang, fdLang, fdTZ string) {
+	if op.session != nil && op.session.Region == RegionChina {
+		return "zh-CN,zh;q=0.9,en;q=0.8", "zh-CN", "GMT+08:00"
+	}
+	return "en-US,en;q=0.9", "en-US", "GMT+00:00"
+}
+
 func (op *operation) authHeaders() http.Header {
 	frame := "auth-" + op.session.FrameID
 	originURL, _ := url.Parse(op.endpoints.Auth)
 	origin := "https://" + originURL.Host
+	acceptLang, fdLang, fdTZ := op.regionLocale()
 	headers := make(http.Header)
 	headers.Set("Accept", "application/json")
+	headers.Set("Accept-Language", acceptLang)
 	headers.Set("Content-Type", "application/json")
 	headers.Set("Origin", origin)
 	headers.Set("Referer", origin+"/")
+	headers.Set("Sec-Fetch-Dest", "empty")
+	headers.Set("Sec-Fetch-Mode", "cors")
+	headers.Set("Sec-Fetch-Site", "same-origin")
 	headers.Set("User-Agent", userAgent)
 	headers.Set("X-Apple-Widget-Key", defaultWidgetKey)
 	headers.Set("X-Apple-Domain-Id", "3")
@@ -1255,7 +1317,14 @@ func (op *operation) authHeaders() http.Header {
 	headers.Set("X-Requested-With", "XMLHttpRequest")
 	headers.Set("X-Apple-Mandate-Security-Upgrade", "0")
 	headers.Set("X-Apple-I-Require-UE", "true")
-	headers.Set("X-Apple-I-FD-Client-Info", `{"U":"`+userAgent+`","L":"en-US","Z":"GMT+00:00","V":"1.1","F":""}`)
+	fdInfo, _ := json.Marshal(map[string]string{
+		"U": userAgent,
+		"L": fdLang,
+		"Z": fdTZ,
+		"V": "1.1",
+		"F": accountFingerprint(time.Now()),
+	})
+	headers.Set("X-Apple-I-FD-Client-Info", string(fdInfo))
 	if op.session.SCNT != "" {
 		headers.Set("scnt", op.session.SCNT)
 	}
@@ -1269,11 +1338,16 @@ func (op *operation) authHeaders() http.Header {
 }
 
 func (op *operation) serviceHeaders() http.Header {
+	acceptLang, _, _ := op.regionLocale()
 	headers := make(http.Header)
 	headers.Set("Accept", "application/json")
+	headers.Set("Accept-Language", acceptLang)
 	headers.Set("Content-Type", "application/json")
 	headers.Set("Origin", op.endpoints.Home)
 	headers.Set("Referer", op.endpoints.Home+"/")
+	headers.Set("Sec-Fetch-Dest", "empty")
+	headers.Set("Sec-Fetch-Mode", "cors")
+	headers.Set("Sec-Fetch-Site", "same-site")
 	headers.Set("User-Agent", userAgent)
 	return headers
 }

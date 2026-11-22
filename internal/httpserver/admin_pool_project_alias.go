@@ -22,29 +22,49 @@ func (s *Server) adminPoolProjectMailboxes(c *gin.Context) {
 			limit = n
 		}
 	}
-	page, err := s.store.ListPoolProjectAliases(c.Request.Context(), c.Param("clientID"), accountID, limit, offset)
+	clientID := c.Param("clientID")
+	page, err := s.store.ListPoolProjectAliases(c.Request.Context(), clientID, accountID, limit, offset)
 	if err != nil {
 		s.poolError(c, err)
 		return
 	}
 	type projectMailboxDTO struct {
 		store.PoolProjectAlias
-		OTPURLPath string `json:"otp_url_path"`
+		OTPURLPath        string `json:"otp_url_path"`
+		ProjectOTPURLPath string `json:"project_otp_url_path,omitempty"`
+		InboxSharePath    string `json:"inbox_share_path,omitempty"`
 	}
 	items := make([]projectMailboxDTO, 0, len(page.Items))
 	for _, link := range page.Items {
-		alias, err := s.store.GetAlias(c.Request.Context(), link.AliasID)
-		if err != nil {
-			s.poolError(c, err)
-			return
+		apiKeyHash := link.APIKeyHash
+		if len(apiKeyHash) == 0 {
+			alias, lookupErr := s.store.GetAlias(c.Request.Context(), link.AliasID)
+			if lookupErr != nil {
+				s.poolError(c, lookupErr)
+				return
+			}
+			apiKeyHash = alias.APIKeyHash
 		}
-		token, err := s.cipher.OTPToken(alias.ID, alias.APIKeyHash)
+		token, err := s.cipher.OTPToken(link.AliasID, apiKeyHash)
 		if err != nil {
 			s.writeAdminAPIInternalError(c, err)
 			return
 		}
 		path := (&url.URL{Path: "/api/v1/otp", RawQuery: (url.Values{"token": {token}}).Encode()}).String()
-		items = append(items, projectMailboxDTO{PoolProjectAlias: link, OTPURLPath: path})
+		projectPath := ""
+		if projectToken, projErr := s.cipher.ProjectOTPToken(link.AliasID, apiKeyHash, clientID); projErr == nil {
+			projectPath = (&url.URL{Path: "/api/v1/otp", RawQuery: (url.Values{"token": {projectToken}}).Encode()}).String()
+		}
+		inboxPath := ""
+		if inboxToken, inboxErr := s.cipher.InboxToken(link.AliasID, apiKeyHash); inboxErr == nil {
+			inboxPath = (&url.URL{Path: "/inbox/view", RawQuery: (url.Values{"token": {inboxToken}}).Encode()}).String()
+		}
+		items = append(items, projectMailboxDTO{
+			PoolProjectAlias:  link,
+			OTPURLPath:        path,
+			ProjectOTPURLPath: projectPath,
+			InboxSharePath:    inboxPath,
+		})
 	}
 	c.Header("Cache-Control", "no-store")
 	writeAdminAPIData(c, http.StatusOK, gin.H{"items": items, "total": page.Total})

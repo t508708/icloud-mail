@@ -108,11 +108,18 @@ func (s *Server) registerAdminAPIRoutes(api *gin.RouterGroup) {
 	protected.GET("/aliases/batch/jobs/latest", s.adminAPIGetLatestAliasDeletionJob)
 	protected.GET("/aliases/batch/jobs/:jobID", s.adminAPIGetAliasDeletionJob)
 	protected.GET("/aliases/:id", s.adminAPIGetAlias)
+	protected.GET("/aliases/:id/messages", s.adminAPIAliasMessages)
+	protected.POST("/aliases/:id/messages/sync", s.adminAPISyncAliasMessages)
 	protected.POST("/aliases/:id/rotate-key", s.adminAPIRotateAliasKey)
 	protected.POST("/aliases/:id/rotate-credentials", s.adminAPIRotateAliasCredentials)
 	protected.PATCH("/aliases/:id", s.adminAPIUpdateAlias)
 	protected.PATCH("/aliases/:id/group", s.adminAPIMoveAliasToGroup)
 	protected.DELETE("/aliases/:id", s.adminAPIDeleteAlias)
+
+	protected.GET("/dashboard/summary", s.adminAPIDashboardSummary)
+	protected.POST("/archive/gc", s.adminAPIRunArchiveGC)
+	protected.GET("/inbox/lookup", s.adminAPIInboxLookup)
+	protected.GET("/inbox/suggest", s.adminAPIInboxSuggest)
 
 	protected.GET("/audit", s.adminAPIListAuditLogs)
 	protected.GET("/logs", s.adminAPIListApplicationLogs)
@@ -174,6 +181,7 @@ type adminAPIAliasDTO struct {
 	ClientID          string  `json:"client_id"`
 	RefreshToken      string  `json:"refresh_token"`
 	OTPURLPath        string  `json:"otp_url_path"`
+	InboxSharePath    string  `json:"inbox_share_path,omitempty"`
 	LegacyDirectLink  string  `json:"legacy_direct_link_path,omitempty"`
 	CredentialMode    string  `json:"credential_mode,omitempty"`
 	CredentialVersion int64   `json:"credential_version"`
@@ -515,6 +523,9 @@ func (s *Server) adminAPIAliasFromDomain(alias domain.Alias) (adminAPIAliasDTO, 
 	}
 	otpQuery := url.Values{"token": {otpToken}}
 	dto.OTPURLPath = (&url.URL{Path: "/api/v1/otp", RawQuery: otpQuery.Encode()}).String()
+	if inboxToken, inboxErr := s.cipher.InboxToken(alias.ID, alias.APIKeyHash); inboxErr == nil {
+		dto.InboxSharePath = (&url.URL{Path: "/inbox/view", RawQuery: (url.Values{"token": {inboxToken}}).Encode()}).String()
+	}
 	dto.APIKey = credentials.APIKey
 	dto.IMAPPassword = credentials.IMAPPassword
 	dto.ClientID = credentials.ClientID
@@ -1086,6 +1097,9 @@ func (s *Server) adminAPIUpdateAccount(c *gin.Context) {
 		writeAdminAPIError(c, http.StatusBadRequest, "VALIDATION_FAILED", validationMessage)
 		return
 	}
+	if evictor, ok := s.hmeSync.(interface{ EvictAccountTransport(int64) }); ok {
+		evictor.EvictAccountTransport(id)
+	}
 	s.notifyAutomaticLogin(id)
 	session := mustSession(c)
 	s.audit(c, &session.AdminID, session.Username, "update", "account", strconv.FormatInt(id, 10), "success", "")
@@ -1253,6 +1267,9 @@ func (s *Server) adminAPIDeleteAccount(c *gin.Context) {
 			s.writeAdminAPIInternalError(c, err)
 		}
 		return
+	}
+	if evictor, ok := s.hmeSync.(interface{ EvictAccountTransport(int64) }); ok {
+		evictor.EvictAccountTransport(id)
 	}
 	session := mustSession(c)
 	s.audit(c, &session.AdminID, session.Username, "delete", "account", strconv.FormatInt(id, 10), "success", "")
@@ -1725,6 +1742,15 @@ func (s *Server) adminAPIListAliases(c *gin.Context) {
 			groupID = &parsedID
 		}
 	}
+	poolEnrollable := false
+	if rawPoolEnrollable, present := c.GetQuery("pool_enrollable"); present && strings.TrimSpace(rawPoolEnrollable) != "" {
+		parsed, parseErr := strconv.ParseBool(strings.TrimSpace(rawPoolEnrollable))
+		if parseErr != nil {
+			writeAdminAPIError(c, http.StatusBadRequest, "VALIDATION_FAILED", "pool_enrollable 必须是布尔值")
+			return
+		}
+		poolEnrollable = parsed
+	}
 	page, err := s.store.ListAliasesPage(c.Request.Context(), store.AliasListFilter{
 		AccountID:           accountID,
 		OnlyEnabledAccounts: true,
@@ -1733,6 +1759,7 @@ func (s *Server) adminAPIListAliases(c *gin.Context) {
 		Ungrouped:           groupUngrouped,
 		WithLatestMail:      withLatestMail,
 		WithoutLatestMail:   withoutLatestMail,
+		PoolEnrollable:      poolEnrollable,
 		Query:               query,
 		Limit:               limit,
 		Offset:              offset,
@@ -2209,7 +2236,20 @@ func (s *Server) adminAPIListAuditLogs(c *gin.Context) {
 	if !ok {
 		return
 	}
-	page, err := s.store.ListAuditLogsPage(c.Request.Context(), store.AuditLogFilter{Limit: limit, Offset: offset})
+	action := strings.TrimSpace(c.Query("action"))
+	resourceType := strings.TrimSpace(c.Query("resource_type"))
+	result := strings.TrimSpace(c.Query("result"))
+	if len([]rune(action)) > 64 || len([]rune(resourceType)) > 64 || len([]rune(result)) > 32 {
+		writeAdminAPIError(c, http.StatusBadRequest, "VALIDATION_FAILED", "筛选参数长度超出范围")
+		return
+	}
+	page, err := s.store.ListAuditLogsPage(c.Request.Context(), store.AuditLogFilter{
+		Action:       action,
+		ResourceType: resourceType,
+		Result:       result,
+		Limit:        limit,
+		Offset:       offset,
+	})
 	if err != nil {
 		s.writeAdminAPIInternalError(c, err)
 		return

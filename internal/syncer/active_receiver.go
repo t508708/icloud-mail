@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"icloud-api/internal/domain"
+	mailfetch "icloud-api/internal/mail"
 	"icloud-api/internal/store"
 )
 
@@ -186,7 +187,7 @@ func (r *ActiveReceiver) watchAccount(w *activeReceiverWorker) {
 			return
 		}
 		r.notify(w, false)
-		if err != nil && domain.IsIMAPAuthenticationFailure(err.Error()) {
+		if err != nil && (errors.Is(err, mailfetch.ErrIdleUnsupported) || domain.IsIMAPAuthenticationFailure(err.Error())) {
 			return
 		}
 		r.manager.logger.Warn("活跃主号通知连接中断，将退避重连", "account_id", w.account.ID,
@@ -244,13 +245,23 @@ func (r *ActiveReceiver) run(w *activeReceiverWorker) {
 			err := r.syncAccount(ctx, w.account.ID)
 			cancel()
 			r.mu.Lock()
-			w.err = err
 			if err == nil {
+				w.err = nil
 				w.committed = generation
 				w.lastSync = started
 				w.nextTry = time.Time{}
 				failures = 0
+			} else if errors.Is(err, ErrSyncPending) {
+				// Eight batches committed cleanly and more remain; unblock readers
+				// to inspect newly archived mail while immediately continuing.
+				w.err = nil
+				w.committed = generation
+				w.lastSync = started
+				w.nextTry = time.Time{}
+				w.generation++
+				failures = 0
 			} else {
+				w.err = err
 				failures++
 				backoff := min(r.retryMinimum*time.Duration(1<<min(failures-1, 4)), 30*time.Second)
 				if domain.IsIMAPAuthenticationFailure(err.Error()) {

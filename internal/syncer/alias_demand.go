@@ -65,11 +65,23 @@ func (m *Manager) SyncAliasOnDemand(ctx context.Context, aliasID int64) error {
 	flight := &aliasDemandFlight{done: make(chan struct{})}
 	m.demandFlights[aliasID] = flight
 	m.demandMu.Unlock()
-	err := m.syncAliasDemand(ctx, aliasID)
+
+	// Decouple shared upstream work from the first HTTP reader's disconnect so
+	// concurrent readers of the same alias do not fail with context.Canceled.
+	sharedCtx := context.WithoutCancel(ctx)
+	err := m.syncAliasDemand(sharedCtx, aliasID)
 	m.demandMu.Lock()
-	flight.err, flight.finished = err, time.Now()
+	flight.err = err
+	if err == nil {
+		flight.finished = time.Now()
+	} else {
+		delete(m.demandFlights, aliasID)
+	}
 	close(flight.done)
 	m.demandMu.Unlock()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	return err
 }
 

@@ -1098,7 +1098,8 @@ paths:
                             account_id: {type: integer}
                             address: {type: string, format: email}
                             source: {type: string, enum: [shared, claimed]}
-                            otp_url_path: {type: string, description: /api/v1/otp?token= 后跟当前邮箱的派生取件令牌}
+                            otp_url_path: {type: string, description: /api/v1/otp?token= 后跟当前邮箱的根派生取件令牌}
+                            project_otp_url_path: {type: string, description: /api/v1/otp?token=icp_... 绑定当前项目的隔离取件令牌，自动应用项目发件域/主题规则并支持按项目独立吊销}
         "401": {description: 管理员会话失效}
         "404": {description: 项目不存在}
     post:
@@ -1136,6 +1137,159 @@ paths:
         "401": {description: 管理员会话失效}
         "403": {description: CSRF 验证失败}
         "409": {description: 主号未启用或不是 iCloud 类型}
+  /api/v1/inbox:
+    get:
+      tags: [OTP]
+      operationId: getPublicSharedInboxMessages
+      summary: 免登录只读读取指定隐藏邮箱最近最多 5 封邮件
+      description: 使用用途绑定的 `icm_` 前缀 `InboxToken` 读取最近归档邮件、提取验证码及白名单净化后的 HTML 正文。不返回主号与管理凭据；轮换邮箱凭据后令牌立即失效。
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: {type: string}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 5, default: 5}
+        - name: tag
+          in: query
+          schema: {type: string}
+        - name: remote_images
+          in: query
+          schema: {type: boolean, default: false}
+      responses:
+        "200": {description: 最近邮件列表与只读摘要}
+        "401": {description: 分享令牌无效或已随凭据轮换失效}
+  /api/v1/dashboard/summary:
+    servers:
+      - url: https://HOST/{admin_path}
+        variables:
+          admin_path:
+            default: 00000000000000000000000000000000/admin
+      - url: https://HOST/admin
+    get:
+      tags: [Administration]
+      operationId: getAdminDashboardSummary
+      summary: 读取管理后台运行概览与邮件归档存储指标
+      security:
+        - adminSession: []
+      responses:
+        "200": {description: 主号健康度、邮箱统计、池水位、最近审计与归档统计}
+        "401": {description: 管理员会话失效}
+  /api/v1/archive/gc:
+    servers:
+      - url: https://HOST/{admin_path}
+        variables:
+          admin_path:
+            default: 00000000000000000000000000000000/admin
+      - url: https://HOST/admin
+    post:
+      tags: [Administration]
+      operationId: runAdminArchiveMaintenance
+      summary: 执行邮件归档配额回收、孤儿临时文件与过期会话清理
+      security:
+        - adminSession: []
+      parameters:
+        - $ref: "#/components/parameters/AdminCSRFToken"
+      responses:
+        "200": {description: 回收后的归档统计与清理数量}
+        "401": {description: 管理员会话失效}
+        "403": {description: CSRF 验证失败}
+  /api/v1/inbox/lookup:
+    servers:
+      - url: https://HOST/{admin_path}
+        variables:
+          admin_path:
+            default: 00000000000000000000000000000000/admin
+      - url: https://HOST/admin
+    get:
+      tags: [Administration]
+      operationId: lookupAdminMailboxByAddress
+      summary: 按精确邮箱地址或 +tag 子地址解析对应隐藏邮箱
+      security:
+        - adminSession: []
+      parameters:
+        - name: address
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200": {description: 解析到的邮箱与匹配到的 +tag}
+        "404": {description: 未找到对应隐藏邮箱}
+  /api/v1/inbox/suggest:
+    servers:
+      - url: https://HOST/{admin_path}
+        variables:
+          admin_path:
+            default: 00000000000000000000000000000000/admin
+      - url: https://HOST/admin
+    get:
+      tags: [Administration]
+      operationId: suggestAdminInboxMailboxes
+      summary: 模糊搜索或推荐最近收信隐藏邮箱
+      security:
+        - adminSession: []
+      parameters:
+        - name: q
+          in: query
+          schema: {type: string}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 30, default: 12}
+      responses:
+        "200": {description: 候选邮箱列表}
+  /api/v1/aliases/{aliasID}/messages:
+    servers:
+      - url: https://HOST/{admin_path}
+        variables:
+          admin_path:
+            default: 00000000000000000000000000000000/admin
+      - url: https://HOST/admin
+    get:
+      tags: [Administration]
+      operationId: listAdminAliasRecentMessages
+      summary: 读取指定隐藏邮箱最近最多 5 封归档邮件及净化正文
+      security:
+        - adminSession: []
+      parameters:
+        - name: aliasID
+          in: path
+          required: true
+          schema: {type: integer, minimum: 1}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 5, default: 5}
+        - name: tag
+          in: query
+          schema: {type: string}
+        - name: remote_images
+          in: query
+          schema: {type: boolean, default: false}
+      responses:
+        "200": {description: 邮箱信息、免登分享路径与最近归档邮件列表}
+        "404": {description: 邮箱不存在}
+  /api/v1/aliases/{aliasID}/messages/sync:
+    servers:
+      - url: https://HOST/{admin_path}
+        variables:
+          admin_path:
+            default: 00000000000000000000000000000000/admin
+      - url: https://HOST/admin
+    post:
+      tags: [Administration]
+      operationId: syncAdminAliasMessagesOnDemand
+      summary: 按需触发指定隐藏邮箱所属主号的增量收件同步
+      security:
+        - adminSession: []
+      parameters:
+        - name: aliasID
+          in: path
+          required: true
+          schema: {type: integer, minimum: 1}
+        - $ref: "#/components/parameters/AdminCSRFToken"
+      responses:
+        "200": {description: 同步完成}
+        "202": {description: 同步分批继续中}
   /api/v1/pool/projects/{clientID}/mailboxes/{aliasID}:
     servers:
       - url: https://HOST/{admin_path}

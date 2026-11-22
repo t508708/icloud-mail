@@ -59,3 +59,14 @@ func (s *Service) accountProxyForAccount(ctx context.Context, account domain.Acc
 	}
 	return apple.WithAccountProxy(ctx, account.ID, config), nil
 }
+
+// EvictAccountTransport closes any cached direct or proxy HTTP transports for
+// accountID when its network configuration is updated or the account is removed.
+func (s *Service) EvictAccountTransport(accountID int64) {
+	if s == nil || accountID < 1 {
+		return
+	}
+	if evictor, ok := s.client.(interface{ EvictAccountTransports(int64) }); ok {
+		evictor.EvictAccountTransports(accountID)
+	}
+}

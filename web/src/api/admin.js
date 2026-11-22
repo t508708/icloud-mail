@@ -248,6 +248,13 @@ export function normalizeAlias(raw = {}) {
         "otpUrlPath",
         "OTPURLPath",
       ) || "",
+    inboxSharePath:
+      firstDefined(
+        raw,
+        "inbox_share_path",
+        "inboxSharePath",
+        "InboxSharePath",
+      ) || "",
     directLinkPath:
       firstDefined(
         raw,
@@ -1030,6 +1037,7 @@ export async function getAliasPage(accountId = "", options = {}) {
     query: options.query,
     without_latest_mail: options.withoutLatestMail === true ? "true" : "",
     with_latest_mail: options.withLatestMail === true ? "true" : "",
+    pool_enrollable: options.poolEnrollable === true ? "true" : "",
     enabled:
       typeof options.enabled === "boolean" ? String(options.enabled) : "",
   });
@@ -1309,7 +1317,11 @@ export async function getLatestAliasDeletionJob(options = {}) {
 }
 
 export async function getAuditLogs(options = {}) {
-  const query = listQuery(options);
+  const query = listQuery(options, {
+    action: options.action,
+    resource_type: options.resourceType,
+    result: options.result,
+  });
   const data = await apiRequest(`/audit?${query}`, {
     signal: options.signal,
   });
@@ -1322,7 +1334,66 @@ export async function getAuditLogs(options = {}) {
 }
 
 export function getAllAuditLogs(options = {}) {
-  return collectOffsetPages(getAuditLogs, options);
+  return collectOffsetPages(
+    (pageOptions) => getAuditLogs({ ...options, ...pageOptions }),
+    options,
+  );
+}
+
+export function getDashboardSummary(options = {}) {
+  return apiRequest("/dashboard/summary", { signal: options.signal });
+}
+
+export function runArchiveGC(csrfToken) {
+  return apiRequest("/archive/gc", {
+    method: "POST",
+    body: {},
+    csrfToken,
+  });
+}
+
+export function lookupInboxMailbox(address, options = {}) {
+  const params = new URLSearchParams({ address: String(address ?? "").trim() });
+  return apiRequest(`/inbox/lookup?${params.toString()}`, {
+    signal: options.signal,
+  });
+}
+
+export function suggestInboxMailboxes(query = "", limit = 12, options = {}) {
+  const params = new URLSearchParams({
+    q: String(query ?? "").trim(),
+    limit: String(limit),
+  });
+  return apiRequest(`/inbox/suggest?${params.toString()}`, {
+    signal: options.signal,
+  });
+}
+
+export function getAliasRecentMessages(aliasId, options = {}) {
+  const params = new URLSearchParams({
+    limit: String(options.limit || 5),
+    remote_images: options.remoteImages ? "1" : "0",
+  });
+  if (options.tag) {
+    params.set("tag", String(options.tag).trim());
+  }
+  return apiRequest(
+    `/aliases/${encodeURIComponent(aliasId)}/messages?${params.toString()}`,
+    { signal: options.signal },
+  );
+}
+
+export function syncAliasRecentMessages(aliasId, payload = {}, csrfToken, options = {}) {
+  return apiRequest(`/aliases/${encodeURIComponent(aliasId)}/messages/sync`, {
+    method: "POST",
+    body: {
+      limit: payload.limit || 5,
+      tag: payload.tag || "",
+      remote_images: Boolean(payload.remoteImages),
+    },
+    csrfToken,
+    signal: options.signal,
+  });
 }
 
 export async function getRuntimeLogs(options = {}) {

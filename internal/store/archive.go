@@ -543,46 +543,77 @@ func (s *Store) EnforceMailArchiveLimit(ctx context.Context) error {
 	if s.mailArchiveDir == "" || s.mailArchiveLimit < 1 {
 		return nil
 	}
-	for {
-		var used int64
-		if err := s.queryRowContext(ctx, `
-			SELECT COALESCE(SUM(content_bytes), 0)
-			FROM archived_messages WHERE content_state = 'available'`,
-		).Scan(&used); err != nil {
-			return fmt.Errorf("measure mail archive usage: %w", err)
+	var used int64
+	if err := s.queryRowContext(ctx, `
+		SELECT COALESCE(SUM(content_bytes), 0)
+		FROM archived_messages WHERE content_state = 'available'`,
+	).Scan(&used); err != nil {
+		return fmt.Errorf("measure mail archive usage: %w", err)
+	}
+	if used <= s.mailArchiveLimit {
+		return nil
+	}
+	excess := used - s.mailArchiveLimit
+	type evictionCandidate struct {
+		id    int64
+		path  string
+		bytes int64
+	}
+	for excess > 0 {
+		rows, err := s.queryContext(ctx, `
+			SELECT id, content_path, content_bytes
+			FROM archived_messages
+			WHERE content_state = 'available'
+			ORDER BY internal_date, id
+			LIMIT 128`)
+		if err != nil {
+			return fmt.Errorf("select oldest archived content batch: %w", err)
 		}
-		if used <= s.mailArchiveLimit {
+		batch := make([]evictionCandidate, 0, 128)
+		for rows.Next() {
+			var c evictionCandidate
+			if scanErr := rows.Scan(&c.id, &c.path, &c.bytes); scanErr != nil {
+				_ = rows.Close()
+				return fmt.Errorf("scan archived content candidate: %w", scanErr)
+			}
+			batch = append(batch, c)
+		}
+		if closeErr := rows.Close(); closeErr != nil {
+			return closeErr
+		}
+		if len(batch) == 0 {
 			return nil
 		}
-		var id int64
-		var relativePath string
-		if err := s.queryRowContext(ctx, `
-			SELECT id, content_path FROM archived_messages
-			WHERE content_state = 'available'
-			ORDER BY internal_date, id LIMIT 1`,
-		).Scan(&id, &relativePath); err != nil {
-			return fmt.Errorf("select oldest archived content: %w", err)
+		progressed := false
+		for _, item := range batch {
+			if excess <= 0 {
+				break
+			}
+			path, ok := s.safeArchivePath(item.path)
+			if !ok {
+				return fmt.Errorf("evict archived content %d: unsafe content path", item.id)
+			}
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("evict archived content file %d: %w", item.id, err)
+			}
+			result, err := s.execContext(ctx, `
+				UPDATE archived_messages
+				SET content_path = '', content_state = 'evicted'
+				WHERE id = ? AND content_state = 'available'`, item.id,
+			)
+			if err != nil {
+				return fmt.Errorf("evict archived content metadata: %w", err)
+			}
+			if changed, _ := result.RowsAffected(); changed > 0 {
+				progressed = true
+				excess -= max(item.bytes, 1)
+			}
 		}
-		path, ok := s.safeArchivePath(relativePath)
-		if !ok {
-			return fmt.Errorf("evict archived content %d: unsafe content path", id)
-		}
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("evict archived content file %d: %w", id, err)
-		}
-		result, err := s.execContext(ctx, `
-			UPDATE archived_messages
-			SET content_path = '', content_state = 'evicted'
-			WHERE id = ? AND content_state = 'available'`, id,
-		)
-		if err != nil {
-			return fmt.Errorf("evict archived content metadata: %w", err)
-		}
-		changed, _ := result.RowsAffected()
-		if changed == 0 {
-			continue
+		if !progressed {
+			return nil
 		}
 	}
+	return nil
 }
 
 // ReconcileMailArchive converts database rows whose published file vanished
@@ -859,7 +890,7 @@ func (s *Store) ListAliasOTPs(ctx context.Context, aliasID int64, limit int) ([]
 		FROM alias_messages am
 		JOIN archived_messages m ON m.id = am.message_id
 		WHERE am.alias_id = ? AND am.otp <> ''
-		ORDER BY m.internal_date DESC, m.id DESC LIMIT ?`, aliasID, maxOTPHistory,
+		ORDER BY am.created_at DESC, am.message_id DESC LIMIT ?`, aliasID, min(limit+8, maxOTPHistory),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list alias OTP history: %w", err)

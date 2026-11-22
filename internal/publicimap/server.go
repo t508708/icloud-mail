@@ -7,6 +7,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	imap "github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
@@ -41,9 +42,56 @@ func NewService(repo Repository, cipher *secure.Cipher, tlsConfig *tls.Config, l
 		return nil, errors.New("IMAPS TLS configuration is required")
 	}
 	service := &Service{tls: tlsConfig.Clone()}
+	var authMu sync.Mutex
+	type authWindow struct {
+		failures int
+		resetAt  time.Time
+	}
+	authFailures := make(map[string]authWindow)
 	service.server = imapserver.New(&imapserver.Options{
-		NewSession: func(*imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
-			return NewSession(repo, cipher), nil, nil
+		NewSession: func(conn *imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
+			session := NewSession(repo, cipher)
+			var host string
+			if conn != nil && conn.NetConn() != nil && conn.NetConn().RemoteAddr() != nil {
+				h, _, err := net.SplitHostPort(conn.NetConn().RemoteAddr().String())
+				if err == nil {
+					host = h
+				} else {
+					host = conn.NetConn().RemoteAddr().String()
+				}
+			}
+			if host != "" {
+				session.authCheck = func() bool {
+					now := time.Now()
+					authMu.Lock()
+					defer authMu.Unlock()
+					entry, ok := authFailures[host]
+					if !ok || !now.Before(entry.resetAt) {
+						return true
+					}
+					return entry.failures < 20
+				}
+				session.authFailure = func() {
+					now := time.Now()
+					authMu.Lock()
+					defer authMu.Unlock()
+					if len(authFailures) >= 4096 {
+						for k, v := range authFailures {
+							if !now.Before(v.resetAt) {
+								delete(authFailures, k)
+							}
+						}
+					}
+					entry, ok := authFailures[host]
+					if !ok || !now.Before(entry.resetAt) {
+						authFailures[host] = authWindow{failures: 1, resetAt: now.Add(5 * time.Minute)}
+						return
+					}
+					entry.failures++
+					authFailures[host] = entry
+				}
+			}
+			return session, nil, nil
 		},
 		Caps:   imap.CapSet{imap.CapIMAP4rev1: {}},
 		Logger: logger,

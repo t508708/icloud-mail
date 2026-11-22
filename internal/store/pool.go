@@ -33,10 +33,12 @@ var (
 )
 
 type PoolClient struct {
-	ID        string    `json:"id"`
-	Project   string    `json:"project"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"created_at"`
+	ID            string    `json:"id"`
+	Project       string    `json:"project"`
+	Enabled       bool      `json:"enabled"`
+	SenderFilter  string    `json:"sender_filter"`
+	SubjectFilter string    `json:"subject_filter"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 type PoolAccount struct {
@@ -285,10 +287,16 @@ func (s *Store) lockPoolTx(ctx context.Context, tx *sql.Tx) error {
 }
 
 func (s *Store) CreatePoolClient(ctx context.Context, project string) (PoolClient, string, error) {
+	return s.CreatePoolClientWithRules(ctx, project, "", "")
+}
+
+func (s *Store) CreatePoolClientWithRules(ctx context.Context, project, senderFilter, subjectFilter string) (PoolClient, string, error) {
 	project = strings.TrimSpace(project)
 	if project == "" || len(project) > 80 {
 		return PoolClient{}, "", ErrPoolInput
 	}
+	senderFilter = normalizePoolFilterRule(senderFilter)
+	subjectFilter = normalizePoolFilterRule(subjectFilter)
 	id, err := poolID()
 	if err != nil {
 		return PoolClient{}, "", err
@@ -298,9 +306,16 @@ func (s *Store) CreatePoolClient(ctx context.Context, project string) (PoolClien
 		return PoolClient{}, "", err
 	}
 	token := "pool_" + secret
-	client := PoolClient{ID: id, Project: project, Enabled: true, CreatedAt: s.now().UTC()}
-	_, err = s.execContext(ctx, `INSERT INTO pool_clients(id,project,token_hash,enabled,created_at) VALUES(?,?,?,TRUE,?)`,
-		id, project, poolTokenHash(token), timestamp(client.CreatedAt))
+	client := PoolClient{
+		ID:            id,
+		Project:       project,
+		Enabled:       true,
+		SenderFilter:  senderFilter,
+		SubjectFilter: subjectFilter,
+		CreatedAt:     s.now().UTC(),
+	}
+	_, err = s.execContext(ctx, `INSERT INTO pool_clients(id,project,token_hash,enabled,sender_filter,subject_filter,created_at) VALUES(?,?,?,TRUE,?,?,?)`,
+		id, project, poolTokenHash(token), senderFilter, subjectFilter, timestamp(client.CreatedAt))
 	if isUniqueConstraintError(err) {
 		return PoolClient{}, "", ErrPoolConflict
 	}
@@ -308,7 +323,7 @@ func (s *Store) CreatePoolClient(ctx context.Context, project string) (PoolClien
 }
 
 func (s *Store) ListPoolClients(ctx context.Context) ([]PoolClient, error) {
-	rows, err := s.queryContext(ctx, `SELECT id,project,enabled,created_at FROM pool_clients ORDER BY created_at DESC`)
+	rows, err := s.queryContext(ctx, `SELECT id,project,enabled,sender_filter,subject_filter,created_at FROM pool_clients ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +332,7 @@ func (s *Store) ListPoolClients(ctx context.Context) ([]PoolClient, error) {
 	for rows.Next() {
 		var v PoolClient
 		var at int64
-		if err := rows.Scan(&v.ID, &v.Project, &v.Enabled, &at); err != nil {
+		if err := rows.Scan(&v.ID, &v.Project, &v.Enabled, &v.SenderFilter, &v.SubjectFilter, &at); err != nil {
 			return nil, err
 		}
 		v.CreatedAt = time.Unix(0, at).UTC()
@@ -329,28 +344,46 @@ func (s *Store) ListPoolClients(ctx context.Context) ([]PoolClient, error) {
 func (s *Store) AuthenticatePoolClient(ctx context.Context, token string) (PoolClient, error) {
 	var v PoolClient
 	var at int64
-	err := s.queryRowContext(ctx, `SELECT id,project,enabled,created_at FROM pool_clients WHERE token_hash = ? AND enabled = TRUE`, poolTokenHash(token)).Scan(&v.ID, &v.Project, &v.Enabled, &at)
+	err := s.queryRowContext(ctx, `SELECT id,project,enabled,sender_filter,subject_filter,created_at FROM pool_clients WHERE token_hash = ? AND enabled = TRUE`, poolTokenHash(token)).
+		Scan(&v.ID, &v.Project, &v.Enabled, &v.SenderFilter, &v.SubjectFilter, &at)
 	v.CreatedAt = time.Unix(0, at).UTC()
 	return v, err
 }
 
 func (s *Store) UpdatePoolClient(ctx context.Context, id string, enabled bool, rotate bool) (string, error) {
+	return s.UpdatePoolClientWithRules(ctx, id, enabled, rotate, nil, nil)
+}
+
+func (s *Store) UpdatePoolClientWithRules(ctx context.Context, id string, enabled bool, rotate bool, senderFilter, subjectFilter *string) (string, error) {
 	tx, err := s.poolTx(ctx)
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback()
+	var curSender, curSubject string
+	if err := s.txQueryRowContext(ctx, tx, `SELECT sender_filter, subject_filter FROM pool_clients WHERE id = ?`, id).Scan(&curSender, &curSubject); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", err
+	}
+	if senderFilter != nil {
+		curSender = normalizePoolFilterRule(*senderFilter)
+	}
+	if subjectFilter != nil {
+		curSubject = normalizePoolFilterRule(*subjectFilter)
+	}
 	token := ""
-	query := `UPDATE pool_clients SET enabled = ? WHERE id = ?`
-	args := []any{enabled, id}
+	query := `UPDATE pool_clients SET enabled = ?, sender_filter = ?, subject_filter = ? WHERE id = ?`
+	args := []any{enabled, curSender, curSubject, id}
 	if rotate {
 		secret, err := poolID()
 		if err != nil {
 			return "", err
 		}
 		token = "pool_" + secret
-		query = `UPDATE pool_clients SET enabled = ?, token_hash = ? WHERE id = ?`
-		args = []any{enabled, poolTokenHash(token), id}
+		query = `UPDATE pool_clients SET enabled = ?, sender_filter = ?, subject_filter = ?, token_hash = ? WHERE id = ?`
+		args = []any{enabled, curSender, curSubject, poolTokenHash(token), id}
 	}
 	result, err := s.txExecContext(ctx, tx, query, args...)
 	if err != nil {
@@ -366,7 +399,11 @@ func (s *Store) ListPoolAccounts(ctx context.Context) ([]PoolAccount, error) {
 	rows, err := s.queryContext(ctx, `SELECT a.id,a.email,COALESCE(p.auto_enroll,FALSE),COALESCE(p.target,0),
 	 (SELECT COUNT(*) FROM pool_members m JOIN aliases al ON al.id=m.alias_id
 	  WHERE al.account_id=a.id AND m.state='available' AND `+poolClaimableAliasSQL+`)
-	 FROM accounts a LEFT JOIN pool_accounts p ON p.account_id=a.id ORDER BY a.id`)
+	 FROM accounts a
+	 LEFT JOIN account_mailbox_settings ms ON ms.account_id=a.id
+	 LEFT JOIN pool_accounts p ON p.account_id=a.id
+	 WHERE COALESCE(ms.mailbox_type,'icloud')='icloud'
+	 ORDER BY a.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -442,9 +479,11 @@ func (s *Store) EnrollPoolAliases(ctx context.Context, ids []int64) error {
 	for _, id := range ids {
 		var eligible int
 		err = s.txQueryRowContext(ctx, tx, `SELECT COUNT(*) FROM aliases al JOIN accounts a ON a.id=al.account_id
-		 WHERE al.id=? AND al.enabled=TRUE AND a.enabled=TRUE AND al.credential_mode='v2' AND al.credential_version>0
+		 WHERE al.id=? AND al.enabled=TRUE AND a.enabled=TRUE
+		 AND al.credential_mode='v2' AND al.credential_version>0
+		 AND COALESCE(al.last_sync_error,'')<>'APPLE_ALIAS_CONFIRMATION_PENDING'
 		 AND (`+poolUnconsumedAliasSQL+` AND `+poolUnsharedAliasSQL+` OR EXISTS (SELECT 1 FROM pool_members existing
-		 WHERE existing.alias_id=al.id AND existing.state IN ('leased','used')))`, id).Scan(&eligible)
+		 WHERE existing.alias_id=al.id AND existing.state IN ('available','leased','used')))`, id).Scan(&eligible)
 		if err != nil {
 			return err
 		}
@@ -602,7 +641,8 @@ func (s *Store) ClaimPool(ctx context.Context, clientID string, input PoolClaim)
 		return nil, err
 	}
 	rows, err := s.txQueryContext(ctx, tx, `SELECT al.id,al.account_id FROM pool_members m JOIN aliases al ON al.id=m.alias_id JOIN accounts a ON a.id=al.account_id
-	 WHERE m.state='available' AND `+poolClaimableAliasSQL+`
+	 LEFT JOIN account_mailbox_settings ms ON ms.account_id=a.id
+	 WHERE m.state='available' AND COALESCE(ms.mailbox_type,'icloud')='icloud' AND `+poolClaimableAliasSQL+`
 	 AND (?=0 OR a.id=?) AND (?=0 OR al.group_id=?) ORDER BY a.id,al.id LIMIT ?`, input.AccountID, input.AccountID, input.GroupID, input.GroupID, input.Count)
 	if err != nil {
 		return nil, err
@@ -727,6 +767,18 @@ func (s *Store) actPoolLeaseTx(ctx context.Context, tx *sql.Tx, id, clientID, ac
 	}
 	var accountID int64
 	if err = s.txQueryRowContext(ctx, tx, `SELECT account_id FROM aliases WHERE id=?`, v.AliasID).Scan(&accountID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) && (action == "expire" || action == "release") {
+			v.AliasID = 0
+			v.State = "released"
+			if action == "expire" {
+				v.State = "expired"
+			}
+			v.UpdatedAt = now
+			if _, updateErr := s.txExecContext(ctx, tx, `UPDATE pool_leases SET alias_id=NULL,state=?,updated_at=? WHERE id=?`, v.State, timestamp(now), v.ID); updateErr != nil {
+				return v, updateErr
+			}
+			return v, nil
+		}
 		return v, err
 	}
 	if _, err = s.lockAccountVersionForUpdate(ctx, tx, accountID); err != nil {
@@ -800,8 +852,13 @@ func (s *Store) RefreshPool(ctx context.Context) error {
 	defer tx.Rollback()
 	_, err = s.txExecContext(ctx, tx, `INSERT INTO pool_members(alias_id,state,updated_at)
 	 SELECT al.id,'available',? FROM aliases al JOIN pool_accounts p ON p.account_id=al.account_id
-	 JOIN accounts a ON a.id=al.account_id WHERE p.auto_enroll=TRUE AND al.id>p.enroll_after
+	 JOIN accounts a ON a.id=al.account_id
+	 LEFT JOIN account_mailbox_settings ms ON ms.account_id=a.id
+	 WHERE p.auto_enroll=TRUE AND al.id>p.enroll_after
+	 AND al.auto_enroll_eligible=TRUE
+	 AND COALESCE(ms.mailbox_type,'icloud')='icloud'
 	 AND al.enabled=TRUE AND a.enabled=TRUE AND al.credential_mode='v2' AND al.credential_version>0
+	 AND COALESCE(al.last_sync_error,'')<>'APPLE_ALIAS_CONFIRMATION_PENDING'
 	 AND `+poolUnconsumedAliasSQL+` AND `+poolUnsharedAliasSQL+`
 	 ON CONFLICT(alias_id) DO NOTHING`, timestamp(s.now()))
 	if err != nil {

@@ -39,6 +39,7 @@ type AliasListFilter struct {
 	Ungrouped           bool
 	WithLatestMail      bool
 	WithoutLatestMail   bool
+	PoolEnrollable      bool
 	Query               string
 	Limit               int
 	Offset              int
@@ -134,6 +135,9 @@ func (s *Store) CreateAlias(ctx context.Context, alias domain.Alias) (domain.Ali
 		// cursor so a new alias starts at the current position instead of rescanning history.
 		if _, err := s.bumpAccountVersionTx(ctx, tx, alias.AccountID, accountVersion); err != nil {
 			return domain.Alias{}, fmt.Errorf("advance account version after alias creation: %w", err)
+		}
+		if err := s.autoEnrollAliasTx(ctx, tx, alias.AccountID, id, false); err != nil {
+			return domain.Alias{}, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -257,6 +261,18 @@ func (s *Store) ListAliasesPage(ctx context.Context, filter AliasListFilter) (Al
 		predicates = append(predicates, `NOT EXISTS (
 			SELECT 1 FROM alias_messages am WHERE am.alias_id = al.id
 		)`)
+	}
+	if filter.PoolEnrollable {
+		predicates = append(predicates,
+			`al.enabled = TRUE`,
+			`al.credential_mode = 'v2'`,
+			`al.credential_version > 0`,
+			`COALESCE(al.last_sync_error, '') <> 'APPLE_ALIAS_CONFIRMATION_PENDING'`,
+			`EXISTS (SELECT 1 FROM accounts a LEFT JOIN account_mailbox_settings ms ON ms.account_id = a.id WHERE a.id = al.account_id AND a.enabled = TRUE AND COALESCE(ms.mailbox_type, 'icloud') = 'icloud')`,
+			`NOT EXISTS (SELECT 1 FROM pool_members pm WHERE pm.alias_id = al.id)`,
+			poolUnconsumedAliasSQL,
+			poolUnsharedAliasSQL,
+		)
 	}
 	if query := strings.TrimSpace(sanitizePostgresText(filter.Query)); query != "" {
 		pattern := "%" + escapeLikePattern(query) + "%"

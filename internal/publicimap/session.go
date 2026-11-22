@@ -31,12 +31,15 @@ type Repository interface {
 }
 
 type Session struct {
-	repo   Repository
-	cipher *secure.Cipher
-	now    func() time.Time
+	repo        Repository
+	cipher      *secure.Cipher
+	now         func() time.Time
+	authCheck   func() bool
+	authFailure func()
 
 	binding           domain.MailboxBinding
 	credentialVersion int64
+	loadedUIDNext     uint32
 	selected          bool
 	messages          []domain.ArchivedMailboxMessage
 }
@@ -51,14 +54,21 @@ func NewSession(repo Repository, cipher *secure.Cipher) *Session {
 func (s *Session) Close() error {
 	s.binding = domain.MailboxBinding{}
 	s.credentialVersion = 0
+	s.loadedUIDNext = 0
 	s.messages = nil
 	s.selected = false
 	return nil
 }
 
 func (s *Session) Login(username, password string) error {
+	if s.authCheck != nil && !s.authCheck() {
+		return imapserver.ErrAuthFailed
+	}
 	binding, err := s.repo.GetMailboxBindingByIMAPPasswordHash(context.Background(), secure.HashToken(password))
 	if err != nil || !sameMailboxIdentity(binding, username) {
+		if s.authFailure != nil {
+			s.authFailure()
+		}
 		return imapserver.ErrAuthFailed
 	}
 	s.binding = binding
@@ -87,8 +97,14 @@ func (s *Session) Authenticate(mechanism string) (sasl.Server, error) {
 }
 
 func (s *Session) loginAccessToken(username, token string) error {
+	if s.authCheck != nil && !s.authCheck() {
+		return imapserver.ErrAuthFailed
+	}
 	binding, err := s.repo.GetMailboxBindingByAddress(context.Background(), domain.NormalizeEmail(username))
 	if err != nil || !sameMailboxIdentity(binding, username) || s.cipher == nil {
+		if s.authFailure != nil {
+			s.authFailure()
+		}
 		return imapserver.ErrAuthFailed
 	}
 	now := time.Now().UTC()
@@ -102,6 +118,9 @@ func (s *Session) loginAccessToken(username, token string) error {
 		binding.Alias.RefreshTokenHash,
 		now,
 	) {
+		if s.authFailure != nil {
+			s.authFailure()
+		}
 		return imapserver.ErrAuthFailed
 	}
 	s.binding = binding
@@ -165,6 +184,7 @@ func (s *Session) Select(mailbox string, _ *imap.SelectOptions) (*imap.SelectDat
 		return nil, err
 	}
 	s.messages = messages
+	s.loadedUIDNext = s.binding.Alias.MailboxUIDNext
 	s.selected = true
 	return &imap.SelectData{
 		Flags:          []imap.Flag{imap.FlagSeen},
@@ -475,6 +495,11 @@ func (s *Session) Poll(writer *imapserver.UpdateWriter, _ bool) error {
 	if err := s.refreshBinding(); err != nil {
 		return err
 	}
+	// MailboxUIDNext monotonically advances whenever a message is linked to
+	// alias_messages; skip full-history DB scans and JSON decoding when idle.
+	if s.messages != nil && s.binding.Alias.MailboxUIDNext == s.loadedUIDNext {
+		return nil
+	}
 	messages, err := s.repo.ListArchivedMailboxMessages(context.Background(), s.binding.Alias.ID)
 	if err != nil {
 		return err
@@ -485,6 +510,7 @@ func (s *Session) Poll(writer *imapserver.UpdateWriter, _ bool) error {
 		}
 	}
 	s.messages = messages
+	s.loadedUIDNext = s.binding.Alias.MailboxUIDNext
 	return nil
 }
 
@@ -600,6 +626,14 @@ func (s *Session) openMessage(message domain.ArchivedMailboxMessage) (readSeekCl
 
 func (s *Session) messageSize(message domain.ArchivedMailboxMessage) int64 {
 	if message.ContentState == domain.ArchiveContentAvailable && message.ContentBytes > 0 {
+		if statter, ok := s.repo.(interface {
+			HasArchivedContentFile(domain.ArchivedMailboxMessage) bool
+		}); ok {
+			if statter.HasArchivedContentFile(message) {
+				return message.ContentBytes
+			}
+			return int64(len(placeholderMIME(message, s.binding.Alias.Address)))
+		}
 		file, err := s.repo.OpenArchivedContent(message)
 		if err == nil {
 			_ = file.Close()

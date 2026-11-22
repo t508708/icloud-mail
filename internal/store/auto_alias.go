@@ -178,6 +178,9 @@ func (s *Store) createAutoAliasCandidate(
 		if _, err := s.bumpAccountVersionTx(ctx, tx, alias.AccountID, accountVersion); err != nil {
 			return domain.Alias{}, domain.AppleWebSession{}, fmt.Errorf("advance account version after automatic alias creation: %w", err)
 		}
+		if err := s.autoEnrollAliasTx(ctx, tx, alias.AccountID, aliasID, false); err != nil {
+			return domain.Alias{}, domain.AppleWebSession{}, err
+		}
 	}
 	// Read the committed-shaped values while the transaction is still open.
 	// Once Commit succeeds the caller's context may be canceled, so a second
@@ -394,6 +397,9 @@ func (s *Store) ConfirmPendingAutoAlias(
 	}
 	if _, err := s.bumpAccountVersionTx(ctx, tx, session.AccountID, accountVersion); err != nil {
 		return domain.Alias{}, domain.AppleWebSession{}, fmt.Errorf("advance account version after automatic alias confirmation: %w", err)
+	}
+	if err := s.autoEnrollAliasTx(ctx, tx, session.AccountID, aliasID, true); err != nil {
+		return domain.Alias{}, domain.AppleWebSession{}, err
 	}
 
 	confirmedAlias, err := scanAlias(s.txQueryRowContext(ctx, tx,

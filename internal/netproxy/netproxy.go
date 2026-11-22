@@ -75,6 +75,9 @@ func Parse(raw string) (Endpoint, error) {
 				return bad()
 			}
 		}
+		if scheme == "socks5h" {
+			scheme = "socks5"
+		}
 		if scheme != "http" && scheme != "https" && scheme != "socks5" {
 			return bad()
 		}

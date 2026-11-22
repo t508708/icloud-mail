@@ -349,13 +349,11 @@ func (s *Store) RotateAliasCredentials(ctx context.Context, id int64) (domain.Al
 	if s.credentialFactory == nil {
 		return domain.Alias{}, errors.New("alias credential factory is not configured")
 	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
-	if err != nil {
-		return domain.Alias{}, fmt.Errorf("begin alias credential rotation: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	// Read account_id before opening the transaction so SQLite acquires its
+	// write lock via lockAccountVersionForUpdate before taking a read snapshot
+	// (preventing SQLITE_BUSY lock-upgrade failures under concurrency).
 	var accountID int64
-	if err := s.txQueryRowContext(ctx, tx, `
+	if err := s.queryRowContext(ctx, `
 		SELECT account_id
 		FROM aliases WHERE id = ?`, id,
 	).Scan(&accountID); err != nil {
@@ -364,6 +362,11 @@ func (s *Store) RotateAliasCredentials(ctx context.Context, id int64) (domain.Al
 		}
 		return domain.Alias{}, fmt.Errorf("read alias before credential rotation: %w", err)
 	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return domain.Alias{}, fmt.Errorf("begin alias credential rotation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 	if _, err := s.lockAccountVersionForUpdate(ctx, tx, accountID); err != nil {
 		return domain.Alias{}, fmt.Errorf("lock alias account before credential rotation: %w", err)
 	}
