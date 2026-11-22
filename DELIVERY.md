@@ -97,6 +97,13 @@ docker compose -f compose.yaml -f compose.offline.yaml up -d --no-build --pull n
 
 ## 发布记录
 
+### v0.2.13（2026-11-22）
+
+- [正式 Release](https://github.com/t508708/icloud-mail/releases/tag/v0.2.13) 已发布。
+- GHCR 应用镜像 `ghcr.io/t508708/icloud-mail:v0.2.13`、数据库镜像 `ghcr.io/t508708/icloud-mail-postgres:v0.2.13` 均包含 `linux/amd64` 和 `linux/arm64`；`latest` 同步包含本版功能。
+- 新增隐藏邮箱最近 5 封邮件查看页（`/inbox`）、全表快捷抽屉、免登录只读分享页（`/inbox/view`）与运行概览看板（`/dashboard`）；升级多项目共用邮箱的发件域/主题过滤规则、`icp_` 独立项目取码令牌与独立限流桶；修复目录导入历史邮箱误自动入池与批量手动入池冲突，优化高并发锁、查询与代理防 DNS 泄露。详见 [邮箱池说明](docs/POOL.md#项目共用邮箱) 与 [更新日志](CHANGELOG.md)。
+- Go 全部 16 个包测试、`go vet ./...`、Web 279 项用例以及前端生产构建通过。使用标准 Compose 更新的应用容器运行正常，`/healthz` 返回 HTTP 200。
+
 ### v0.2.12（2026-11-15）
 
 - [正式 Release](https://github.com/t508708/icloud-mail/releases/tag/v0.2.12) 已发布，提供源码 ZIP、Linux amd64 离线镜像包与 `SHA256SUMS`。
